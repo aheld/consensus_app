@@ -8,12 +8,15 @@ Universal group consensus & activity voting platform. A PWA that lets one organi
 
 | Doc | Authority |
 |---|---|
-| [docs/PRD.md](docs/PRD.md) | **North star.** Product scope, personas, functional requirements, success metrics. Treat as ratified. |
-| [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) | **Draft only — not ratified.** First-pass stack and schema proposal. Under active revision. Do not implement from it. |
-| [docs/decisions.md](docs/decisions.md) | Running log of technical decisions as they get settled. This wins over the draft roadmap. |
+| [docs/PRD.md](docs/PRD.md) | **North star for product.** Personas, functional requirements, success metrics. Ratified. Contains **no** stack, schema, vendor, or algorithm decisions — by design. |
+| [docs/decisions.md](docs/decisions.md) | **North star for technical.** Running log of decisions as they get settled. |
 | [docs/open-questions.md](docs/open-questions.md) | What still needs a decision before code gets written. |
+| [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) | **Not ratified.** First-pass stack and schema proposal. Reference only — do not implement from it. |
+| [docs/prd-technical-extracts.md](docs/prd-technical-extracts.md) | **Not ratified.** Technical content removed from PRD v2.0, preserved as a second candidate proposal. It contradicts the roadmap draft in places. Reference only. |
 
-If the draft roadmap and `decisions.md` disagree, `decisions.md` is correct. If neither covers it, ask — don't infer a stack choice.
+Authority order: `decisions.md` > `PRD.md` > the two unratified drafts. If a draft and `decisions.md` disagree, `decisions.md` is correct. If nothing covers it, ask — don't infer a stack choice.
+
+**Keep the separation clean.** Product docs say what and why; technical docs say how. Don't reintroduce a vendor name, table definition, framework, or algorithm into the PRD — put it in `decisions.md` (settled) or `open-questions.md` (not).
 
 ## Repo layout
 
@@ -25,10 +28,11 @@ If the draft roadmap and `decisions.md` disagree, `decisions.md` is correct. If 
 │   ├── skills/                        # invocable workflows (empty until stack is set)
 │   └── settings.json
 └── docs/
-    ├── PRD.md                         # product requirements (north star)
-    ├── technical-roadmap-v1-draft.md  # unratified stack proposal
-    ├── decisions.md                   # ADR-lite log — the real source of truth
+    ├── PRD.md                         # product requirements only (north star)
+    ├── decisions.md                   # ADR-lite log — technical source of truth
     ├── open-questions.md              # blocking + non-blocking unknowns
+    ├── technical-roadmap-v1-draft.md  # unratified stack proposal #1
+    ├── prd-technical-extracts.md      # unratified stack proposal #2 (ex-PRD §4/§6/§8)
     └── plans/                         # per-feature implementation plans
 ```
 

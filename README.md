@@ -16,8 +16,9 @@ No application code yet.
 
 ## Docs
 
-- [docs/PRD.md](docs/PRD.md) — product requirements (north star)
+- [docs/PRD.md](docs/PRD.md) — product requirements, north star. No stack/vendor/schema content.
 - [docs/decisions.md](docs/decisions.md) — technical decisions as they're settled
 - [docs/open-questions.md](docs/open-questions.md) — what's still unresolved
 - [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) — first-pass stack proposal, **not ratified**
+- [docs/prd-technical-extracts.md](docs/prd-technical-extracts.md) — technical content removed from the PRD, **not ratified**
 - [CLAUDE.md](CLAUDE.md) — working context for Claude Code

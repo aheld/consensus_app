@@ -3,8 +3,10 @@
 Everything that needs a decision before implementation starts. Resolved items move to
 [decisions.md](decisions.md) and get deleted from here.
 
-The draft roadmap answers several of these already; they're listed because the answers are
-worth re-examining, not because the doc is silent.
+The draft roadmap and the technical content extracted from the PRD answer several of these already;
+they're listed because the answers are worth re-examining, not because the docs are silent. Prior
+proposals: [technical-roadmap-v1-draft.md](technical-roadmap-v1-draft.md),
+[prd-technical-extracts.md](prd-technical-extracts.md).
 
 ---
 
@@ -19,9 +21,11 @@ WebSockets don't run on Vercel functions.
 Alternative: keep everything in Next.js (route handlers + server actions) and get realtime from a
 managed service, so nothing needs to hold an open socket in our own process.
 
-**Bearing on this:** the PRD itself (§4) proposes "PostgreSQL with Supabase Realtime," which
-contradicts the roadmap's NestJS + Socket.io + Redis pub/sub. The two source docs disagree and
-one of them has to give.
+**Bearing on this:** the PRD originally proposed "PostgreSQL with Supabase Realtime," which
+contradicts the roadmap's NestJS + Socket.io + Redis pub/sub. The two source docs disagree and one
+of them has to give. (That proposal now lives in
+[prd-technical-extracts.md](prd-technical-extracts.md) § From §4, having been removed from the
+product-only PRD.)
 
 ### Q-2. Realtime transport: managed, self-hosted sockets, or polling?
 
@@ -66,8 +70,9 @@ mitigation (Risk #3) is the right *shape*, but the premise needs a spike first. 
 fallbacks: restaurant's own site, a Google Maps place link, or a platform search URL prefilled
 with name + party size.
 
-The PRD's own Phase 1 lists this as a technical spike — run it before committing "Instant Booking
-Action" to the MVP as specified.
+The PRD's original phase diagram listed this as a Phase 1 technical spike, ahead of any build work
+— the more honest ordering. Run the spike before committing "Instant Booking Action" to the MVP as
+specified. (See [prd-technical-extracts.md](prd-technical-extracts.md) § From §8.)
 
 ### Q-6. Places/Yelp: which provider, and does caching survive their terms?
 
@@ -107,11 +112,12 @@ Undefined:
 - With 5–8 voters each holding a veto, one person can unilaterally kill anything. Is instant
   removal right, or should veto be a heavy downweight?
 
-### Q-9. The vote schema doesn't match the PRD
+### Q-9. The two candidate vote schemas disagree
 
-PRD's Vote has `preference_type (yes/no/veto)`. The roadmap's `votes` table has `rank_weight` but
-**no** veto representation — despite veto being an MVP must-have and RCV being Post-MVP. The
-schema currently models the Post-MVP feature and drops the MVP one.
+The PRD's original schema sketch had `Vote.preference_type (yes/no/veto)`. The roadmap's `votes`
+table has `rank_weight` but **no** veto representation — despite veto being an MVP must-have and RCV
+being Post-MVP. The roadmap schema models the Post-MVP feature and drops the MVP one. Both sketches
+are in [prd-technical-extracts.md](prd-technical-extracts.md) § From §6 and the roadmap draft.
 
 ### Q-10. `participants` table is missing
 
