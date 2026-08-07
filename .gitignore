@@ -1,0 +1,40 @@
+# dependencies
+node_modules/
+.pnp
+.pnp.js
+.yarn/
+
+# env — never commit API keys (Places/Yelp/TMDB)
+.env
+.env.*
+!.env.example
+
+# build output
+.next/
+out/
+build/
+dist/
+*.tsbuildinfo
+
+# test & coverage
+coverage/
+playwright-report/
+test-results/
+
+# logs
+*.log
+npm-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+
+# hosting
+.vercel/
+
+# editor & os
+.DS_Store
+.idea/
+*.swp
+
+# claude local state
+.claude/settings.local.json
+.claude/worktrees/
