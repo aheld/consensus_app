@@ -2,22 +2,15 @@ defmodule ConsensusWeb.CoreComponents do
   @moduledoc """
   Provides core UI components.
 
-  At first glance, this module may seem daunting, but its goal is to provide
-  core building blocks for your application, such as tables, forms, and
-  inputs. The components consist mostly of markup and are well-documented
-  with doc strings and declarative assigns. You may customize and style
-  them in any way you want, based on your application growth and needs.
+  These are the generic building blocks — flash, button, input, header, table, list —
+  restyled onto Consensus's hand-rolled "sticker" design system (see
+  `docs/design/DESIGN-SPEC.md` and `assets/css/app.css`). daisyUI has been removed; every
+  colour, shadow and radius here comes from the `@theme` tokens in `app.css`.
 
-  The foundation for styling is Tailwind CSS, a utility-first CSS framework,
-  augmented with daisyUI, a Tailwind CSS plugin that provides UI components
-  and themes. Here are useful references:
+  The design-specific primitives that don't come from the Phoenix generator — cards, chips,
+  pills, the step-progress wizard header, and so on — live in `ConsensusWeb.Sticker` instead.
 
-    * [daisyUI](https://daisyui.com/docs/intro/) - a good place to get
-      started and see the available components.
-
-    * [Tailwind CSS](https://tailwindcss.com) - the foundational framework
-      we build on. You will use it for layout, sizing, flexbox, grid, and
-      spacing.
+  For icons, see `icon/1` below.
 
     * [Heroicons](https://heroicons.com) - see `icon/1` for usage.
 
@@ -33,6 +26,10 @@ defmodule ConsensusWeb.CoreComponents do
 
   @doc """
   Renders flash notices.
+
+  A fixed, top-centred sticker card: mint for `:info`, tangerine for `:error`. Must keep
+  working with `Layouts.flash_group/1`, which passes `id`, `kind`, `title`, `flash` and the
+  `phx-disconnected`/`phx-connected`/`hidden` attributes used for the connection-error flashes.
 
   ## Examples
 
@@ -63,25 +60,27 @@ defmodule ConsensusWeb.CoreComponents do
       id={@id}
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
-      class="toast toast-top toast-end z-50"
+      class={[
+        "fixed left-1/2 top-4 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2",
+        "flex items-start gap-3 rounded-2xl border-2 border-ink p-4 shadow-sticker-3",
+        @kind == :info && "bg-mint text-ink",
+        @kind == :error && "bg-tangerine text-white"
+      ]}
       {@rest}
     >
-      <div class={[
-        "alert w-80 sm:w-96 max-w-80 sm:max-w-96 text-wrap",
-        @kind == :info && "alert-info",
-        @kind == :error && "alert-error"
-      ]}>
-        <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
-        <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
-        <div>
-          <p :if={@title} class="font-semibold">{@title}</p>
-          <p>{msg}</p>
-        </div>
-        <div class="flex-1" />
-        <button type="button" class="group self-start cursor-pointer" aria-label={gettext("close")}>
-          <.icon name="hero-x-mark" class="size-5 opacity-40 group-hover:opacity-70" />
-        </button>
+      <.icon :if={@kind == :info} name="hero-information-circle" class="size-5 shrink-0" />
+      <.icon :if={@kind == :error} name="hero-exclamation-circle" class="size-5 shrink-0" />
+      <div class="flex-1">
+        <p :if={@title} class="font-bold leading-5">{@title}</p>
+        <p class="text-sm font-semibold leading-5">{msg}</p>
       </div>
+      <button
+        type="button"
+        class="shrink-0 cursor-pointer opacity-70 hover:opacity-100"
+        aria-label={gettext("close")}
+      >
+        <.icon name="hero-x-mark" class="size-5" />
+      </button>
     </div>
     """
   end
@@ -89,24 +88,53 @@ defmodule ConsensusWeb.CoreComponents do
   @doc """
   Renders a button with navigation support.
 
+  Three variants, all driven by `variant`: the default (no `variant`) is the white secondary
+  chrome; `variant="primary"` is the tangerine forward action; `variant="ink"` is the
+  ink-filled style used for "Copy link" in the share sheet. Disabled buttons drop their
+  shadow and fade to 45% opacity — `.press-N` (see app.css) already no-ops once `:disabled`
+  is set, so no extra class is needed for that half.
+
+  `rest` also accepts an explicit `type` (e.g. `type="submit"`) so a caller can be precise
+  about form semantics; when omitted the browser's own default applies (submit inside a
+  `<.form>`, a no-op button outside one) exactly as before this component grew a design.
+
   ## Examples
 
       <.button>Send!</.button>
       <.button phx-click="go" variant="primary">Send!</.button>
       <.button navigate={~p"/"}>Home</.button>
+      <.button variant="ink">Copy link</.button>
   """
-  attr :rest, :global, include: ~w(href navigate patch method download name value disabled)
-  attr :class, :any
-  attr :variant, :string, values: ~w(primary)
+  attr :rest, :global, include: ~w(href navigate patch method download name value disabled type)
+
+  # `class` is **added to** the button's own classes, not swapped for them.
+  #
+  # The generator ships this as `assign_new(assigns, :class, ...)`, i.e. "the class to use
+  # over defaults" — pass anything and every default disappears. In a design system where
+  # the defaults *are* the button (2px ink border, hard shadow, press, variant fill), a
+  # caller who wants `w-full` gets an unstyled `<button>` instead, with no error and no
+  # warning. That trap cost real time here: the account screens ended up wrapping buttons
+  # in `<div class="grid">` to get full width rather than fight it. Nothing in `lib/` was
+  # relying on the override behaviour when this changed, precisely because it was unusable.
+  attr :class, :any, default: nil, doc: "extra classes, appended to the button's own"
+  attr :variant, :string, values: ~w(primary ink)
   slot :inner_block, required: true
 
   def button(%{rest: rest} = assigns) do
-    variants = %{"primary" => "btn-primary", nil => "btn-primary btn-soft"}
+    variants = %{
+      "primary" => "bg-tangerine text-white shadow-sticker-4 press-4",
+      "ink" => "bg-ink text-white hover:bg-ink-soft",
+      nil => "bg-white shadow-sticker-2 press-2 hover:bg-yellow"
+    }
 
     assigns =
-      assign_new(assigns, :class, fn ->
-        ["btn", Map.fetch!(variants, assigns[:variant])]
-      end)
+      assign(assigns, :class, [
+        "inline-flex items-center justify-center gap-2 rounded-2xl border-2 border-ink p-4",
+        "font-bold text-base transition-colors",
+        "disabled:cursor-not-allowed disabled:opacity-[45%] disabled:shadow-none",
+        Map.fetch!(variants, assigns[:variant]),
+        assigns[:class]
+      ])
 
     if rest[:href] || rest[:navigate] || rest[:patch] do
       ~H"""
@@ -181,7 +209,7 @@ defmodule ConsensusWeb.CoreComponents do
   attr :prompt, :string, default: nil, doc: "the prompt for select inputs"
   attr :options, :list, doc: "the options to pass to Phoenix.HTML.Form.options_for_select/2"
   attr :multiple, :boolean, default: false, doc: "the multiple flag for select inputs"
-  attr :class, :any, default: nil, doc: "the input class to use over defaults"
+  attr :class, :any, default: nil, doc: "extra classes, appended to the input's own"
   attr :error_class, :any, default: nil, doc: "the input error class to use over defaults"
 
   attr :rest, :global,
@@ -212,8 +240,8 @@ defmodule ConsensusWeb.CoreComponents do
       end)
 
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
+    <div class="mb-2">
+      <label for={@id} class="inline-flex cursor-pointer items-start gap-2.5">
         <input
           type="hidden"
           name={@name}
@@ -221,17 +249,28 @@ defmodule ConsensusWeb.CoreComponents do
           disabled={@rest[:disabled]}
           form={@rest[:form]}
         />
-        <span class="label">
+        <span class="relative mt-0.5 inline-grid size-[22px] shrink-0 place-items-center">
           <input
             type="checkbox"
             id={@id}
             name={@name}
             value="true"
             checked={@checked}
-            class={@class || "checkbox checkbox-sm"}
+            class={
+              [
+                # `class` is appended, not substituted — see the note on `button/1`.
+                "peer absolute inset-0 size-[22px] cursor-pointer appearance-none rounded-md border-2 border-ink bg-white checked:bg-mint focus-visible:outline-2 focus-visible:outline-violet focus-visible:outline-offset-2 disabled:cursor-not-allowed disabled:opacity-[45%]",
+                @class
+              ]
+            }
             {@rest}
-          />{@label}
+          />
+          <.icon
+            name="hero-check"
+            class="pointer-events-none relative hidden size-[15px] text-ink peer-checked:block"
+          />
         </span>
+        <span class="text-sm font-semibold text-ink">{@label}</span>
       </label>
       <.error :for={msg <- @errors}>{msg}</.error>
     </div>
@@ -240,13 +279,20 @@ defmodule ConsensusWeb.CoreComponents do
 
   def input(%{type: "select"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-2 flex flex-col gap-1.5">
+      <label for={@id} class="flex flex-col gap-1.5">
+        <span :if={@label} class="eyebrow">{@label}</span>
         <select
           id={@id}
           name={@name}
-          class={[@class || "w-full select", @errors != [] && (@error_class || "select-error")]}
+          class={
+            [
+              # `class` is appended, not substituted — see the note on `button/1`.
+              "w-full rounded-2xl border-2 border-ink bg-white px-4 py-3.5 font-semibold shadow-field",
+              @class,
+              @errors != [] && (@error_class || "border-tangerine")
+            ]
+          }
           multiple={@multiple}
           {@rest}
         >
@@ -261,16 +307,20 @@ defmodule ConsensusWeb.CoreComponents do
 
   def input(%{type: "textarea"} = assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-2 flex flex-col gap-1.5">
+      <label for={@id} class="flex flex-col gap-1.5">
+        <span :if={@label} class="eyebrow">{@label}</span>
         <textarea
           id={@id}
           name={@name}
-          class={[
-            @class || "w-full textarea",
-            @errors != [] && (@error_class || "textarea-error")
-          ]}
+          class={
+            [
+              # `class` is appended, not substituted — see the note on `button/1`.
+              "min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-4 py-3.5 text-[13.5px] font-normal leading-[1.45] shadow-field",
+              @class,
+              @errors != [] && (@error_class || "border-tangerine")
+            ]
+          }
           {@rest}
         >{Phoenix.HTML.Form.normalize_value("textarea", @value)}</textarea>
       </label>
@@ -282,18 +332,22 @@ defmodule ConsensusWeb.CoreComponents do
   # All other inputs text, datetime-local, url, password, etc. are handled here...
   def input(assigns) do
     ~H"""
-    <div class="fieldset mb-2">
-      <label for={@id}>
-        <span :if={@label} class="label mb-1">{@label}</span>
+    <div class="mb-2 flex flex-col gap-1.5">
+      <label for={@id} class="flex flex-col gap-1.5">
+        <span :if={@label} class="eyebrow">{@label}</span>
         <input
           type={@type}
           name={@name}
           id={@id}
           value={Phoenix.HTML.Form.normalize_value(@type, @value)}
-          class={[
-            @class || "w-full input",
-            @errors != [] && (@error_class || "input-error")
-          ]}
+          class={
+            [
+              # `class` is appended, not substituted — see the note on `button/1`.
+              "w-full rounded-2xl border-2 border-ink bg-white px-4 py-3.5 font-semibold shadow-field placeholder:text-faint",
+              @class,
+              @errors != [] && (@error_class || "border-tangerine")
+            ]
+          }
           {@rest}
         />
       </label>
@@ -305,8 +359,8 @@ defmodule ConsensusWeb.CoreComponents do
   # Helper used by inputs to generate form errors
   defp error(assigns) do
     ~H"""
-    <p class="mt-1.5 flex gap-2 items-center text-sm text-error">
-      <.icon name="hero-exclamation-circle" class="size-5" />
+    <p class="mt-1.5 flex items-center gap-1.5 text-[11.5px] font-semibold text-tangerine">
+      <.icon name="hero-exclamation-circle" class="size-3.5 shrink-0" />
       {render_slot(@inner_block)}
     </p>
     """
@@ -323,10 +377,10 @@ defmodule ConsensusWeb.CoreComponents do
     ~H"""
     <header class={[@actions != [] && "flex items-center justify-between gap-6", "pb-4"]}>
       <div>
-        <h1 class="text-lg font-semibold leading-8">
+        <h1 class="text-lg font-bold leading-8 text-ink">
           {render_slot(@inner_block)}
         </h1>
-        <p :if={@subtitle != []} class="text-sm text-base-content/70">
+        <p :if={@subtitle != []} class="text-sm text-muted">
           {render_slot(@subtitle)}
         </p>
       </div>
@@ -337,6 +391,9 @@ defmodule ConsensusWeb.CoreComponents do
 
   @doc """
   Renders a table with generic styling.
+
+  Ink-bordered, `shadow-sticker-2` rows with `font-mono` uppercase column headers. Used by
+  the admin user list.
 
   ## Examples
 
@@ -370,26 +427,38 @@ defmodule ConsensusWeb.CoreComponents do
     <%!-- The table scrolls inside its own box so a wide row never makes the whole
           page scroll sideways on a narrow screen. --%>
     <div class="overflow-x-auto">
-      <table class="table table-zebra">
+      <table class="w-full border-separate border-spacing-y-2">
         <thead>
           <tr>
-            <th :for={col <- @col}>{col[:label]}</th>
-            <th :if={@action != []}>
+            <th
+              :for={col <- @col}
+              class="px-4 pb-1 text-left font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted"
+            >
+              {col[:label]}
+            </th>
+            <th :if={@action != []} class="px-4 pb-1">
               <span class="sr-only">{gettext("Actions")}</span>
             </th>
           </tr>
         </thead>
         <tbody id={@id} phx-update={is_struct(@rows, Phoenix.LiveView.LiveStream) && "stream"}>
-          <tr :for={row <- @rows} id={@row_id && @row_id.(row)}>
+          <tr
+            :for={row <- @rows}
+            id={@row_id && @row_id.(row)}
+            class="rounded-2xl border-2 border-ink bg-white shadow-sticker-2"
+          >
             <td
               :for={col <- @col}
               phx-click={@row_click && @row_click.(row)}
-              class={@row_click && "hover:cursor-pointer"}
+              class={[
+                "px-4 py-3 font-semibold text-ink first:rounded-l-2xl last:rounded-r-2xl",
+                @row_click && "cursor-pointer"
+              ]}
             >
               {render_slot(col, @row_item.(row))}
             </td>
-            <td :if={@action != []} class="w-0 font-semibold">
-              <div class="flex gap-4">
+            <td :if={@action != []} class="w-0 px-4 py-3 font-semibold last:rounded-r-2xl">
+              <div class="flex gap-3">
                 <%= for action <- @action do %>
                   {render_slot(action, @row_item.(row))}
                 <% end %>
@@ -418,11 +487,16 @@ defmodule ConsensusWeb.CoreComponents do
 
   def list(assigns) do
     ~H"""
-    <ul class="list">
-      <li :for={item <- @item} class="list-row">
-        <div class="list-col-grow">
-          <div class="font-bold">{item.title}</div>
-          <div>{render_slot(item)}</div>
+    <ul class="flex flex-col gap-2">
+      <li
+        :for={item <- @item}
+        class="flex items-center justify-between gap-4 rounded-2xl border-2 border-ink bg-white px-4 py-3 shadow-sticker-2"
+      >
+        <div>
+          <div class="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+            {item.title}
+          </div>
+          <div class="font-semibold text-ink">{render_slot(item)}</div>
         </div>
       </li>
     </ul>

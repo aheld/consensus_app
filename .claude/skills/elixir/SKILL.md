@@ -1,6 +1,6 @@
 ---
 name: elixir
-description: Elixir, OTP, Mix and Ecto working reference for the Consensus Phoenix app. Use when running mix tasks (compile, format, test, precommit, ecto.migrate) or picking a MIX_TEST_PARTITION, adding a child to the OTP supervision tree in Consensus.Application, working on Consensus.Seeds or the bootstrap admin, writing or reviewing Ecto changesets and context functions, deciding whether an ExUnit case may be async under the Ecto sandbox, writing tests with DataCase/ConnCase and the accounts fixtures, decoding Elixir compiler warnings or --warnings-as-errors failures, debugging in IEx with dbg/recompile, or diagnosing Elixir/Ecto runtime errors such as Ecto.ConstraintError and constraint-name mismatches, Ecto.NoResultsError, "module is not available", mailer delivery errors, or SQLite migration failures.
+description: Elixir, OTP, Mix and Ecto working reference for the Consensus Phoenix app. Use when running mix tasks (compile, format, test, precommit, ecto.migrate) or picking a MIX_TEST_PARTITION, adding a child to the OTP supervision tree in Consensus.Application (including Consensus.LinkPreview.Cache), working on Consensus.Seeds or the bootstrap admin, writing or reviewing Ecto changesets and context functions in Consensus.Accounts or Consensus.Activities, injecting a test double for Consensus.LinkPreview's fetcher behaviour, deciding whether an ExUnit case may be async now that the suite runs `max_cases: 1`, writing tests with DataCase/ConnCase and the accounts/activities fixtures, decoding Elixir compiler warnings or --warnings-as-errors failures, debugging in IEx with dbg/recompile, or diagnosing Elixir/Ecto runtime errors such as Ecto.ConstraintError and constraint-name mismatches, Ecto.NoResultsError, "module is not available", mailer delivery errors, or SQLite migration failures.
 ---
 
 # Elixir in the Consensus repo
@@ -32,6 +32,7 @@ need it — see the command in `.claude/skills/phoenix/SKILL.md`.
 | Phoenix / LiveView | 1.8.9 / 1.2.8 |
 | ecto / ecto_sql | 3.14.1 / 3.14.0 |
 | ecto_sqlite3 / bcrypt_elixir | 0.24.1 / 3.3.2 |
+| req | 0.7.2 — the HTTP client behind `Consensus.LinkPreview.Fetcher.Req`, the production `fetcher` |
 
 `mix.exs` declares `elixir: "~> 1.17"` — that is the floor, not the toolchain. Write code
 that compiles on 1.20.3.
@@ -129,7 +130,7 @@ Consequences that bite:
 Read-only inspection (prefer a copy of the dev file; the test file is yours):
 
 ```bash
-sqlite3 consensus_test7.db ".schema home_page"
+sqlite3 consensus_test7.db ".schema activity_groups"
 sqlite3 consensus_test7.db "select version from schema_migrations;"
 ```
 
@@ -189,9 +190,10 @@ explicitly, so the suite is never seeded behind ExUnit's back even if someone ru
 tests with `RELEASE_NAME` in the environment. Several `Accounts.count_users/0` and
 `list_users/0` assertions depend on that starting from zero.
 
-`Consensus.Seeds.run!/0` is idempotent and returns
-`{:ok, %{admin: admin_or_nil, home_page: %HomePage{}}}`. It creates a bootstrap admin
-only when **`Accounts.count_admins() > 0` is false** — the gate is "does this database
+`Consensus.Seeds.run!/0` is idempotent and returns `{:ok, %{admin: admin_or_nil}}` — the
+`:home_page` key that used to sit alongside `:admin` is gone, along with the home page
+itself (D-027). It creates a bootstrap admin only when
+**`Accounts.count_admins() > 0` is false** — the gate is "does this database
 have any administrator?", deliberately *not* "does the user `aheld` exist?", so renaming
 or re-emailing the seeded account cannot make the next boot look like a first boot and
 resurrect `aheld` / `adminpass`. `test/consensus/seeds_test.exs` pins both of those
@@ -233,10 +235,15 @@ The generated `Consensus.Accounts` context is the model. Follow it.
 `confirm_and_clear_password_changeset/1`. The context calls them and touches `Repo`.
 
 **Narrow the cast.** `admin_changeset/2` casts `[:is_admin]` and nothing else, precisely
-so an admin-only endpoint cannot smuggle an email or password change through. Fields set
-programmatically (`user_id`, `updated_by_id`) are **never** in `cast/3`; see
-`Consensus.Content.update_home_page/2`, which does
-`Ecto.Changeset.put_change(:updated_by_id, user.id)` from the scope.
+so an admin-only endpoint cannot smuggle an email or password change through.
+`Consensus.Activities.Group.status_changeset/2` is the same idea for a lifecycle field: it
+casts only `[:status, :completed_at, :cancelled_at]`, kept apart from the organizer-facing
+`changeset/2` so a public edit form can never smuggle a status transition through `attrs`.
+Fields set programmatically — `organizer_id` on a `%Group{}`, `group_id`/`added_by_id`/
+`position` on an `%Activity{}` — are **never** in `cast/3`; `Consensus.Activities.create_group/2`
+and `add_activity/3` set them directly on the struct (`%Group{organizer_id: user_id}`,
+`%Activity{group_id: group.id, added_by_id: user_id}`) before handing it to the schema's
+changeset.
 
 **Options keyword instead of a second changeset**, via `Keyword.get(opts, :flag, default)`
 inside a private validator. `registration_changeset/3` threads `opts` into
@@ -258,7 +265,12 @@ arrived from a LiveView event — an admin clicking a stale row should get "no s
 a crashed socket. Note its two clauses: the first matches
 `is_integer(id) and id > 0 and id <= @max_row_id` and calls `Repo.get/2`; the second catches
 every other integer and returns `nil`. The bound is not decoration — `Repo.get/2` does **not**
-politely return `nil` for a 26-digit id, exqlite raises (D-016).
+politely return `nil` for a 26-digit id, exqlite raises (D-016). `Consensus.Activities` follows
+the same shape for a different reason: `get_group!/2` is scoped to the organizer and raises
+`Ecto.NoResultsError` both when the id is missing and when it belongs to someone else — the two
+are indistinguishable from outside, which is the point — while `get_group_by_slug/1` is the
+**unscoped** non-bang read the future `/join/<slug>` page will use, returning `nil` for a bad
+slug rather than raising on a guest's typo.
 
 **Writes that an admin performs take the actor's scope and return more than the row.**
 `set_admin/3` **and** `delete_user/2` both return `{:ok, {user, tokens_to_disconnect}}` — the
@@ -301,37 +313,107 @@ target, then runs the last-admin guard — because the caller's structs may be s
 the write lands. `delete_user/2` uses the identical `with` chain, substituting
 `refuse_self_deletion/2` and `refuse_admin_deletion/1` for the last-admin guard.
 
-**Authorization is a function clause, not an `if`.** `Content.update_home_page/2` heads
-match `%Scope{user: %User{is_admin: true} = user}`; a non-admin scope raises
-`FunctionClauseError` rather than falling through. Contexts take `current_scope` as the
-first argument (see `AGENTS.md`).
+**Authorization is a function clause, not an `if`.** `Consensus.Activities` is the model now
+that `Consensus.Content` is deleted (D-027): its function heads bind the scope's `user_id` and
+the resource's owner id to the *same variable name* —
+`update_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group, attrs)`
+— so a call on someone else's group fails to match any clause and raises `FunctionClauseError`
+rather than taking a runtime branch. `create_group/2`, `publish_group/2`, `cancel_group/2`,
+`complete_group/2`, `add_activity/3` and `reorder_activities/3` all follow this shape. Contexts
+take `current_scope` as the first argument (see `AGENTS.md`).
+
+**The one deliberate exception is a DB re-read, not a pattern match, and it is documented as
+such in the module.** `update_activity/3` and `delete_activity/2` take an `%Activity{}`, which
+carries only `group_id` — not the organizer id — so there is no owner field to bind against the
+scope's `user_id` in the function head. Both instead call a private `authorize_activity/2` that
+re-fetches the `%Group{}` by `group_id` and matches its `organizer_id`, returning
+`{:error, :unauthorized}` for someone else's group or `{:error, :not_found}` for a group that no
+longer exists — the same "don't trust the struct in hand, re-read from storage" idiom
+`Accounts.set_admin/3` uses for its actor (D-016).
 
 **Queries:** `import Ecto.Query, warn: false` at the top of the context; keyword syntax
 inline (`Repo.all(from(u in User, order_by: [asc: u.inserted_at, asc: u.id]))`).
 Preload anything a template will touch.
 
+### `Consensus.LinkPreview` — an injected fetcher behaviour and an ETS-backed OTP child
+
+Not an Ecto context at all — `lib/consensus/link_preview.ex` fetches OpenGraph/HTML metadata
+for a pasted URL, and it is worth knowing as a *non*-database pattern alongside `Accounts` and
+`Activities`.
+
+- **`Consensus.LinkPreview.fetch/1`** never touches the network directly. It calls
+  `Application.get_env(:consensus, __MODULE__, [])[:fetcher] || Fetcher.Req` and invokes that
+  module's `get/2` — a `@behaviour Consensus.LinkPreview.Fetcher`. `config/config.exs` (or
+  `config/test.exs`) supplies the module; in test it is `Consensus.LinkPreviewStub`
+  (`test/support/link_preview_stub.ex`), which has no Mox dependency and instead stores a
+  per-process response function with `Process.put/2`, looked up by walking `self()` and then
+  `Process.get(:"$callers", [])` — the mechanism `Task` uses to make a spawning test process
+  discoverable from the `Task` it starts. That is what makes a stub installed by an ExUnit test
+  visible from inside a LiveView's `start_async` Task; see the `phoenix` skill for why that
+  matters and the trap it avoids.
+- **The cache is a real supervised child, not a per-call detail.** `Consensus.LinkPreview.Cache`
+  is a `GenServer` whose `init/1` does nothing but `:ets.new(@table, [:set, :public,
+  :named_table, read_concurrency: true])` — the GenServer exists only to give the table a
+  lifetime tied to the supervision tree; `get/1`, `put/2`, `flush/0` and `size/0` all touch the
+  ETS table directly, never `GenServer.call/2`. It sits in `Consensus.Application.children/0`
+  after `Consensus.Repo` and before `ConsensusWeb.Endpoint` (no database dependency of its own,
+  so its exact position within that range is not asserted, only the range — see
+  `test/consensus/application_test.exs`, `"starts the link preview cache after the repo and
+  before the endpoint"`). Both `{:ok, _}` and `{:error, _}` results are cached, on different
+  TTLs (`cache_ttl_ms`, default 6h; `cache_error_ttl_ms`, default 5m) — a broken link pasted
+  five times costs one outbound request, not five.
+- **The SSRF guard resolves the host, not just parses it**, and re-checks on every redirect hop
+  — `check_host/1` rejects loopback/private/link-local addresses and a short blocklist
+  (`localhost`, the cloud metadata hostname) before the first request and again after following
+  a `location` header, because a public host that 302s to `10.0.0.1` would otherwise defeat a
+  check done only once. `perform_fetch/2` never raises into its caller: `safe_perform_fetch/1`
+  wraps it in both `rescue` and `catch kind, reason` — the same "an exit is not caught by
+  `rescue`" lesson `UserNotifier` teaches, applied to an HTTP fetch instead of a mailer.
+
+### `Consensus.Deadlines` — pure functions, no database, no `Repo`
+
+`lib/consensus/deadlines.ex` computes the three deadline chips on `01 setup`
+(`Consensus.Deadlines.options/2`) entirely from a UTC `DateTime` and an integer offset in
+minutes — no schema, no changeset, no `Repo` call anywhere in the module. It is the module to
+reach for as an example of "this doesn't need to be a context" when a future feature is pure
+computation dressed up as domain logic. Every function is unit-testable with nothing but plain
+data, which is exactly what `test/consensus/deadlines_test.exs` does — no `DataCase`, no
+sandbox, `use ExUnit.Case, async: true`, and it is safe async because nothing it does touches
+shared state. See the `phoenix` skill for why the browser (not the server) is the source of the
+UTC offset, and CLAUDE.md's product invariant about there being no `tzdata` dependency.
+
 ## Pattern matching, `with`, and result tuples
 
 - Public context functions return `{:ok, value}` | `{:error, reason}`; the bang variants
-  (`ensure_home_page!/0`, `get_user!/1`) raise. Keep both flavours honest. `Seeds.run!/0`
+  (`get_group!/2`, `get_user!/1`) raise. Keep both flavours honest. `Seeds.run!/0`
   is the odd one out and the naming is deliberate: it returns `{:ok, map}` on the happy
   path and raises only on an unusable first-boot configuration.
-- Error reasons are atoms the caller can match. The complete set in `lib/` today is
-  `:is_admin`, `:last_admin`, `:not_found`, `:self`, `:sudo_required`,
-  `:transaction_aborted` and `:unauthorized`, plus the tagged `{:database_busy, message}`
-  that **both** `set_admin/3` and `delete_user/2` rescue `Exqlite.Error` into
-  (`accounts.ex:214` and `:305`). (`:not_confirmed` is **gone** — D-015 removed the refusal it
+- Error reasons are atoms the caller can match, and the set has grown well past
+  `Consensus.Accounts` since `Consensus.Activities` and `Consensus.LinkPreview` landed.
+  Reproduce it rather than trust this list — `grep -rhon '{:error, :[a-z_]*}' lib/ | sed
+  's/^[0-9]*://' | sort -u` — because it is the literal command this paragraph was written
+  from and it is stale the moment a new context adds a reason. As of this writing:
+  `:already_finished`, `:blocked_host`, `:fetch_failed`, `:group_not_open`, `:invalid_ids`,
+  `:invalid_url`, `:is_admin`, `:last_admin`, `:no_activities`, `:no_deadline`, `:not_draft`,
+  `:not_found`, `:not_html`, `:self`, `:sudo_required`, `:too_many_redirects`,
+  `:transaction_aborted`, `:unauthorized` — plus two tagged shapes the grep above cannot
+  find because they are not bare atoms: `{:database_busy, message}`, which **both**
+  `Accounts.set_admin/3` and `delete_user/2` rescue `Exqlite.Error` into
+  (`accounts.ex:214` and `:305`), and `{:http, status}`, one of `Consensus.LinkPreview.fetch/1`'s
+  own reasons for a non-2xx response. Reuse an existing reason before inventing a synonym — a
+  `:not_found` in `Activities` means the same thing it does in `Accounts`.
+  (`:not_confirmed` is **gone** — D-015 removed the refusal it
   reported; see below. `grep -rn not_confirmed lib/ test/` is empty.) Don't return bare
-  strings. Grep before adding one —
-  `grep -rhon '{:error, :[a-z_]*}' lib/ | sed 's/^[0-9]*://' | sort -u` — reuse beats
-  inventing a synonym.
+  strings.
 - Use `with` when every step is a happy-path `{:ok, _}` and the `else` is genuinely a
   single fallback. `Accounts.update_user_email/2` is the canonical example, and
   `set_admin/3` / `delete_user/2` use the same shape *inside* `Repo.transact/1`. When each
   failure needs its own reason, use `case` — as `login_user_by_magic_link/1` does.
 - `with {:ok, x} <- expr do … end` **without** an `else` passes the non-matching value
-  straight through. `Content.update_home_page/2` relies on that to forward
-  `{:error, changeset}` untouched.
+  straight through. `Consensus.Activities.update_activity/3` relies on this: its only clause is
+  `with {:ok, group} <- authorize_activity(scope, activity) do ... end`, so an `{:error,
+  :unauthorized}` or `{:error, :not_found}` from the private authorization check forwards to the
+  caller untouched, with no `else` needed.
 - Guard-clause naming: predicates end in `?` (`sudo_mode?`, `valid_password?`,
   `default_password_in_use?`); `is_` prefixes are reserved for real guards.
 - Repeat a variable in a head to express "same value". `Accounts` short-circuits a no-op
@@ -344,20 +426,28 @@ Preload anything a template will touch.
 The whole suite, so you know where a new test belongs:
 
 ```
-test/consensus/            accounts_test.exs  application_test.exs  boot_check_test.exs
-                           content_test.exs  deploy_config_test.exs  release_test.exs
-                           seeds_test.exs
+test/consensus/            accounts_test.exs  activities_test.exs  application_test.exs
+                           boot_check_test.exs  deadlines_test.exs  deploy_config_test.exs
+                           link_preview_test.exs  release_test.exs  seeds_test.exs
 test/consensus/accounts/   user_notifier_test.exs
-test/consensus_web/        router_test.exs  user_auth_test.exs
+test/consensus_web/        journey_test.exs  router_test.exs  user_auth_test.exs
 test/consensus_web/controllers/  error_html_test.exs  error_json_test.exs
                                  health_controller_test.exs
                                  user_session_controller_test.exs
 test/consensus_web/live/   home_live_test.exs
-test/consensus_web/live/admin_live/  home_page_test.exs  users_test.exs
-test/consensus_web/live/user_live/   confirmation_test.exs  login_test.exs
-                                     registration_test.exs  settings_test.exs
-test/support/              conn_case.ex  data_case.ex  fixtures/accounts_fixtures.ex
+test/consensus_web/live/admin_live/     users_test.exs
+test/consensus_web/live/group_live/     new_test.exs  options_test.exs  review_test.exs
+                                        share_test.exs
+test/consensus_web/live/user_live/      confirmation_test.exs  login_test.exs
+                                        registration_test.exs  settings_test.exs
+test/support/               conn_case.ex  data_case.ex  link_preview_stub.ex
+                            fixtures/accounts_fixtures.ex  fixtures/activities_fixtures.ex
 ```
+
+`Consensus.Content`, `Consensus.Content.HomePage`, `ConsensusWeb.AdminLive.HomePage` and
+`test/consensus/content_test.exs` / `test/consensus_web/live/admin_live/home_page_test.exs` are
+all **deleted** (D-027, the admin-editable home page). If you see any of those five names, the
+document naming them is stale.
 
 `find test -name '*_test.exs' | sort` is the current answer; several agents are adding files
 to this tree, so re-run it rather than trusting the block above.
@@ -408,32 +498,48 @@ Both call `Consensus.DataCase.setup_sandbox/1`, which does
 `Ecto.Adapters.SQL.Sandbox.start_owner!(Consensus.Repo, shared: not tags[:async])` and
 stops the owner `on_exit`. `test/test_helper.exs` puts the repo in `:manual` mode.
 
-### `async: true` and SQLite — the actual rule
+### `async: true` and SQLite — the actual rule (D-033)
 
-**There is no "never `async` with SQLite" rule in this repo, and the moduledoc in
-`data_case.ex` that hints at one is stock generator text nobody edited.** Two mechanisms
-make concurrency safe:
+**The suite runs its cases one at a time.** `test/test_helper.exs` calls
+`ExUnit.start(max_cases: 1)`, so nothing in this repo runs concurrently regardless of an
+individual case's `async:` tag. That is a change from how this skill used to describe things,
+and the old reasoning ("the sandbox plus a 5s `busy_timeout` make concurrent writers safe") was
+incomplete in a way that only showed up once the suite grew: SQLite permits exactly one write
+transaction across the whole database file, the sandbox holds each test's transaction open for
+the *entire test*, and **`busy_timeout` is never consulted in that collision** — a connection
+already inside a transaction that tries to upgrade to a write cannot be made to wait (blocking
+could deadlock it against itself), so SQLite returns `SQLITE_BUSY` immediately and the busy
+handler never runs. Measured at 438 tests: ~50 failures a run at the old default
+`max_cases: 20`, still ~46 at `--max-cases 2`, zero at `--max-cases 1`. Full mechanism,
+including why `journal_mode: :wal` and `default_transaction_mode: :immediate` were tried in
+`config/test.exs` first and did not help, lives in the `sqlite` skill — this section only
+covers what changes about writing a *test*.
 
-- **`Ecto.Adapters.SQL.Sandbox` gives each async test its own checked-out connection
-  inside its own transaction**, rolled back at exit. `shared: not tags[:async]` means an
-  `async: true` case gets a private owner instead of the shared one, so tests do not see
-  each other's rows.
-- **`config/test.exs` sets `busy_timeout: 5_000`.** Genuine write contention — which is
-  real, SQLite still serialises writers — becomes a wait of up to five seconds instead of
-  an immediate `** (Exqlite.Error) database is locked`. The comment above that line in
-  `config/test.exs` says exactly this.
+**`async: true` is still worth setting, and still means what it always meant under the
+sandbox** — `shared: not tags[:async]` gives an `async: true` case its own checked-out
+connection and its own transaction, rolled back at exit, instead of joining the shared owner, so
+tests still cannot see each other's rows. It just no longer buys concurrent wall-clock time,
+because `max_cases: 1` removes that regardless of the tag.
 
-Verified 2026-08-08: `MIX_TEST_PARTITION=6 mix test` → **323 passed, 0 failures**,
-`max_cases: 20`, "Finished in 1.9 seconds (0.4s async, 1.4s sync)". The count climbs as the
-app is written — the durable fact is *0 failures with async cases in the mix*, not the number.
-Re-run it rather than quoting it; several agents are adding tests to this tree concurrently.
+Verified 2026-08-08: `MIX_TEST_PARTITION=final mix precommit` → **438 tests, 0 failures**,
+"Finished in 2.7 seconds (0.9s async, 1.8s sync)". Re-run for a current count rather than
+quoting that number — the count grows as the app is written.
 
-`test/consensus/content_test.exs` is `use Consensus.DataCase, async: true` and does
-plenty of database work — inserts, updates, a PubSub broadcast assertion, and a
-constraint violation. It passes. Copy it, not the sequential files.
+**Always pass `MIX_TEST_PARTITION` when anything else might be running the suite.** Two
+concurrent `mix test` runs against the same unpartitioned `consensus_test.db` produce real
+failures, not flakiness: row counts and orderings come back off by exactly the other run's
+rows. Every "pre-existing failure" seen during this feature's build turned out to be either
+that or a file caught mid-edit.
+
+`test/consensus/activities_test.exs` is `use Consensus.DataCase, async: true` and does plenty of
+database work — inserts, updates, deletes, a `Repo.transact/1` reorder, a PubSub broadcast
+assertion. It passes, because the suite no longer runs concurrently. Copy it for a new context
+test; `test/consensus/content_test.exs`, which this skill used to point at, is deleted along with
+`Consensus.Content` (D-027).
 
 **What forces `async: false` is global mutable state or file-level DDL — not ordinary database
-work.** Six files are pinned, and every one of them says why in a comment:
+work, and not concurrency any more.** Six files are pinned, and every one of them says why in a
+comment:
 
 | File | Why |
 |---|---|
@@ -442,21 +548,28 @@ work.** Six files are pinned, and every one of them says why in a comment:
 | `test/consensus/application_test.exs` | mutates `RELEASE_NAME` and application env; never touches the repo (`use ExUnit.Case`) |
 | `test/consensus/boot_check_test.exs` | real directories, permissions and `Logger` capture (`use ExUnit.Case`) |
 | `test/consensus/release_test.exs` | starts a throwaway repo of its own against a tmp-dir database file |
-| `test/consensus_web/controllers/health_controller_test.exs` | **the interesting one** — proving `/health` can fail means running DDL (`ALTER TABLE … RENAME`), and SQLite takes an exclusive lock on the *whole file* for that. Under `async: true` it collides with every other sandbox connection holding a read transaction and unrelated tests die with `** (Exqlite.Error) Database busy`. ExUnit runs sync cases only after all async ones finish, so this module gets the file to itself; the DDL still rolls back with the sandbox transaction. |
+| `test/consensus/link_preview_test.exs` | `Consensus.LinkPreview.Cache`'s ETS table is one named, process-global table (a real supervised child, not started per test), and some cases override `Application.put_env(:consensus, Consensus.LinkPreview, cache_error_ttl_ms: ...)` to make an expiry observable in milliseconds |
+| `test/consensus_web/controllers/health_controller_test.exs` | **the interesting one, and the one that still matters after D-033** — proving `/health` can fail means running DDL (`ALTER TABLE … RENAME`), and SQLite takes an exclusive lock on the *whole file* for that, which collides with a *shared* (non-async) connection holding a read transaction even when nothing runs concurrently in wall-clock time. The DDL still rolls back with the sandbox transaction. |
 
 That last row is the rule to generalise: **a test that issues DDL must be `async: false`**, even
 though ordinary inserts and updates are perfectly safe async.
 
-Five files are explicitly `async: true` — `test/consensus/content_test.exs`,
-`test/consensus/deploy_config_test.exs` and `test/consensus_web/router_test.exs` (both
-`use ExUnit.Case, async: true`, not a case template — neither touches the database), and the
-two controller tests `error_html_test.exs` and `error_json_test.exs`. Everything else —
-`accounts_test.exs`,
-`user_auth_test.exs`, `user_session_controller_test.exs` and every `live/` file — carries
-**no** `async:` flag at all, which means `false` by default: inherited from the generator, not
-a considered decision. Adding `async: true` to one of those is a legitimate change; run it a
-few times with `--repeat-until-failure 20` to be sure, and be ready to leave it sequential if
-it turns out to fight the write lock.
+Explicit `async: true` today: `test/consensus/activities_test.exs`,
+`test/consensus/deadlines_test.exs` (pure, `use ExUnit.Case` — no database),
+`test/consensus/deploy_config_test.exs` (`use ExUnit.Case` — reads `fly.toml` as text, no
+database), `test/consensus_web/router_test.exs` (`use ExUnit.Case` — no database),
+`test/consensus_web/journey_test.exs`, `test/consensus_web/live/group_live/new_test.exs`,
+`test/consensus_web/live/group_live/options_test.exs`,
+`test/consensus_web/live/home_live_test.exs`, and the two controller tests
+`error_html_test.exs` / `error_json_test.exs`. Everything else — `accounts_test.exs`,
+`user_auth_test.exs`, `user_session_controller_test.exs`, `admin_live/users_test.exs`,
+`group_live/review_test.exs`, `group_live/share_test.exs`, and every `user_live/*` test — carries
+**no** `async:` flag at all, which means `false` by default: inherited from the generator, not a
+considered decision. Adding `async: true` to one of those is still a legitimate change — it
+buys isolation hygiene even without concurrency — run it a few times with
+`--repeat-until-failure 20` to be sure. Re-derive this list with
+`grep -rn "use Consensus.DataCase\|use ConsensusWeb.ConnCase\|use ExUnit.Case" test` rather than
+trusting it verbatim.
 
 Fixtures: `test/support/fixtures/accounts_fixtures.ex` (`Consensus.AccountsFixtures`) —
 `unique_user_email/0`, `unique_username/0`, `valid_user_password/0`,
@@ -464,6 +577,19 @@ Fixtures: `test/support/fixtures/accounts_fixtures.ex` (`Consensus.AccountsFixtu
 `admin_fixture/1`, `user_scope_fixture/0,1`, `admin_scope_fixture/1`, **`stale_scope/1`**,
 `set_password/1`, `extract_user_token/1`, `override_token_authenticated_at/2`,
 `generate_user_magic_link_token/1`, `offset_user_token/3`.
+
+`test/support/fixtures/activities_fixtures.ex` (`Consensus.ActivitiesFixtures`) is the newer,
+smaller sibling — `unique_group_title/0`, `unique_activity_name/0`, `future_deadline/0`,
+`past_deadline/0`, `group_fixture/2` (takes a `%Scope{}` plus attrs), `activity_fixture/2`
+(takes a `%Group{}` plus attrs). Both `*_deadline/0` helpers are `DateTime.add(..., :second)`
+one day either side of now — use `past_deadline/0` for a group that should have already
+auto-completed under `maybe_complete_group/1`, not a hand-built timestamp.
+
+`test/support/link_preview_stub.ex` (`Consensus.LinkPreviewStub`) is not a fixture in this
+sense — it is the injected `Consensus.LinkPreview.Fetcher` implementation for `:test`, installed
+per-process with `stub/1` (or `stub_html/2` for the common "answer this HTML at 200" case). See
+the `Consensus.LinkPreview` note above for why it walks `$callers` rather than just the calling
+process.
 
 `stale_scope/1` is the one to reach for when testing the sudo-mode refusals: it takes a
 `%Scope{}` or a `%User{}` and returns a scope whose `authenticated_at` is outside the
@@ -582,8 +708,10 @@ The three you will actually hit:
 That last one is emitted from `ConsensusWeb.Router.__checks__/0` and **fails
 `mix compile --warnings-as-errors`**, so a `live` route and its module must land in the
 same change. Every module `router.ex` names does exist on disk today (`HomeLive`,
-`AdminLive.Users`, `AdminLive.HomePage`, `UserLive.{Login,Registration,Confirmation,Settings}`),
-so seeing this warning means you added a route ahead of its module.
+`AdminLive.Users`, `GroupLive.{New,Options,Review,Share}`,
+`UserLive.{Login,Registration,Confirmation,Settings}`), so seeing this warning means you added a
+route ahead of its module. `ConsensusWeb.AdminLive.HomePage` is gone (D-027) — do not add it
+back to this list.
 
 The other one worth recognising, because it appears the moment a context function changes
 arity and a caller has not caught up:
@@ -627,30 +755,38 @@ Inside the shell:
 
 Each of these was reproduced in this repo or a copy of it.
 
-**The suite is green** — `MIX_TEST_PARTITION=6 mix test` → `323 passed`, 0 failures
-(2026-08-08). If you hit something below, it is a change you just made, not a pre-existing
-state of the repo.
+**The suite is green.** `MIX_TEST_PARTITION=final mix precommit` → `438 passed` (2026-08-08),
+format and `--warnings-as-errors` clean. A failure you see that is not in code you just
+touched is most often one of two things: another process running the suite on the same
+unpartitioned database, or a file being edited underneath you. Check both before believing
+covers fixing. If you hit something *else* below, it is a change you just made, not a
+pre-existing state of the repo. Re-run `mix test` for a current count rather than trusting
+either number here.
 
-### The home page singleton: a constraint only maps back if the DDL *names* it
+### A named CHECK constraint only maps back to a changeset if the names match
 
-Worth understanding before you add any constraint, because the failure is silent until
-runtime and this schema is the worked example.
+Worth understanding before you add any constraint, because the failure is silent until runtime.
+The worked example used to be the home page's singleton-row CHECK; `Consensus.Content`,
+`Consensus.Content.HomePage` and `test/consensus/content_test.exs` are all deleted (D-027), but
+the migration that created the CHECK (`priv/repo/migrations/20260808040000_create_home_page.exs`)
+is still on disk unchanged — migrations are never edited after they ship — and the lesson is
+general, not specific to that table. See the `sqlite` skill for the full DDL-side worked example
+(including the new lesson about a `down/0` that recreates it); here is the Ecto/changeset half.
 
-`priv/repo/migrations/20260808040000_create_home_page.exs` writes the table as literal SQL
-through `execute/2` — `Ecto.Migration.constraint/3` would compile to
-`ALTER TABLE ADD CONSTRAINT`, which SQLite rejects — and gives the CHECK an explicit name:
+The migration writes the table as literal SQL through `execute/2` — `Ecto.Migration.constraint/3`
+would compile to `ALTER TABLE ADD CONSTRAINT`, which SQLite rejects — and gives the CHECK an
+explicit name:
 
 ```sql
 "id" INTEGER PRIMARY KEY
   CONSTRAINT "home_page_is_a_singleton" CHECK ("id" = 1),
 ```
 
-`lib/consensus/content/home_page.ex` closes its `changeset/2` with the matching
-`check_constraint(:id, name: :home_page_is_a_singleton)`. **The two names have to be
-identical or the mapping does not happen**, because SQLite reports whatever the DDL named
-and `ecto_sqlite3` passes that string through verbatim as `[check: name]`
-(`deps/ecto_sqlite3/lib/ecto/adapters/sqlite3/connection.ex:156-160`). Verified on SQLite
-3.51.0:
+A schema's `changeset/2` would close with the matching `check_constraint(:id, name:
+:home_page_is_a_singleton)` — **the two names have to be identical or the mapping does not
+happen**, because SQLite reports whatever the DDL named and `ecto_sqlite3` passes that string
+through verbatim as `[check: name]`
+(`deps/ecto_sqlite3/lib/ecto/adapters/sqlite3/connection.ex:156-160`). Verified on SQLite 3.51.0:
 
 ```
 "id" INTEGER PRIMARY KEY CHECK ("id" = 1)
@@ -660,37 +796,21 @@ and `ecto_sqlite3` passes that string through verbatim as `[check: name]`
   → CHECK constraint failed: home_page_is_a_singleton   <- the constraint name
 ```
 
-With the names lined up, a changeset insert of a second row degrades properly. Reproduced
-against the current tree:
+With the names lined up, a changeset insert of a second row degrades to
+`{:error, #Ecto.Changeset<errors: [id: {"is invalid", [constraint: :check, constraint_name:
+"home_page_is_a_singleton"]}]>}` instead of raising. An insert that bypasses the changeset
+(`Repo.insert!/1` on a bare struct) still raises `Ecto.ConstraintError`, as it should — and
+**if you ever see two constraint-name lists disagree** in that error's output (the name the
+database reported vs. "The changeset defined the following constraints"), that is a naming
+mismatch, not a missing declaration. Same shape for `unique_constraint` and
+`foreign_key_constraint`. Note that `FOREIGN KEY constraint failed` carries **no** name at all
+from SQLite (`to_constraints/2` returns `[foreign_key: nil]`), so an FK error can only be matched
+by field, never by name.
 
-```elixir
-%HomePage{id: 2} |> HomePage.changeset(%{message: "second"}) |> Repo.insert()
-#=> {:error, #Ecto.Changeset<errors: [
-#     id: {"is invalid", [constraint: :check, constraint_name: "home_page_is_a_singleton"]}
-#   ]>}
-```
-
-An insert that bypasses the changeset still raises, as it should:
-
-```
-** (Ecto.ConstraintError) constraint error when attempting to insert struct:
-
-    * "home_page_is_a_singleton" (check_constraint)
-...
-The changeset has not defined any constraint.
-```
-
-**If you ever see the two lists disagree** — `Ecto.ConstraintError` prints both the name
-the database reported and "The changeset defined the following constraints" — that is the
-naming mismatch, not a missing declaration. Same shape for `unique_constraint` and
-`foreign_key_constraint`. Note that `FOREIGN KEY constraint failed` carries **no** name at
-all from SQLite (`to_constraints/2` returns `[foreign_key: nil]`), so an FK error can only
-be matched by field, never by name.
-
-`test/consensus/content_test.exs` ("the database rejects a second home page row") asserts
-`Ecto.ConstraintError` from a bare `Repo.insert!/1` of a struct, so it proves the database
-invariant but **not** the changeset mapping. If you change either name, add a changeset-path
-assertion — the suite will not catch it for you.
+If a future table needs a singleton-row CHECK (or any other CHECK) again, `check_constraint/3`
+in the schema's own changeset is what proves the changeset-path mapping — a bare
+`Repo.insert!/1` assertion only proves the database enforces the invariant, not that the
+changeset translates the failure into a readable error.
 
 ### `no such column: u0.is_admin` / `no such table: …`
 
@@ -756,8 +876,9 @@ from u0 in Consensus.Accounts.User,
 ```
 
 `Repo.get!/2` / `Repo.one!/2` on a missing row. Deliberate for user-facing 404s; if the
-caller should handle absence, use the non-bang `Repo.get/2` and match on `nil`
-(`Content.get_home_page/0` does exactly that).
+caller should handle absence, use the non-bang form and match on `nil`
+(`Consensus.Activities.get_group_by_slug/1` does exactly that, for a public join link that has
+to answer "no such group" rather than raise on a guest's typo).
 
 ### `** (Ecto.InvalidChangesetError) could not perform insert because changeset is invalid.`
 
@@ -831,8 +952,9 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect 0 failures from a clean tree (323 tests as of 2026-08-08, and growing — re-run rather
-than quoting the number).
+Expect the count of the day: 438 tests, 0 failures as of 2026-08-08. Re-run rather than
+trusting that number — the count grows as the app is written — but a failure is a real
+signal, not background noise, provided you partitioned the database.
 
 **`mix precommit` inherits `MIX_TEST_PARTITION` like any other mix invocation.** An alias is
 just a list of tasks run in the same OS process, and `config/test.exs` reads the variable with
@@ -842,10 +964,15 @@ Export your digit once for the session and every command above, `precommit` incl
 your own file. There is no need to run the steps individually or to save `precommit` for last.
 
 Verified 2026-08-08 with every `consensus_test*` file removed first:
-`MIX_TEST_PARTITION=6 mix precommit` went green, and afterwards the only new files were
-`consensus_test6.db`, `consensus_test6.db-shm`, `consensus_test6.db-wal`. `consensus_test.db`
-was never created. (The partition behaviour is the durable fact here; do not quote a test
-count from this paragraph — it is the same suite `mix test` runs, and the number moves.)
+`MIX_TEST_PARTITION=44 mix precommit` created only `consensus_test44.db`,
+`consensus_test44.db-shm`, `consensus_test44.db-wal` — `consensus_test.db` was never created,
+so the partition isolation holds. **It did not go fully green**, though: `precommit`'s `test`
+step surfaced the same one pre-existing failure `mix test` does (see "Common failure modes"
+above), so `precommit`'s overall exit code was non-zero on an otherwise-clean tree at the time
+of writing. Don't take "precommit failed" as proof your change broke something without first
+checking whether it's this same known test. (The partition-file behaviour is the durable fact
+in this paragraph; do not quote a pass/fail count from it — it is the same suite `mix test`
+runs, and both move.)
 
 Delete your `consensus_test<N>.db*` files when you are done; `.gitignore` covers them
 (lines 39–40, `*.db` and `*.db-*`) but they are still clutter.

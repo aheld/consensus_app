@@ -1,4 +1,11 @@
 defmodule ConsensusWeb.UserLive.Settings do
+  @moduledoc """
+  Account settings — username, email and password, each its own form.
+
+  Requires sudo mode (`on_mount {ConsensusWeb.UserAuth, :require_sudo_mode}`, a
+  10-minute window — see `Consensus.Accounts.sudo_mode?/2` and CLAUDE.md invariant 5).
+  """
+
   use ConsensusWeb, :live_view
 
   on_mount {ConsensusWeb.UserAuth, :require_sudo_mode}
@@ -8,82 +15,107 @@ defmodule ConsensusWeb.UserLive.Settings do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <div class="text-center">
-        <.header>
-          Account Settings
-          <:subtitle>Manage your username, email address and password</:subtitle>
-        </.header>
+    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-canvas">
+      <div class="mx-auto flex w-full max-w-sm flex-1 flex-col gap-6 px-6 pb-10 pt-6">
+        <.link
+          navigate={~p"/"}
+          class="self-start font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-soft transition-colors hover:text-ink"
+        >
+          Consensus
+        </.link>
+
+        <div class="flex flex-col gap-2">
+          <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em]">
+            Account settings
+          </h1>
+          <p class="text-[14.5px] leading-[1.45] text-ink-soft">
+            Manage your username, email address and password.
+          </p>
+        </div>
+
+        <.form
+          for={@username_form}
+          id="username_form"
+          phx-submit="update_username"
+          phx-change="validate_username"
+          class="flex flex-col gap-3"
+        >
+          <.input
+            field={@username_form[:username]}
+            type="text"
+            label="Username"
+            autocomplete="username"
+            spellcheck="false"
+            required
+          />
+          <div class="grid">
+            <.button type="submit" phx-disable-with="Saving…">Change Username</.button>
+          </div>
+        </.form>
+
+        <div class="h-0.5 rounded-full bg-ink-12" />
+
+        <.form
+          for={@email_form}
+          id="email_form"
+          phx-submit="update_email"
+          phx-change="validate_email"
+          class="flex flex-col gap-3"
+        >
+          <.input
+            field={@email_form[:email]}
+            type="email"
+            label="Email"
+            autocomplete="email"
+            spellcheck="false"
+            required
+          />
+          <div class="grid">
+            <.button type="submit" phx-disable-with="Changing…">Change Email</.button>
+          </div>
+        </.form>
+
+        <div class="h-0.5 rounded-full bg-ink-12" />
+
+        <.form
+          for={@password_form}
+          id="password_form"
+          action={~p"/users/update-password"}
+          method="post"
+          phx-change="validate_password"
+          phx-submit="update_password"
+          phx-trigger-action={@trigger_submit}
+          class="flex flex-col gap-3"
+        >
+          <input
+            name={@password_form[:email].name}
+            type="hidden"
+            id="hidden_user_email"
+            spellcheck="false"
+            value={@current_email}
+          />
+          <.input
+            field={@password_form[:password]}
+            type="password"
+            label="New password"
+            autocomplete="new-password"
+            spellcheck="false"
+            required
+          />
+          <.input
+            field={@password_form[:password_confirmation]}
+            type="password"
+            label="Confirm new password"
+            autocomplete="new-password"
+            spellcheck="false"
+          />
+          <div class="grid">
+            <.button variant="primary" type="submit" phx-disable-with="Saving…">
+              Save Password
+            </.button>
+          </div>
+        </.form>
       </div>
-
-      <.form
-        for={@username_form}
-        id="username_form"
-        phx-submit="update_username"
-        phx-change="validate_username"
-      >
-        <.input
-          field={@username_form[:username]}
-          type="text"
-          label="Username"
-          autocomplete="username"
-          spellcheck="false"
-          required
-        />
-        <.button variant="primary" phx-disable-with="Saving...">Change Username</.button>
-      </.form>
-
-      <div class="divider" />
-
-      <.form for={@email_form} id="email_form" phx-submit="update_email" phx-change="validate_email">
-        <.input
-          field={@email_form[:email]}
-          type="email"
-          label="Email"
-          autocomplete="email"
-          spellcheck="false"
-          required
-        />
-        <.button variant="primary" phx-disable-with="Changing...">Change Email</.button>
-      </.form>
-
-      <div class="divider" />
-
-      <.form
-        for={@password_form}
-        id="password_form"
-        action={~p"/users/update-password"}
-        method="post"
-        phx-change="validate_password"
-        phx-submit="update_password"
-        phx-trigger-action={@trigger_submit}
-      >
-        <input
-          name={@password_form[:email].name}
-          type="hidden"
-          id="hidden_user_email"
-          spellcheck="false"
-          value={@current_email}
-        />
-        <.input
-          field={@password_form[:password]}
-          type="password"
-          label="New password"
-          autocomplete="new-password"
-          spellcheck="false"
-          required
-        />
-        <.input
-          field={@password_form[:password_confirmation]}
-          type="password"
-          label="Confirm new password"
-          autocomplete="new-password"
-          spellcheck="false"
-        />
-        <.button variant="primary" phx-disable-with="Saving...">
-          Save Password
-        </.button>
-      </.form>
     </Layouts.app>
     """
   end

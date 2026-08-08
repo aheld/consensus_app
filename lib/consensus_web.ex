@@ -86,6 +86,7 @@ defmodule ConsensusWeb do
       import Phoenix.HTML
       # Core UI components
       import ConsensusWeb.CoreComponents
+      import ConsensusWeb.Sticker
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

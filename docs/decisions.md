@@ -542,7 +542,8 @@ The CI change is the other half of the same defect. Building an image proves it 
 ## D-020 — The default home-page message is a list of lines, not a heredoc
 
 - **Date:** 2026-08-08
-- **Status:** settled
+- **Status:** superseded by D-027 — the admin-editable home page no longer exists.
+- **History, not instruction:** everything below describes a feature that was deleted. The transferable part is the *reason*: whitespace inside a string that renders under `whitespace-pre-wrap` is layout, `mix format` never reflows string contents, and the guard for that has to be behavioural. Keep that rule for any future pre-wrapped text; the module, the assign and the tests named below are gone.
 - **Decision:** The public home page renders the admin message inside a `whitespace-pre-wrap` paragraph, so **the message string's line structure is its rendered layout**. `Consensus.Content`'s `@default_message_lines` is therefore a list of strings joined with `"\n"` — one list element per rendered line — rather than a heredoc, so a line break is a data decision rather than a formatting accident. The current value, exactly:
 
 ```
@@ -675,7 +676,8 @@ A list makes the failure visible at the point of editing: a stray indent inside 
 ## D-024 — The navbar's user group is `min-w-0`, not `flex-none`
 
 - **Date:** 2026-08-08
-- **Status:** settled
+- **Status:** superseded by D-028 — there is no navbar.
+- **History, not instruction:** `#user-nav` and its `min-w-0` were deleted with the global header. The transferable part is the *reason*: `flex-none` is `flex-shrink: 0`, which makes a sibling `flex-wrap` dead code. That trap is live anywhere we lay a row out with flex; the element and the test named below are gone.
 - **Decision:** In [lib/consensus_web/components/layouts.ex](../lib/consensus_web/components/layouts.ex), the navbar's right-hand group is `<div id="user-nav" class="min-w-0">`, replacing the generator's `flex-none`. The header itself is `flex-wrap gap-y-1`, and the `<ul>` inside is `flex flex-wrap items-center justify-end gap-1`. The `id` exists so a test can assert on the element.
 
 **Why:** `flex-none` is shorthand for `flex: none`, i.e. `flex: 0 0 auto` — **`flex-shrink: 0`**. A flex item that cannot shrink cannot be squeezed below its content width, so on a narrow viewport the group simply overflowed the header: the right-hand end of it, including the theme toggle's dark segment, went off-screen. The `flex-wrap` already on the header and on the `<ul>` was dead code — wrapping only happens when the browser is allowed to run out of room, and `flex-shrink: 0` guarantees it never appears to. `min-w-0` removes the `min-width: auto` floor that flex items get by default, which is what actually lets the group narrow and the wrap fire.
@@ -732,7 +734,8 @@ This is worth an entry rather than a commit message because the two classes look
 ## D-026 — The home-page textarea has no `maxlength`; a grapheme counter replaces it
 
 - **Date:** 2026-08-08
-- **Status:** settled
+- **Status:** superseded by D-027 for its subject; **its rule still binds.**
+- **Still in force:** the home-page textarea is gone, but the rule it established is not. Every free-text field in this app — the option description on design frame `02b` is the live example — has no `maxlength`, a visible counter in the server's own unit, and the real limit in the changeset. Read the reasoning below as current; read `Consensus.Content.HomePage` and `admin_live/home_page.ex` in it as deleted files.
 - **Decision:** The `<.input type="textarea">` in [lib/consensus_web/live/admin_live/home_page.ex](../lib/consensus_web/live/admin_live/home_page.ex) deliberately carries **no `maxlength` attribute**. In its place a live `<p id="message-counter">` renders `{@message_length} / {HomePage.max_message_length()} characters` and turns `text-error` when the count is over, with `aria-describedby="message-counter"` on the field. `@message_length` is computed with `String.length/1` on the changeset's already-cast (and therefore trimmed) value, so it counts what the server counts. `Consensus.Content.HomePage` remains the enforcement: `validate_length(:message, min: 1, max: 2_000)` (graphemes) **and** `validate_length(:message, max: 8_000, count: :bytes)`.
 
 **Why:** `maxlength` and the changeset do not measure the same thing. A browser enforces `maxlength` in **UTF-16 code units**; `validate_length/3` counts **graphemes** by default. One emoji outside the BMP is 1 grapheme and 2 code units, and a family emoji built from a ZWJ sequence is 1 grapheme and many more. So the two disagree on any non-ASCII message — and the browser's way of disagreeing is the worst available: it **silently truncates a paste**, keeping the head, dropping the tail, and saying nothing. The admin gets a message that looks saved and is not what they wrote.
@@ -751,6 +754,167 @@ The byte cap exists for a different reason and is not redundant: 2 000 graphemes
 - The counter must keep counting the way the server counts. If `HomePage`'s primary limit ever changes unit, `message_length/1` changes with it — they are one decision in two files.
 - Over-limit input reaches the server and is rejected there. That is intended: the admin sees a readable error rather than a truncated message.
 - Any future free-text admin field inherits this: no `maxlength`, a visible counter in the server's unit, validation in the changeset.
+
+---
+
+## D-027 — `/` is the product; the admin-editable home page is deleted
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Content`, `Consensus.Content.HomePage`, `ConsensusWeb.AdminLive.HomePage`, the `/admin/home-page` route and the `home_page` table are all removed, and `priv/repo/migrations/20260808183755_drop_home_page.exs` drops the table with a `down/0` that recreates its schema (not its contents — there is no copy to restore). `/` now renders one of two things: design frame `00a`, the signed-out splash, or design frame `00`, the signed-in list of activity groups. `ConsensusWeb.HomeLive` still owns the route.
+
+**Why:** the home page existed because there was no product behind `/` yet — a single admin-authored paragraph was a placeholder standing where the app would go. The app has now gone there. A paragraph of prose has nowhere to render on a screen whose entire content is the organizer's own sessions, and keeping the table would leave a foreign key into `users` constraining `Accounts.delete_user/2` in exchange for nothing.
+
+Deleting rather than orphaning is the point. An unused context with passing tests reads as a live feature to the next person, and CLAUDE.md is explicit that a confidently wrong document is worse than a silent one; the same is true of code.
+
+**Alternatives rejected:**
+- *Keep the table, drop the UI.* An unreachable column with a live FK, and a migration debt that gets harder the longer it waits.
+- *Keep the message as a banner above the group list.* Invents a product decision — an admin broadcast channel — that the PRD does not ask for, on the one screen that must stay uncluttered.
+- *Leave the code and route it away.* Dead code that still compiles, still runs in CI, and still looks authoritative.
+
+**Consequences:**
+- D-020 and the subject of D-026 are superseded; both are annotated in place. D-026's *rule* survives and now applies to the option description on `02b`.
+- `Consensus.Seeds.run!/0` returns `{:ok, %{admin: admin_or_nil}}` — the `:home_page` key is gone. Its three callers and `test/consensus/seeds_test.exs` are updated.
+- `test/consensus/release_test.exs` now asserts `home_page` is **absent** after `migrate/0` — which is what proves the whole migration chain ran rather than a prefix — and **present** after rolling back exactly the newest migration, which is the only test of that `down/0`.
+- Invariant 11 in CLAUDE.md (the whitespace-significant home-page message) no longer describes any code and is rewritten.
+
+---
+
+## D-028 — daisyUI is removed; the design tokens are the whole system
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `assets/css/app.css` no longer loads the daisyUI plugin or either generated theme. In its place is a Tailwind v4 `@theme` block holding the palette, the two typefaces and the hard offset shadows from [docs/design/DESIGN-SPEC.md](design/DESIGN-SPEC.md), plus a handful of `@layer components` helpers (`.press-2/3/4`, `.eyebrow`, `.stripes-*`). `ConsensusWeb.CoreComponents` is restyled onto those tokens with its public API unchanged, and `ConsensusWeb.Sticker` adds the design-specific primitives. Dark mode and the theme toggle are gone — the design is one committed light theme.
+
+**Why:** the imported design is a "sticker" system: a 2px ink outline, a hard *unblurred* offset shadow, and a 1px press on every interactive surface. daisyUI has its own opinions about all three (`--border: 1.5px`, `--depth`, `--radius-*`, blurred elevation), expressed as theme variables that its component classes read. Every screen became a fight between two systems, and the losing move — overriding `btn` and `input` per-call-site — leaves the app looking almost right everywhere and exactly right nowhere.
+
+Removing it also removed the theme toggle, and that is a feature not a loss: a dark variant of a design built on ink outlines and mint fills is a second design, and nobody has drawn it.
+
+**Alternatives rejected:**
+- *Keep daisyUI and author a Consensus theme.* Its theme variables cannot express "shadow with zero blur that shrinks by 1px on hover", which is the single most characteristic thing in the design.
+- *Keep daisyUI for the admin and auth screens only.* Two systems in one app, and the auth screens are the first thing a new organizer sees.
+- *Keep the dark theme with guessed values.* Guessed dark colours on a palette this saturated is how an app ends up with unreadable mint-on-mint.
+
+**Consequences:**
+- Any `btn`, `input`, `card`, `alert`, `menu`, `badge`, `tabs`, `toggle`, `fieldset` or `loading` class left in HEEx is now dead and renders unstyled. Grep before adding one.
+- D-024 is superseded: there is no navbar to shrink. Its underlying trap — `flex-none` making a sibling `flex-wrap` dead code — is still real and is preserved in that entry.
+- The two typefaces load from Google Fonts in `root.html.heex`. That is a third-party request on every page load, accepted for now; self-hosting them is a one-file change when it matters.
+
+---
+
+## D-029 — An activity group is a draft first, and completion is lazy
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Activities.Group` has a four-state `status`: `:draft → :voting → :completed | :cancelled`. Step 1 of the wizard **creates the row immediately** as a `:draft`; steps 2 and 3 edit it in place; `publish_group/2` at "Get the share link" moves it to `:voting`. `cancel_group/2` is an organizer action available on an active group. Automatic completion is `maybe_complete_group/1`, called **lazily from the read paths** (`list_groups/1`, `get_group!/2`, `get_group_by_slug/1`) — there is no scheduler, no GenServer and no periodic job.
+
+**Why, on the draft:** the requirement is "never make me re-enter anything". A wizard that accumulates state in the LiveView and writes once at the end loses everything to a closed tab, a dropped websocket or a phone that sleeps — which is most of the organizer's session, since the persona is someone doing this in a group chat on a phone. Writing on step 1 makes every later step an `UPDATE` and makes resuming free.
+
+**Why, on lazy completion:** a group whose deadline passes while nobody is looking is completed the next time anyone looks. That is indistinguishable from a scheduler for every observer, and it cannot drift: there is no timer to miss, nothing to reconcile after a deploy, and a single-machine deployment (D-013) that restarts on every deploy would lose in-flight timers anyway. The "everyone has voted" half of completion is a documented `TODO` against `expected_voter_count`; it needs the voting side, which is not built.
+
+**Alternatives rejected:**
+- *Build the group only on submit.* Loses the draft on any interruption, which is the failure mode we were told to prevent.
+- *A `Quantum`/`GenServer` deadline sweeper.* A dependency and a supervised process to make a state transition nobody can observe before their next read.
+- *A boolean `published` instead of a status enum.* Cannot express cancelled, which the user explicitly asked for.
+
+**Consequences:**
+- Drafts appear on the home screen under `ACTIVE` with a `DRAFT` pill. That is deliberate — a half-finished session the organizer forgot about is exactly what the home list should surface.
+- `activities.position` contiguity is an application invariant maintained by `delete_activity/2` and `reorder_activities/3`, **not** a database constraint: SQLite checks immediately with no deferred mode, so a unique index on `(group_id, position)` would collide mid-renumber inside the transaction.
+- Reading is no longer side-effect-free. `list_*` and `get_*` may write a status transition. Any future read path that must not write has to skip `maybe_complete_group/1` explicitly.
+
+---
+
+## D-030 — A pasted link is fetched server-side, guarded, cached, and never downloaded
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** Pasting a URL into "add an option" calls `Consensus.LinkPreview.fetch/1`, which returns OpenGraph title/description/image (falling back to `<title>` and `<meta name=description>`). It refuses non-`http(s)` URLs, refuses private, loopback and link-local hosts, re-checks that guard on each of at most 3 redirects, times out at 5s, caps the body at 512 KB, and never raises — every failure is an `{:error, atom}`. Results **and errors** are cached in ETS (6 hours and 5 minutes respectively). The image is stored as a **URL only**; nothing is downloaded, proxied or hosted. Callers invoke it from `start_async`, never inline in `handle_event`.
+
+**Why:** a pasted URL is untrusted input that we then ask our own server to request. Without the host guard, `http://169.254.169.254/…` turns the paste field into a cloud-metadata reader and `http://127.0.0.1:4000/admin/...` turns it into an authenticated-adjacent request forger. That guard has to run per redirect hop, because a public host that 302s to `10.0.0.1` defeats a check done only on the input.
+
+The cache is not an optimisation, it is the working agreement in CLAUDE.md: external calls get a caching layer in the same commit that introduces them. Caching errors matters as much as caching successes — a dead link pasted five times must not mean five outbound requests.
+
+Storing only the URL keeps us out of image hosting, storage sizing, content moderation of uploaded bytes, and the volume-capacity question entirely. The cost is that a third-party image can 404 later; `photo_frame/1` degrades to the striped placeholder when it does.
+
+**Alternatives rejected:**
+- *Fetch in the browser.* CORS makes it fail on most sites, and it moves the request to a client we cannot rate-limit.
+- *Fetch inline in `handle_event`.* A slow third-party server would freeze the LiveView process and, with it, the user's whole page.
+- *An allowlist of domains instead of a denylist of addresses.* Wrong shape: organizers paste from anywhere, and the risk is the address family, not the brand.
+- *`LazyHTML` for parsing.* It is a `:test`-only dependency. Regex parsing of meta tags is deliberate and documented in the fetcher.
+
+**Consequences:**
+- DNS resolution failure for a symbolic host is **not** treated as `:blocked_host` — an unresolvable host surfaces as `:fetch_failed` instead. The guard does not assert a verdict it cannot back up.
+- `Consensus.LinkPreview.Cache` is a supervision child between `Consensus.Repo` and `ConsensusWeb.Endpoint`, and `test/consensus/application_test.exs` asserts that position, the way invariant 2 already does for the migrator and the seeds.
+- The fetcher is injected via `config :consensus, Consensus.LinkPreview, fetcher:` so tests never touch the network.
+
+---
+
+## D-031 — Deadline chips are computed from a browser-supplied UTC offset
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** The three chips on design frame `01` — `Tonight 5pm`, `Tomorrow 5pm`, `Thu noon` — are computed by `Consensus.Deadlines`, not stored. The browser sends `tz_offset` (minutes east of UTC) in the LiveView connect params from `assets/js/app.js`; `Consensus.Deadlines` shifts UTC by that offset to get local wall time, snaps to the target hour, and shifts back. A dead render with no connect params falls back to UTC. The design's dashed `Custom…` chip renders **disabled**.
+
+**Why:** named time zones need a tz database, and `tzdata` is not a dependency — adding one for three chips means a runtime data download, a periodic updater, and a new failure mode at boot on a machine whose whole job is to serve one SQLite file. Offset arithmetic gets the right answer for every user who is not mid-DST-transition, and being an hour off inside that window is a smaller defect than a boot-time dependency on a remote zone file.
+
+The offset must come from the browser because the server has none: a Fly machine runs UTC and the organizer is wherever they are.
+
+**Alternatives rejected:**
+- *Add `tzdata` and resolve a named zone.* Correct, and disproportionate. Revisit when a feature needs real zone arithmetic — recurring sessions would.
+- *Ask the organizer to pick a time.* That is the custom picker, which was explicitly deferred this pass.
+- *Compute the chips in JavaScript.* Then the label and the stored instant are derived in two places, and only one of them is testable.
+
+**Consequences:**
+- The first paint of `/groups/new` before the socket connects uses UTC and self-corrects on connect. Visible only as a chip label, and only to someone reading faster than the websocket.
+- A DST transition inside the chip's window shifts the result by an hour. Documented in the module, and the honest cost of not carrying a zone database.
+- `Consensus.Deadlines` is pure and has no database access, so its rules — including "next Thursday" meaning a week out when today is Thursday — are unit-tested across all seven weekdays and several offsets rather than reasoned about.
+
+---
+
+## D-032 — There is no global navigation bar
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `ConsensusWeb.Layouts.app/1` renders the canvas, a centred column and the flash group — nothing else. Every screen draws its own header. `Layouts.account_menu/1` is a `<details>`-based avatar menu that screens place themselves, and `Layouts.avatar/1` renders the user's initial.
+
+**Why:** the design gives each screen a different header, and each difference carries meaning. The home screen has a wordmark and an avatar; the wizard steps have a back button and a three-segment progress bar; the option editor has a close button and a destructive `Remove`. A shared bar above all of them would either duplicate the back affordance or push the progress bar down a row — and on a 390px phone there is no row to spare.
+
+A `<details>` element rather than a JS dropdown so the menu works before LiveView connects, closes on Escape, and needs no code of ours.
+
+**Alternatives rejected:**
+- *One navbar with per-screen slots.* That is a header component with an empty shell around it; the shell adds a layout constraint and no shared behaviour.
+- *Keep the generator's navbar on non-wizard screens only.* Two visual languages depending on where you are, which is exactly what the design avoids.
+
+**Consequences:**
+- D-024 is superseded — the element it describes is gone.
+- Every new screen owes its own header, including a way back. A screen with no way out is now a review finding, not something the layout catches.
+- The desktop console reuses `Layouts.app/1` with `width={:wide}` rather than a second layout.
+
+---
+
+## D-033 — The test suite runs one case at a time, and production takes the write lock up front
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `test/test_helper.exs` starts ExUnit with **`max_cases: 1`**. Separately, `config/dev.exs` and the `:prod` block of `config/runtime.exs` set **`default_transaction_mode: :immediate`**, and `config/test.exs` gains `journal_mode: :wal` to match them. `async: true` stays on the cases that have it — under the sandbox it still means "own connection, own transaction, rolled back at exit", which is the isolation we want; it just no longer means "at the same time as its neighbours".
+
+**Why:** SQLite permits one write transaction across the whole database file, and the Ecto sandbox holds each test's transaction open for the *entire* test. Two concurrent write-touching cases therefore collide by construction. Worse, SQLite cannot make the loser wait: a connection already inside a transaction that asks to upgrade to a write would deadlock if it blocked, so SQLite returns `SQLITE_BUSY` **immediately** and the `busy_timeout` handler never runs. That is why the failure looked so strange — `** (Exqlite.Error) Database busy` on an ordinary `INSERT INTO users` in a `setup` block, in whichever case happened to be second, and a suite that finished in 2.2 seconds while failing fifty tests. A five-second busy timeout that is never consulted costs nothing and buys nothing.
+
+Measured at 430 tests: ~50 failures a run at the default `max_cases: 20`, still ~46 at `--max-cases 2`, **zero** at `--max-cases 1`. `journal_mode: :wal` and `default_transaction_mode: :immediate` were both tried in `config/test.exs` first and neither helped, because the transaction in question is opened by the sandbox, not by us. The suite runs in about 2.6 seconds serially, so there was nothing to buy back.
+
+**The production half is a different bug with the same root**, and it is the one that would have hurt. Our own `Repo.transact/1` calls — `Accounts.set_admin/3`, `Accounts.delete_user/2`, `Activities.delete_activity/2`, `Activities.reorder_activities/3` — open deferred transactions too. Two organizers writing at the same moment on the single machine would have produced the same immediate `SQLITE_BUSY`, surfacing as a 500 rather than a short wait. `:immediate` takes the write lock at `BEGIN`, before any read snapshot exists, which is the state the busy handler *can* wait in. So the second writer queues for up to five seconds instead of failing instantly.
+
+**Alternatives rejected:**
+- *Raising `busy_timeout`.* It was never consulted. This is the trap the `sqlite` skill's "raising it further just turns a fast failure into a slow one" line half-anticipated — in this shape it turns a fast failure into the same fast failure.
+- *Marking every LiveView test `async: false`.* Tried first, and it did cut failures from ~56 to ~27, which is exactly the kind of partial result that invites calling it fixed. The remaining failures were in `Consensus.ActivitiesTest`, an ordinary `DataCase`, which shows the problem was never specific to LiveView tests — only correlated with how long a case holds its transaction.
+- *Serialising only the write-heavy files.* A rule nobody can apply correctly to a new test, enforced by nothing, that fails intermittently when they get it wrong.
+- *Postgres.* A real answer to a problem we do not have. D-003 chose SQLite deliberately, and one machine with one file is the point.
+
+**Consequences:**
+- The `sqlite` skill's claim that "`async: true` against SQLite is safe here" was true at 323 tests and is no longer the whole story. That section is rewritten: async is safe *because the suite no longer runs cases concurrently*, not because concurrency was fine.
+- Adding tests can no longer make the suite flaky at some unknown threshold, which is the failure mode that cost the most time here — the symptom appeared in files that had not changed.
+- Wall-clock is now the sum of all cases. At ~2.6 s for 431 tests there is a lot of headroom, but a future test that sleeps or does real IO now costs the whole suite that time, not one core's worth.
+- `:immediate` serialises our transactions slightly earlier than before. On a single-writer database that is a description of what was already happening, not a new cost.
 
 ---
 

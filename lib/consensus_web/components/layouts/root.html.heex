@@ -2,44 +2,29 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
     <meta name="csrf-token" content={get_csrf_token()} />
+    <meta name="theme-color" content="#DDF0E2" />
     <.live_title default="Consensus" suffix=" · Consensus" phx-no-format>{assigns[:page_title]}</.live_title>
+    <link rel="icon" href={~p"/images/icon.svg"} type="image/svg+xml" />
+    <%!-- Instrument Sans carries every surface; DM Mono carries time, counts, urls and the
+          uppercase section labels. Both are named in docs/design/DESIGN-SPEC.md and the
+          family names have to match what assets/css/app.css asks for. --%>
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
     <link phx-track-static rel="stylesheet" href={~p"/assets/css/app.css"} />
     <script defer phx-track-static type="text/javascript" src={~p"/assets/js/app.js"}>
     </script>
-    <script>
-      (() => {
-        const systemTheme = () => matchMedia("(prefers-color-scheme: dark)").matches ? "dark" : "light";
-
-        const setTheme = (theme) => {
-          if (theme === "system") {
-            localStorage.removeItem("phx:theme");
-            document.documentElement.setAttribute("data-theme", systemTheme());
-            document.documentElement.setAttribute("data-theme-source", "system");
-          } else {
-            localStorage.setItem("phx:theme", theme);
-            document.documentElement.setAttribute("data-theme", theme);
-            document.documentElement.setAttribute("data-theme-source", "user");
-          }
-        };
-        if (!document.documentElement.hasAttribute("data-theme")) {
-          setTheme(localStorage.getItem("phx:theme") || "system");
-        }
-        window.addEventListener("storage", (e) => e.key === "phx:theme" && setTheme(e.newValue || "system"));
-        window.addEventListener("phx:set-theme", (e) => setTheme(e.target.dataset.phxTheme));
-
-        matchMedia("(prefers-color-scheme: dark)").addEventListener("change", (e) => {
-          if (document.documentElement.getAttribute("data-theme-source") === "system") {
-            document.documentElement.setAttribute("data-theme", systemTheme());
-          }
-        });
-      })();
-    </script>
   </head>
-  <body>
-    <%!-- The account menu lives in `Layouts.app/1`, which every page renders through,
-          so that it can show the same navigation to LiveViews and controllers alike. --%>
+  <body class="bg-canvas text-ink">
+    <%!-- There is no global navigation here on purpose (D-032): every screen draws its own
+          header, because the design gives each one a different one — a wordmark and avatar
+          on home, a back button and progress bar in the wizard, a close button in the option
+          editor. Screens that want an account menu render `Layouts.account_menu/1`. --%>
     {@inner_content}
   </body>
 </html>

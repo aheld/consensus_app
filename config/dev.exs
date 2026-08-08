@@ -5,6 +5,13 @@ config :consensus, Consensus.Repo,
   database: Path.expand("../consensus_dev.db", __DIR__),
   pool_size: 5,
   # Match production so "database is locked" cannot be a production-only surprise.
+  # `BEGIN IMMEDIATE` rather than ecto_sqlite3's default `BEGIN DEFERRED`. A deferred
+  # transaction takes no write lock at `BEGIN` and asks for one on its first write — and if
+  # another writer holds it by then, SQLite cannot wait (this connection already holds a read
+  # snapshot, so blocking could deadlock the pair). It returns `SQLITE_BUSY` at once and the
+  # `busy_timeout` handler never runs. Taking the lock up front is what lets `busy_timeout`
+  # do its job, so two simultaneous organizer writes queue instead of one 500ing. D-033.
+  default_transaction_mode: :immediate,
   journal_mode: :wal,
   busy_timeout: 5_000,
   stacktrace: true,

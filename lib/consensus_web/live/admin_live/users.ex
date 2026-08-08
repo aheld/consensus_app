@@ -180,6 +180,17 @@ defmodule ConsensusWeb.AdminLive.Users do
     |> assign(:admin_count, Enum.count(users, & &1.is_admin))
   end
 
+  # The cascade has to be in the confirmation, because it is not recoverable and it is not
+  # obvious from the button. `activity_groups.organizer_id` is `ON DELETE CASCADE`, so
+  # deleting an account takes every voting session that person organized — and every option
+  # inside those sessions — with it. "Frees their email address" described this action
+  # completely only while `users` was the last thing anything pointed at.
+  defp delete_confirmation(user) do
+    "Permanently delete #{user.username}? This also deletes every voting session they " <>
+      "organized, and the options in them. Their email address and username become " <>
+      "available again. This cannot be undone."
+  end
+
   defp admin_password_warning([admin]) do
     "The #{admin.username} account is still using the default password."
   end
@@ -189,103 +200,162 @@ defmodule ConsensusWeb.AdminLive.Users do
     "These accounts are still using the default password: #{names}."
   end
 
+  # Built from the same boolean as the `disabled` attribute, rather than a Tailwind
+  # `disabled:` variant, on purpose: a `disabled:opacity-*` class is present in the
+  # static markup whether or not the button is actually disabled (the browser decides
+  # via the `:disabled` pseudo-class), which would put the literal substring
+  # "disabled" in every row regardless of state. The test suite asserts on that exact
+  # substring to tell a disabled button from a live one, so the two states need two
+  # different class lists, not one class list with a conditional variant inside it.
+  defp action_button_class(false) do
+    "press-2 rounded-full border-2 border-ink bg-white px-3 py-1.5 text-[12px] font-semibold shadow-sticker-2 hover:bg-yellow"
+  end
+
+  defp action_button_class(true) do
+    "cursor-not-allowed rounded-full border-2 border-ink bg-white px-3 py-1.5 text-[12px] font-semibold text-faint opacity-[45%]"
+  end
+
+  defp delete_button_class(false) do
+    "text-[12px] font-semibold text-muted hover:text-tangerine"
+  end
+
+  defp delete_button_class(true) do
+    "cursor-not-allowed text-[12px] font-semibold text-faint opacity-[45%]"
+  end
+
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <.header>
-        Users
-        <:subtitle>
-          {length(@users)} {ngettext("account", "accounts", length(@users))}, {@admin_count} admin.
-          Deleting an account frees its email address — the only way back in for someone who
-          forgot their password on a deployment with no mail provider.
-        </:subtitle>
-        <:actions>
-          <.link navigate={~p"/admin/home-page"} class="btn btn-soft btn-sm">Home page</.link>
-        </:actions>
-      </.header>
+    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-canvas">
+      <div class="mx-auto flex w-full max-w-2xl flex-1 flex-col gap-6 px-6 pb-10 pt-6">
+        <div class="flex items-center justify-between gap-4">
+          <.link
+            navigate={~p"/"}
+            class="font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-soft transition-colors hover:text-ink"
+          >
+            Consensus
+          </.link>
+          <.button navigate={~p"/"}>Back to app</.button>
+        </div>
 
-      <div :if={@default_password_admins != []} class="alert alert-warning" role="alert">
-        <.icon name="hero-exclamation-triangle" class="size-6 shrink-0" />
-        <div>
-          <p class="font-semibold">
-            {admin_password_warning(@default_password_admins)}
-          </p>
-          <p class="text-sm">
-            Anyone who can reach this site can sign in as an administrator. <.link
-              navigate={~p"/users/settings"}
-              class="link"
-            >Change it now</.link>.
+        <div class="flex flex-col gap-2">
+          <.eyebrow>Admin</.eyebrow>
+          <h1 class="text-[27px] font-bold leading-[1.15] tracking-[-0.025em]">Users</h1>
+          <p class="text-[13.5px] leading-[1.5] text-ink-soft">
+            Designate who can manage this app — the only role this product has. {length(@users)} {ngettext(
+              "account",
+              "accounts",
+              length(@users)
+            )}, {@admin_count} admin.
+            Deleting an account frees its email address — the only way back in for someone who
+            forgot their password on a deployment with no mail provider.
           </p>
         </div>
-      </div>
 
-      <div :if={!@sudo?} id="sudo-notice" class="alert alert-info" role="status">
-        <.icon name="hero-lock-closed" class="size-6 shrink-0" />
-        <p>
-          {stale_session_hint()} <.link navigate={~p"/users/log-in"} class="link">
-            Log in again
-          </.link>.
-        </p>
-      </div>
+        <div
+          :if={@default_password_admins != []}
+          role="alert"
+          class="flex items-start gap-3 rounded-2xl border-2 border-ink bg-yellow p-4 shadow-sticker-3"
+        >
+          <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+          <div class="flex flex-col gap-1 text-[13px] leading-[1.4] text-ink">
+            <p class="font-bold">
+              {admin_password_warning(@default_password_admins)}
+            </p>
+            <p>
+              Anyone who can reach this site can sign in as an administrator. <.link
+                navigate={~p"/users/settings"}
+                class="font-semibold underline decoration-2 underline-offset-2"
+              >
+                Change it now
+              </.link>.
+            </p>
+          </div>
+        </div>
 
-      <.table id="users" rows={@users}>
-        <:col :let={user} label="Username">
-          <span class="font-medium">{user.username}</span>
-          <span :if={user.id == @current_scope.user.id} class="badge badge-ghost badge-sm ml-1">
-            you
-          </span>
-        </:col>
-        <:col :let={user} label="Email">{user.email}</:col>
-        <:col :let={user} label="Role">
-          <span class={["badge badge-sm", user.is_admin && "badge-primary"]}>
-            {if user.is_admin, do: "admin", else: "member"}
-          </span>
-        </:col>
-        <:col :let={user} label="Confirmed">
-          {if user.confirmed_at, do: "yes", else: "no"}
-        </:col>
-        <:col :let={user} label="Joined">
-          {Calendar.strftime(user.inserted_at, "%Y-%m-%d")}
-        </:col>
-        <:action :let={user}>
-          <.button
-            :if={!user.is_admin}
-            phx-click="set_admin"
-            phx-value-id={user.id}
-            phx-value-admin="true"
-            disabled={!@sudo?}
-            title={!@sudo? && stale_session_hint()}
-            data-confirm={"Make #{user.username} an admin?"}
-            class="btn btn-primary btn-xs"
-          >
-            Promote
-          </.button>
-          <.button
-            :if={user.is_admin}
-            phx-click="set_admin"
-            phx-value-id={user.id}
-            phx-value-admin="false"
-            disabled={@admin_count <= 1 or !@sudo?}
-            title={!@sudo? && stale_session_hint()}
-            data-confirm={"Remove admin from #{user.username}?"}
-            class="btn btn-soft btn-xs"
-          >
-            Demote
-          </.button>
-          <.button
-            :if={!user.is_admin and user.id != @current_scope.user.id}
-            phx-click="delete_user"
-            phx-value-id={user.id}
-            disabled={!@sudo?}
-            title={!@sudo? && stale_session_hint()}
-            data-confirm={"Permanently delete #{user.username}? This frees their email address."}
-            class="btn btn-ghost btn-xs text-error"
-          >
-            Delete
-          </.button>
-        </:action>
-      </.table>
+        <div
+          :if={!@sudo?}
+          id="sudo-notice"
+          role="status"
+          class="flex items-start gap-3 rounded-2xl border-2 border-ink bg-violet-tint p-4 shadow-sticker-3"
+        >
+          <.icon name="hero-lock-closed" class="size-5 shrink-0 text-violet" />
+          <p class="text-[13px] leading-[1.4] text-ink">
+            {stale_session_hint()}
+            <.link
+              navigate={~p"/users/log-in"}
+              class="font-semibold underline decoration-2 underline-offset-2"
+            >
+              Log in again
+            </.link>.
+          </p>
+        </div>
+
+        <.table id="users" rows={@users}>
+          <:col :let={user} label="Username">
+            <span class="font-bold text-ink">{user.username}</span>
+            <.pill :if={user.id == @current_scope.user.id} tone={:mint_soft} class="ml-1">
+              you
+            </.pill>
+          </:col>
+          <:col :let={user} label="Email">
+            <span class="text-[13px] text-ink-soft">{user.email}</span>
+          </:col>
+          <:col :let={user} label="Role">
+            <.pill tone={if user.is_admin, do: :violet, else: :mint_soft}>
+              {if user.is_admin, do: "admin", else: "member"}
+            </.pill>
+          </:col>
+          <:col :let={user} label="Confirmed">
+            {if user.confirmed_at, do: "yes", else: "no"}
+          </:col>
+          <:col :let={user} label="Joined">
+            {Calendar.strftime(user.inserted_at, "%Y-%m-%d")}
+          </:col>
+          <:action :let={user}>
+            <div class="flex flex-wrap items-center gap-2">
+              <button
+                :if={!user.is_admin}
+                type="button"
+                phx-click="set_admin"
+                phx-value-id={user.id}
+                phx-value-admin="true"
+                disabled={!@sudo?}
+                title={!@sudo? && stale_session_hint()}
+                data-confirm={"Make #{user.username} an admin?"}
+                class={action_button_class(!@sudo?)}
+              >
+                Promote
+              </button>
+              <button
+                :if={user.is_admin}
+                type="button"
+                phx-click="set_admin"
+                phx-value-id={user.id}
+                phx-value-admin="false"
+                disabled={@admin_count <= 1 or !@sudo?}
+                title={!@sudo? && stale_session_hint()}
+                data-confirm={"Remove admin from #{user.username}?"}
+                class={action_button_class(@admin_count <= 1 or !@sudo?)}
+              >
+                Demote
+              </button>
+              <button
+                :if={!user.is_admin and user.id != @current_scope.user.id}
+                type="button"
+                phx-click="delete_user"
+                phx-value-id={user.id}
+                disabled={!@sudo?}
+                title={!@sudo? && stale_session_hint()}
+                data-confirm={delete_confirmation(user)}
+                class={delete_button_class(!@sudo?)}
+              >
+                Delete
+              </button>
+            </div>
+          </:action>
+        </.table>
+      </div>
     </Layouts.app>
     """
   end

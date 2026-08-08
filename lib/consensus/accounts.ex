@@ -264,9 +264,17 @@ defmodule Consensus.Accounts do
   Refuses to delete an administrator (demote them first, which is a deliberate second
   step) and refuses to let an admin delete themselves. The actor is re-read and held to
   sudo mode, exactly as in `set_admin/3` — destroying an account is the other half of
-  the same authority. Session tokens go with the row via `ON DELETE CASCADE`, and
-  `home_page.updated_by_id` is nulled by `ON DELETE SET NULL` — SQLite enforces both,
-  `PRAGMA foreign_keys` is on.
+  the same authority. Session tokens go with the row via `ON DELETE CASCADE`; SQLite
+  enforces it, `PRAGMA foreign_keys` is on.
+
+  **Deleting an organizer destroys every activity group they organized, and every option
+  inside those groups.** `activity_groups.organizer_id` is `ON DELETE CASCADE`, so the
+  cascade runs two levels deep and there is no undo. That is a real change in what this
+  function costs: when it was written the only other row pointing at a user was the
+  home page's `updated_by_id`, which was merely nulled. It is still the right cascade —
+  a group with no organizer has nobody who can publish, cancel or complete it — but the
+  admin screen's confirmation must keep saying so, and this is the reason the sudo-mode
+  requirement on this function is not ceremony.
 
   Returns `{:ok, {user, tokens_to_disconnect}}`, the same shape as `set_admin/3` and for
   the same reason: the rows are gone, but the *sockets* holding them are not. The

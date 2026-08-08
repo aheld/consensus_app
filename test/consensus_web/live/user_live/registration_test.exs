@@ -131,4 +131,79 @@ defmodule ConsensusWeb.UserLive.RegistrationTest do
       assert login_html =~ "Log in"
     end
   end
+
+  describe "the two registration paths" do
+    test "the username & password path is the default and shows a password field", %{
+      conn: conn
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      assert has_element?(lv, ~s(input[name="user[password]"]))
+    end
+
+    test "choosing the magic-link path hides the password field", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      html = render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+
+      refute has_element?(lv, ~s(input[name="user[password]"]))
+      assert html =~ "Send magic link"
+    end
+
+    test "switching back to the password path restores the field", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+      render_click(lv, "choose_mode", %{"mode" => "password"})
+
+      assert has_element?(lv, ~s(input[name="user[password]"]))
+    end
+
+    test "registers the account and sends a sign-in link, without logging in", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+
+      email = unique_user_email()
+      username = unique_username()
+
+      {:ok, _lv, html} =
+        lv
+        |> form("#registration_form", user: %{"email" => email, "username" => username})
+        |> render_submit()
+        |> follow_redirect(conn, ~p"/users/log-in")
+
+      assert html =~ "We sent a sign-in link to #{email}"
+
+      user = Accounts.get_user_by_username(username)
+      assert user.email == email
+      refute user.confirmed_at
+
+      assert Consensus.Repo.get_by!(Consensus.Accounts.UserToken, user_id: user.id).context ==
+               "login"
+    end
+
+    test "the magic-link path still offers no way to ask for the admin role", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      html = render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+
+      refute html =~ "is_admin"
+    end
+
+    test "the magic-link path still enforces validation on email and username", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+
+      result =
+        lv
+        |> form("#registration_form", user: %{"email" => "with spaces", "username" => "no!"})
+        |> render_change()
+
+      assert result =~ "must have the @ sign and no spaces"
+      assert result =~ "may only contain letters, numbers, underscores and hyphens"
+      refute result =~ "should be at least 12 character"
+    end
+  end
 end

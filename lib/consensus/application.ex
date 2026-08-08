@@ -41,6 +41,11 @@ defmodule Consensus.Application do
       {Phoenix.PubSub, name: Consensus.PubSub},
       # Start a worker by calling: Consensus.Worker.start_link(arg)
       # {Consensus.Worker, arg},
+      # Owns the ETS table Consensus.LinkPreview.fetch/1 caches into. No database
+      # dependency, so it only needs to start after Consensus.Repo and before
+      # ConsensusWeb.Endpoint (both true here); test/consensus/application_test.exs
+      # asserts that range rather than an exact index.
+      Consensus.LinkPreview.Cache,
       # Start to serve requests, typically the last entry
       ConsensusWeb.Endpoint
     ]

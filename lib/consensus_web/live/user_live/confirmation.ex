@@ -4,7 +4,8 @@ defmodule ConsensusWeb.UserLive.Confirmation do
 
   Confirming an account that already has a password always discards that password —
   see `Consensus.Accounts.login_user_by_magic_link/1`. This page says so before the
-  button is pressed, rather than surprising the person afterwards.
+  button is pressed, rather than surprising the person afterwards, and the warning is
+  visually louder than the button it warns about.
   """
 
   use ConsensusWeb, :live_view
@@ -14,17 +15,31 @@ defmodule ConsensusWeb.UserLive.Confirmation do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <div class="mx-auto max-w-sm">
-        <div class="text-center">
-          <.header>Welcome {@user.email}</.header>
-        </div>
+    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-canvas">
+      <div class="mx-auto flex w-full max-w-sm flex-1 flex-col gap-6 px-6 pb-10 pt-6">
+        <.link
+          navigate={~p"/"}
+          class="self-start font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-soft transition-colors hover:text-ink"
+        >
+          Consensus
+        </.link>
 
-        <div :if={@clears_password?} class="alert alert-warning mt-4">
-          <.icon name="hero-exclamation-triangle" class="size-6 shrink-0" />
-          <div>
-            <p>This account already has a password, and confirming here will remove it.</p>
-            <p class="text-sm">
+        <h1 class="break-words text-[27px] font-bold leading-[1.15] tracking-[-0.025em]">
+          Welcome, {@user.email}
+        </h1>
+
+        <div
+          :if={@clears_password?}
+          id="password-clears-warning"
+          role="alert"
+          class="flex items-start gap-3 rounded-2xl border-2 border-ink bg-tangerine p-4 text-white shadow-sticker-3"
+        >
+          <.icon name="hero-exclamation-triangle" class="size-5 shrink-0" />
+          <div class="flex flex-col gap-1.5">
+            <p class="text-[13.5px] font-bold leading-[1.35]">
+              This account already has a password, and confirming here will remove it.
+            </p>
+            <p class="text-[12px] leading-[1.45] text-white/90">
               That is deliberate: whoever can read this inbox owns the account, and the
               existing password may have been set by someone else before the address was
               proven. You will be signed in and can choose a new password under Settings.
@@ -40,19 +55,27 @@ defmodule ConsensusWeb.UserLive.Confirmation do
           phx-submit="submit"
           action={~p"/users/log-in?_action=confirmed"}
           phx-trigger-action={@trigger_submit}
+          class="flex flex-col gap-3"
         >
           <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
-          <.button
-            name={@form[:remember_me].name}
-            value="true"
-            phx-disable-with="Confirming..."
-            class="btn btn-primary w-full"
+          <div class="grid">
+            <.button
+              variant="primary"
+              type="submit"
+              name={@form[:remember_me].name}
+              value="true"
+              phx-disable-with="Confirming…"
+            >
+              Confirm and stay logged in
+            </.button>
+          </div>
+          <button
+            type="submit"
+            phx-disable-with="Confirming…"
+            class="text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink"
           >
-            Confirm and stay logged in
-          </.button>
-          <.button phx-disable-with="Confirming..." class="btn btn-primary btn-soft w-full mt-2">
             Confirm and log in only this time
-          </.button>
+          </button>
         </.form>
 
         <.form
@@ -63,28 +86,41 @@ defmodule ConsensusWeb.UserLive.Confirmation do
           phx-mounted={JS.focus_first()}
           action={~p"/users/log-in"}
           phx-trigger-action={@trigger_submit}
+          class="flex flex-col gap-3"
         >
           <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
           <%= if @current_scope do %>
-            <.button phx-disable-with="Logging in..." class="btn btn-primary w-full">
-              Log in
-            </.button>
+            <div class="grid">
+              <.button variant="primary" type="submit" phx-disable-with="Logging in…">
+                Log in
+              </.button>
+            </div>
           <% else %>
-            <.button
-              name={@form[:remember_me].name}
-              value="true"
-              phx-disable-with="Logging in..."
-              class="btn btn-primary w-full"
+            <div class="grid">
+              <.button
+                variant="primary"
+                type="submit"
+                name={@form[:remember_me].name}
+                value="true"
+                phx-disable-with="Logging in…"
+              >
+                Keep me logged in on this device
+              </.button>
+            </div>
+            <button
+              type="submit"
+              phx-disable-with="Logging in…"
+              class="text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink"
             >
-              Keep me logged in on this device
-            </.button>
-            <.button phx-disable-with="Logging in..." class="btn btn-primary btn-soft w-full mt-2">
               Log me in only this time
-            </.button>
+            </button>
           <% end %>
         </.form>
 
-        <p :if={!@user.confirmed_at and not @clears_password?} class="alert alert-outline mt-8">
+        <p
+          :if={!@user.confirmed_at and not @clears_password?}
+          class="text-[12.5px] leading-[1.5] text-muted"
+        >
           Confirming links this email address to your account. You can change your password
           any time from the user settings.
         </p>

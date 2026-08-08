@@ -1,4 +1,12 @@
 defmodule ConsensusWeb.UserLive.Login do
+  @moduledoc """
+  Log in — by magic link, or by username-or-email and password.
+
+  Both forms post to the same `ConsensusWeb.UserSessionController`. The magic-link
+  form never discloses whether the address is registered (see `submit_magic/2`); the
+  password form accepts either an email address or a username in one field.
+  """
+
   use ConsensusWeb, :live_view
 
   alias Consensus.Accounts
@@ -6,31 +14,46 @@ defmodule ConsensusWeb.UserLive.Login do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
-      <div class="mx-auto max-w-sm space-y-4">
-        <div class="text-center">
-          <.header>
-            <p>Log in</p>
-            <:subtitle>
-              <%= if @current_scope do %>
-                You need to reauthenticate to perform sensitive actions on your account.
-              <% else %>
-                Don't have an account? <.link
-                  navigate={~p"/users/register"}
-                  class="font-semibold text-brand hover:underline"
-                  phx-no-format
-                >Sign up</.link> for an account now.
-              <% end %>
-            </:subtitle>
-          </.header>
+    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-canvas">
+      <div class="mx-auto flex w-full max-w-sm flex-1 flex-col gap-6 px-6 pb-10 pt-6">
+        <.link
+          navigate={~p"/"}
+          class="self-start font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-soft transition-colors hover:text-ink"
+        >
+          Consensus
+        </.link>
+
+        <div class="flex flex-col gap-2">
+          <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em]">Log in</h1>
+          <p class="text-[14.5px] leading-[1.45] text-ink-soft">
+            <%= if @current_scope do %>
+              You need to reauthenticate to perform sensitive actions on your account.
+            <% else %>
+              Don't have an account?
+              <.link
+                navigate={~p"/users/register"}
+                class="font-semibold text-ink underline decoration-2 underline-offset-2 hover:text-tangerine"
+              >
+                Sign up
+              </.link>
+            <% end %>
+          </p>
         </div>
 
-        <div :if={local_mail_adapter?()} class="alert alert-info">
-          <.icon name="hero-information-circle" class="size-6 shrink-0" />
-          <div>
-            <p>You are running the local mail adapter.</p>
+        <div
+          :if={local_mail_adapter?()}
+          class="flex items-start gap-3 rounded-2xl border-2 border-ink bg-violet-tint p-4 shadow-sticker-2"
+        >
+          <.icon name="hero-information-circle" class="size-5 shrink-0 text-violet" />
+          <div class="flex flex-col gap-1 text-[13px] leading-[1.4] text-ink">
+            <p class="font-bold">You are running the local mail adapter.</p>
             <p>
-              To see sent emails, visit <.link href="/dev/mailbox" class="underline">the mailbox page</.link>.
+              To see sent emails, visit <.link
+                href="/dev/mailbox"
+                class="font-semibold underline decoration-2 underline-offset-2"
+              >
+                the mailbox page
+              </.link>.
             </p>
           </div>
         </div>
@@ -41,6 +64,7 @@ defmodule ConsensusWeb.UserLive.Login do
           id="login_form_magic"
           action={~p"/users/log-in"}
           phx-submit="submit_magic"
+          class="flex flex-col gap-3"
         >
           <.input
             readonly={!!@current_scope}
@@ -52,12 +76,20 @@ defmodule ConsensusWeb.UserLive.Login do
             required
             phx-mounted={JS.focus()}
           />
-          <.button class="btn btn-primary w-full">
-            Log in with email <span aria-hidden="true">→</span>
-          </.button>
+          <div class="grid">
+            <.button variant="primary" type="submit">
+              Log in with email <span aria-hidden="true">→</span>
+            </.button>
+          </div>
         </.form>
 
-        <div class="divider">or</div>
+        <div class="flex items-center gap-3" aria-hidden="true">
+          <span class="h-0.5 flex-1 rounded-full bg-ink-12"></span>
+          <span class="font-mono text-[10.5px] font-semibold uppercase tracking-[0.06em] text-muted">
+            or
+          </span>
+          <span class="h-0.5 flex-1 rounded-full bg-ink-12"></span>
+        </div>
 
         <.form
           :let={f}
@@ -66,6 +98,7 @@ defmodule ConsensusWeb.UserLive.Login do
           action={~p"/users/log-in"}
           phx-submit="submit_password"
           phx-trigger-action={@trigger_submit}
+          class="flex flex-col gap-3"
         >
           <.input
             readonly={!!@current_scope}
@@ -83,12 +116,17 @@ defmodule ConsensusWeb.UserLive.Login do
             autocomplete="current-password"
             spellcheck="false"
           />
-          <.button class="btn btn-primary w-full" name={@form[:remember_me].name} value="true">
-            Log in and stay logged in <span aria-hidden="true">→</span>
-          </.button>
-          <.button class="btn btn-primary btn-soft w-full mt-2">
+          <div class="grid">
+            <.button type="submit" name={@form[:remember_me].name} value="true">
+              Log in and stay logged in <span aria-hidden="true">→</span>
+            </.button>
+          </div>
+          <button
+            type="submit"
+            class="text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink"
+          >
             Log in only this time
-          </.button>
+          </button>
         </.form>
       </div>
     </Layouts.app>

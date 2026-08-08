@@ -563,8 +563,15 @@ fly logs --app <FLY_APP_NAME>
     problem.
 
   - `== Running 20260808033720 Consensus.Repo.Migrations.CreateUsersAuthTables.change/0 forward`
-    and the same for `CreateHomePage` — this is the `{Ecto.Migrator, ...}` supervision-tree
-    child doing its job. On a second boot you get `Migrations already up` instead.
+    and three more `== Running ...` lines the same shape, one per migration in
+    `priv/repo/migrations/` — currently `CreateHomePage`, `CreateActivityGroups` and
+    `DropHomePage`, in that timestamp order. (Yes, a fresh boot creates the `home_page` table
+    and then drops it a migration later — that is the history of the app, not a mistake; see
+    [docs/decisions.md](docs/decisions.md) D-027.) This is the `{Ecto.Migrator, ...}`
+    supervision-tree child doing its job. On a second boot you get `Migrations already up`
+    instead. Run `ls priv/repo/migrations/*.exs` if you want the exact current count and names —
+    this list grows every time a migration is added and this document is not the place that
+    tracks that.
   - `[seeds] created bootstrap admin "aheld"` (or your `ADMIN_USERNAME`) — from
     `Consensus.Seeds.run!/0`. Only on the first boot; afterwards an admin already exists and
     `Consensus.Seeds` no-ops silently.
@@ -575,9 +582,9 @@ fly logs --app <FLY_APP_NAME>
 
   Press Ctrl-C to stop tailing.
 
-  So a clean **first** boot reads: SCTP warning, zero-to-two `database is locked` errors, the
-  two migrations, `[seeds] created bootstrap admin`, the default-password warning if you
-  skipped §3.3, then Bandit. A clean **second** boot reads: SCTP warning, `Migrations already
+  So a clean **first** boot reads: SCTP warning, zero-to-two `database is locked` errors, one
+  `== Running ...` line per migration (see above), `[seeds] created bootstrap admin`, the
+  default-password warning if you skipped §3.3, then Bandit. A clean **second** boot reads: SCTP warning, `Migrations already
   up`, the default-password warning if it still applies, then Bandit — no lock errors and no
   seed line. Both sequences were reproduced against this repository's release image, on empty
   volumes and on reused ones.
@@ -599,8 +606,9 @@ fly status --app <FLY_APP_NAME>
 fly apps open --app <FLY_APP_NAME>
 ```
 
-  You should get the Consensus home page at `https://<FLY_APP_NAME>.fly.dev/`, showing the
-  admin-editable message.
+  You should get the Consensus splash screen at `https://<FLY_APP_NAME>.fly.dev/` — signed
+  out, so **Get started** and "Have a link? Open it →". There is no admin-editable message on
+  this page any more; see [docs/decisions.md](docs/decisions.md) D-027.
 
 - [ ] **4.5 — Log in.** Go to `https://<FLY_APP_NAME>.fly.dev/users/log-in`. Use the
       **"Email or username"** field — it accepts either. Enter your `ADMIN_USERNAME`
@@ -764,9 +772,14 @@ Substitute your app name. Everything here should hold before you call this done.
       lands back on `/`, signed in.
 - [ ] `https://<FLY_APP_NAME>.fly.dev/admin/users` **while signed in as admin** → 200, lists
       your account, **no default-password banner**.
-- [ ] `https://<FLY_APP_NAME>.fly.dev/admin/home-page` → edit the message, save, and see it
-      change on `/` in a second browser tab **without refreshing**. That proves the LiveView
-      WebSocket and PubSub are both working, which in turn proves `PHX_HOST` is correct.
+- [ ] `https://<FLY_APP_NAME>.fly.dev/groups/new` → build a group (a title, one deadline chip),
+      add one option on the next screen, then open `/groups/<id>/options` **in a second browser
+      tab signed in as the same admin account** and add a second option in the *first* tab.
+      Watch it appear in the second tab **without refreshing**. That proves the LiveView
+      WebSocket and PubSub are both working, which in turn proves `PHX_HOST` is correct. (There
+      is no admin-editable home-page message to use for this any more — D-027 — so the creation
+      flow is what exercises real-time updates on a fresh deploy. Leave the group as a draft;
+      the durability test below builds its own.)
 - [ ] `https://<FLY_APP_NAME>.fly.dev/admin/dashboard` → Phoenix LiveDashboard, admin-only in
       every environment.
 - [ ] `https://<FLY_APP_NAME>.fly.dev/users/register` → create a throwaway account; you should
@@ -780,6 +793,12 @@ Substitute your app name. Everything here should hold before you call this done.
 ```bash
 gh run list --workflow="Fly Deploy"
 ```
+
+**Stop there on purpose.** The creation-flow check above gets you to a working share link
+(`/groups/:id/share`); there is nothing on the other end of it yet. The recipient's join screen
+(`/join/:slug`), voting, ranking, tallying and the results screen are not built, so do not go
+looking for them on a fresh deploy — see the *What you can do in the app right now* section of
+[README.md](README.md) for the current line between built and not.
 
 ### The promotion test — the admin account can actually administer
 
@@ -848,15 +867,17 @@ fly logs --app <FLY_APP_NAME> | grep '\[audit\]'
 This is the check that proves the database really lives on the volume rather than in the
 container filesystem. Discovering otherwise during a real deploy is much worse.
 
-- [ ] Edit the home page message at `/admin/home-page` and save it.
+- [ ] Signed in as the admin, create a group at `/groups/new` (any title, any deadline chip) and
+      add one option to it at the next screen — you do not need to finish the wizard or publish
+      it; a `:draft` is enough. Note its title.
 - [ ] Restart the Machine:
 
 ```bash
 fly apps restart <FLY_APP_NAME>
 ```
 
-- [ ] Reload `https://<FLY_APP_NAME>.fly.dev/`. **Your new message must still be there.** If
-      it reverted to the default, `DATABASE_PATH` is outside the mount — see the
+- [ ] Reload `https://<FLY_APP_NAME>.fly.dev/`. **Your draft group must still be listed under
+      `ACTIVE`, tagged `DRAFT`.** If it is gone, `DATABASE_PATH` is outside the mount — see the
       troubleshooting table below.
 
 ---
@@ -914,8 +935,11 @@ row on magic-link email below), so on a stock deploy no link is ever delivered.
 
 The lever you actually have is **Delete**, on `/admin/users`. Deleting the account frees its
 email address and its username, so the person can simply register again. Session tokens go
-with the row, the deleted user's live sessions are disconnected, and any home-page edit they
-made keeps its text with the author nulled. The guard rails: the button only appears for a
+with the row and the deleted user's live sessions are disconnected. **This also destroys every
+activity group that person organized** — `activity_groups.organizer_id` cascades on delete, and
+each group's own activities cascade with it — so Delete is not a safe recovery lever for an
+organizer with a live or completed session; only use it for an account that has not built
+anything yet, or accept that its groups go with it. The guard rails: the button only appears for a
 non-admin who is not you, and `Consensus.Accounts.delete_user/2` refuses both cases
 server-side as well — demote an administrator before deleting them. This is deliberate; see
 [docs/decisions.md](docs/decisions.md) D-015.
@@ -1162,10 +1186,10 @@ fly status --app <FLY_APP_NAME>
     sign you are looking at a freshly created empty volume.
   - Log in and confirm the content is what you expect **as of the snapshot's timestamp** — the
     admin password is whatever it was then, not whatever it was this morning.
-  - Re-run **§6's durability test** in full: edit the message at `/admin/home-page`, then
-    `fly apps restart <FLY_APP_NAME>`, then reload `/` and confirm the edit survived. That is the
-    check that proves the new Machine is writing to the restored volume and not to the container
-    filesystem.
+  - Re-run **§6's durability test** in full: create a draft group, then
+    `fly apps restart <FLY_APP_NAME>`, then reload `/` and confirm the draft is still listed. That
+    is the check that proves the new Machine is writing to the restored volume and not to the
+    container filesystem.
   - `fly volumes list` one last time: exactly one `consensus_data`, attached.
 
 **A note on `fly scale count --with-new-volumes --from-snapshot`.** Fly's snapshots guide lists

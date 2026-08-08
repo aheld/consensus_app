@@ -1,6 +1,6 @@
 ---
 name: sqlite
-description: Operating SQLite via ecto_sqlite3/exqlite in the Consensus Phoenix app — where consensus_dev.db and the MIX_TEST_PARTITION-suffixed consensus_test.db live, the DATABASE_PATH volume file in production, the WAL and busy_timeout 5_000 settings in config/dev.exs, config/test.exs and config/runtime.exs, the single-writer constraint, why "** (Exqlite.Error) database is locked" happens, and why async tests are nonetheless safe under Ecto.Adapters.SQL.Sandbox. Use this when writing or debugging an Ecto migration that SQLite rejects (ALTER COLUMN, ADD CONSTRAINT, adding a NOT NULL column), naming a CHECK constraint so check_constraint/3 matches it, inspecting or querying the database with the sqlite3 CLI or from IEx, resetting or backing up the database, diagnosing locked/busy errors or flaky tests, or reasoning about how the single Fly machine and its mounted volume constrain scaling.
+description: Operating SQLite via ecto_sqlite3/exqlite in the Consensus Phoenix app — where consensus_dev.db and the MIX_TEST_PARTITION-suffixed consensus_test.db live, the DATABASE_PATH volume file in production, the WAL/busy_timeout/default_transaction_mode settings in config/dev.exs, config/test.exs and config/runtime.exs, the single-writer constraint, why "** (Exqlite.Error) database is locked"/"Database busy" happens, and why the test suite runs one case at a time (`max_cases: 1`) instead of relying on concurrency being safe. Use this when writing or debugging an Ecto migration that SQLite rejects (ALTER COLUMN, ADD CONSTRAINT, adding a NOT NULL column), naming a CHECK constraint so check_constraint/3 matches it, inspecting or querying the database with the sqlite3 CLI or from IEx, resetting or backing up the database, diagnosing locked/busy errors or flaky tests, or reasoning about how the single Fly machine and its mounted volume constrain scaling.
 ---
 
 # SQLite in Consensus
@@ -58,9 +58,11 @@ adapter. Read the real lines before changing anything:
 
 | Config | Sets |
 |---|---|
-| `config/dev.exs:4-11` | `journal_mode: :wal`, `busy_timeout: 5_000`, plus `stacktrace: true`, `show_sensitive_data_on_connection_error: true` |
-| `config/test.exs:11-17` | `busy_timeout: 5_000`, `pool: Ecto.Adapters.SQL.Sandbox`, `pool_size: 5` |
-| `config/runtime.exs:51-60` (`:prod` only) | `journal_mode: :wal`, `busy_timeout: 5_000`, `pool_size:` from `POOL_SIZE` (default 5); the `DATABASE_PATH` raise is at `:44-48` |
+| `config/dev.exs:4-18` | `journal_mode: :wal`, `busy_timeout: 5_000`, **`default_transaction_mode: :immediate`**, plus `stacktrace: true`, `show_sensitive_data_on_connection_error: true` |
+| `config/test.exs:11-25` | `busy_timeout: 5_000`, `journal_mode: :wal`, `pool: Ecto.Adapters.SQL.Sandbox`, `pool_size: 5` — **no** `default_transaction_mode` (the sandbox opens the transaction, not us; see D-033) |
+| `config/runtime.exs:51-67` (`:prod` only) | `journal_mode: :wal`, `busy_timeout: 5_000`, **`default_transaction_mode: :immediate`**, `pool_size:` from `POOL_SIZE` (default 5); the `DATABASE_PATH` raise is at `:44-48` |
+
+**`default_transaction_mode: :immediate` in dev and prod is D-033, not the original D-013 pair.** ecto_sqlite3's default is `:deferred` — a transaction takes no write lock at `BEGIN` and only asks for one on its first write. If another writer already holds the lock by then, SQLite cannot make this connection wait (it already holds a read snapshot, and blocking could deadlock the pair), so it returns `SQLITE_BUSY` **immediately** and the `busy_timeout` handler never runs. `:immediate` takes the write lock up front, at `BEGIN`, which is the state the busy handler *can* wait in — so two organizers writing at once queue for up to 5s instead of one 500ing. `config/test.exs` deliberately does not set it: every test transaction is opened by `Ecto.Adapters.SQL.Sandbox`, not by application code, so this repo's own setting has nothing to attach to there — see "The test suite runs one case at a time" below for why that distinction matters more than it sounds like it should.
 
 **The busy timeout is `5_000` ms everywhere, not the exqlite default of 2000.** Each
 config file carries a comment saying why: dev matches prod so "database is locked" cannot
@@ -84,7 +86,7 @@ Measured on a live `Consensus.Repo` connection (`MIX_TEST_PARTITION=7 mix test`,
 | `temp_store` | `[[2]]` (memory) | ecto_sqlite3 default |
 | `synchronous` | `[[1]]` (normal) | correct pairing with WAL |
 | `wal_autocheckpoint` | `[[1000]]` pages | default |
-| `default_transaction_mode` | `:deferred` | ecto_sqlite3 default |
+| `default_transaction_mode` | `:deferred` (in test — `config/test.exs` does not set this key) | ecto_sqlite3 default. **Dev and prod override it to `:immediate`** (D-033) — see the pragma table above. |
 
 **`PRAGMA busy_timeout` returning `0` is not a bug and not a misconfiguration**, and in
 this repo it is emphatically not evidence that the timeout is unset — `config/test.exs`
@@ -121,12 +123,16 @@ and lets the referential actions do the rest:
 | Reference | Declared as | On delete |
 |---|---|---|
 | `users_tokens.user_id` | `references(:users, on_delete: :delete_all)` in `20260808033720_create_users_auth_tables.exs` | rows cascade away |
-| `home_page.updated_by_id` | `REFERENCES "users"("id") ON DELETE SET NULL` in the literal DDL of `20260808040000_create_home_page.exs` | nulled, the singleton row survives |
+| `activity_groups.organizer_id` | `references(:users, on_delete: :delete_all)` in `20260808183423_create_activity_groups.exs` | **every group that user organizes is deleted with them** — and `activities.group_id` is itself `on_delete: :delete_all` against `activity_groups`, so deleting an organizer cascades two levels deep to that organizer's whole pool of options. `Consensus.Accounts.delete_user/2` refuses to delete an administrator, but an ordinary organizer has no such guard — deleting one is destructive to their groups by design, not an oversight. |
+| `activities.added_by_id` | `references(:users, on_delete: :nilify_all)` in the same migration | nulled, the activity survives — whoever pasted a link is not load-bearing the way the group's owner is |
+
+The `home_page.updated_by_id` `ON DELETE SET NULL` reference this table used to describe is
+gone — `home_page` was dropped in `20260808183755_drop_home_page.exs` (D-027).
 
 Turn foreign keys off — in a table-rebuild migration, or by testing the behaviour from a
-`sqlite3` CLI session where they default to off — and neither happens. Deleting a user would
-leave orphaned session tokens that still authenticate. If you reproduce a deletion by hand,
-`PRAGMA foreign_keys = ON;` first.
+`sqlite3` CLI session where they default to off — and none of this fires. Deleting a user would
+leave orphaned session tokens that still authenticate, and orphaned groups/activities pointing at
+nothing. If you reproduce a deletion by hand, `PRAGMA foreign_keys = ON;` first.
 
 ## The single-writer constraint and what it means for deployment
 
@@ -172,12 +178,19 @@ Repo: Consensus.Repo
 --------------------------------------------------
   up        20260808033720  create_users_auth_tables
   up        20260808040000  create_home_page
+  up        20260808183423  create_activity_groups
+  up        20260808183755  drop_home_page
 ```
 
-Two migrations, that is the whole schema. The tables are `users`, `users_tokens`,
-`home_page`, `schema_migrations`; the indexes are `users_email_index`,
-`users_username_index`, `users_tokens_user_id_index`, `users_tokens_context_token_index`
-and `home_page_updated_by_id_index`.
+Four migrations, that is the whole schema — `home_page` is created in the second and dropped
+in the fourth (D-027; the admin-editable home page is gone, see "The home-page singleton" note
+below for what that migration's `down/0` teaches). The tables that actually exist today are
+`users`, `users_tokens`, `activity_groups`, `activities`, `schema_migrations`; the indexes are
+`users_email_index`, `users_username_index`, `users_tokens_user_id_index`,
+`users_tokens_context_token_index`, `activity_groups_slug_index` (unique),
+`activity_groups_organizer_id_index`, `activities_group_id_index` and
+`activities_added_by_id_index`. `home_page` and its `home_page_updated_by_id_index` are gone;
+if you see either named in an older note, it is stale.
 
 Plain `mix ecto.migrations` reports the **dev** database, and it will print
 `** (Exqlite.Error) database is locked` and then `down` for everything if another process
@@ -254,19 +267,73 @@ reported under the **column** name instead — verified on SQLite 3.51.0:
   → CHECK constraint failed: home_page_is_a_singleton
 ```
 
-`Consensus.Content.HomePage.changeset/2` declares
-`check_constraint(:id, name: :home_page_is_a_singleton)`, and with the named DDL above the
-two line up, so a second-row insert through the changeset returns a changeset error rather
-than raising:
+The changeset half of this example is now history: `Consensus.Content` and
+`Consensus.Content.HomePage` were deleted in D-027 along with the `home_page` table, so there is
+no changeset left declaring `check_constraint(:id, name: :home_page_is_a_singleton)` in `lib/`.
+The migration above is still on disk exactly as written — migrations are never deleted, only
+superseded by a later one — and it is still the worked example for "name the CHECK, and
+`ecto_sqlite3` passes that name straight through", which is the transferable lesson. If a future
+table needs a singleton-row CHECK again, copy the DDL shape, not the module name.
+
+### A `down/0` with `Ecto.Migration.constraint/3` compiles, and only fails at rollback
+
+`priv/repo/migrations/20260808183755_drop_home_page.exs` (the migration that actually removes
+`home_page`, D-027) is the second worked example, for the opposite direction: writing a `down/0`
+that recreates a CHECK-bearing table. The DSL form —
 
 ```elixir
-%HomePage{id: 2} |> HomePage.changeset(%{message: "second"}) |> Repo.insert()
-#=> {:error, #Ecto.Changeset<errors: [
-#     id: {"is invalid", [constraint: :check, constraint_name: "home_page_is_a_singleton"]}
-#   ]>}
+def down do
+  create table(:home_page) do
+    add :id, :integer, primary_key: true
+    add :message, :string, null: false
+    # ...
+  end
+
+  create constraint(:home_page, :home_page_is_a_singleton, check: "id = 1")
+end
 ```
 
-Drop the name from the DDL and that same call raises `Ecto.ConstraintError` instead.
+— **type-checks and compiles cleanly**, because `Ecto.Migration.constraint/3` is ordinary,
+well-formed Ecto. It only raises `SQLite3 does not support ALTER TABLE ADD CONSTRAINT.` the
+moment something actually runs this `down/0` — i.e. under a real rollback
+(`Consensus.Release.rollback/2`, or `Ecto.Migrator.run(&1, :down, ...)` the way CI's "boot twice
+on one volume" step does it). `mix ecto.migrate` never touches `down/0` at all, so a migration
+can sit in the repo, fully compiled and merged, with a `down/0` that has never once executed.
+That is exactly the gap `test/consensus/release_test.exs` closes — it calls
+`Release.rollback/2` against a throwaway repo and asserts `home_page` comes back, which is the
+only thing in the suite that actually runs this `down/0`.
+
+The fix is the same rule as the `up`: write the whole `CREATE TABLE` as literal SQL through
+`execute/2`, CHECK and all, the way `20260808040000_create_home_page.exs` does. That is what
+`20260808183755_drop_home_page.exs`'s real `down/0` does today:
+
+```elixir
+def up do
+  drop index(:home_page, [:updated_by_id])
+  drop table(:home_page)
+end
+
+def down do
+  execute("""
+  CREATE TABLE "home_page" (
+    "id" INTEGER PRIMARY KEY
+      CONSTRAINT "home_page_is_a_singleton" CHECK ("id" = 1),
+    "message" TEXT NOT NULL,
+    "updated_by_id" INTEGER
+      CONSTRAINT "home_page_updated_by_id_fkey"
+      REFERENCES "users"("id") ON DELETE SET NULL,
+    "inserted_at" TEXT NOT NULL,
+    "updated_at" TEXT NOT NULL
+  )
+  """)
+
+  create index(:home_page, [:updated_by_id])
+end
+```
+
+Note this `down/0` recreates the *schema*, not the *data* — there is no copy of whatever message
+was stored, so a rollback lands on an empty singleton row, not the one that existed before the
+table was dropped.
 
 ### Adding a NOT NULL column — the trap that only fires in production
 
@@ -365,7 +432,7 @@ cp consensus_dev.db      /tmp/inspect.db
 cp consensus_dev.db-wal  /tmp/inspect.db-wal   # may not exist; that's fine
 cp consensus_dev.db-shm  /tmp/inspect.db-shm
 
-sqlite3 /tmp/inspect.db ".tables"    # home_page  schema_migrations  users  users_tokens
+sqlite3 /tmp/inspect.db ".tables"    # activities  activity_groups  schema_migrations  users  users_tokens
 sqlite3 /tmp/inspect.db ".schema users"
 sqlite3 -header -box /tmp/inspect.db "select * from schema_migrations;"
 sqlite3 /tmp/inspect.db "select name, tbl_name from sqlite_master where type='index';"
@@ -434,34 +501,68 @@ to `false` so the suite is never seeded behind ExUnit's back — several `count_
 administrator?", not "does the user `aheld` exist?" — so renaming or re-emailing the seeded
 account cannot make the next boot look like a first boot.
 
-## Tests and the SQL sandbox
+## Tests: the sandbox, `async: true`, and why the suite runs one case at a time (D-033)
 
 `config/test.exs` sets `pool: Ecto.Adapters.SQL.Sandbox` and `pool_size: 5`;
 `test/support/data_case.ex` / `conn_case.ex` call
 `Ecto.Adapters.SQL.Sandbox.start_owner!(Consensus.Repo, shared: not tags[:async])`;
-`test/test_helper.exs` puts the repo in `:manual` mode.
+`test/test_helper.exs` puts the repo in `:manual` mode **and calls `ExUnit.start(max_cases: 1)`**
+— read that file's own comment before assuming anything below, it is the authority.
 
-**`async: true` against SQLite is safe here, and the suite uses it.** The generated
-moduledoc in `data_case.ex` says async "is not recommended" for non-Postgres adapters —
-that is stock generator text nobody edited, and it is not this repo's rule. Two things make
-it work:
+**`async: true` still means what it always meant — own connection, own transaction, rolled back
+at exit — but it no longer means "runs at the same time as its neighbours", and that distinction
+is the whole of D-033.** The suite used to run at ExUnit's default `max_cases: 20`, on the
+reasoning that the sandbox's per-case transaction plus `busy_timeout: 5_000` made concurrent
+writers safe. **That reasoning was incomplete, and once the suite grew past ~330 tests it started
+failing for real:**
 
-- **The sandbox.** `shared: not tags[:async]` means an `async: true` case gets its own
-  checked-out connection and its own transaction, rolled back at exit, instead of joining
-  the shared owner. Tests do not see each other's rows.
-- **`busy_timeout: 5_000` in `config/test.exs`.** Writers really are serialised, so
-  concurrent cases really can collide — the timeout makes the loser *wait* up to five
-  seconds rather than fail instantly with `database is locked`. The comment above that
-  line in `config/test.exs` says exactly this.
+- SQLite permits exactly **one write transaction across the whole database file.** The sandbox
+  holds each test's transaction open for the *entire test*, so two `async: true` cases that both
+  touch the database are two open transactions on one file by construction — not a rare
+  coincidence, the normal case.
+- `busy_timeout` is **never consulted** in that collision, which is the part the old wording
+  missed. A connection that is already inside a transaction and asks to *upgrade* to a write
+  cannot be made to wait — blocking here could deadlock the pair, since this connection already
+  holds a read snapshot — so SQLite returns `SQLITE_BUSY` **immediately** instead. The busy
+  handler that `busy_timeout: 5_000` installs simply never runs. That is why the failure looked
+  so strange: `** (Exqlite.Error) Database busy` on an ordinary `INSERT INTO users` inside a
+  `setup` block, in whichever case happened to lose the race, in a suite that still finished in
+  a couple of seconds — the classic shape of "not a tuning problem".
+- Measured at 430 tests (2026-08-08): **~50 failures a run at the default `max_cases: 20`**,
+  still **~46 at `--max-cases 2`**, **zero at `--max-cases 1`**. Marking every LiveView test
+  `async: false` was tried first and cut it to ~27 failures — a partial fix that invites getting
+  called "done" — and the rest were in `Consensus.ActivitiesTest`, an ordinary `DataCase`, which
+  is what proved the problem was never LiveView-specific, only correlated with how long a case
+  holds its transaction open. `journal_mode: :wal` and `default_transaction_mode: :immediate`
+  were also tried in `config/test.exs` first, and **neither helped** — the transaction in
+  question is opened by the sandbox, not by application code, so a repo-level pragma has nothing
+  to attach to.
 
-Verified 2026-08-08: `MIX_TEST_PARTITION=6 mix test` → **323 passed, 0 failures**,
-`max_cases: 20`, "Finished in 1.9 seconds (0.4s async, 1.4s sync)". The count grows as the
-app is written; the durable fact is 0 failures with async cases running.
+**The fix is `test/test_helper.exs`'s `ExUnit.start(max_cases: 1)`.** The suite runs its cases
+one at a time regardless of `async:`, which removes the collision at its root rather than tuning
+around it. `async: true` is still correct to set on a case — it still buys the sandbox isolation,
+own connection and own rolled-back transaction — it just does not buy concurrency here, and
+pretending otherwise is what the previous version of this skill got wrong. At ~2.6s for 431
+tests serially, there was nothing worth buying back by staying concurrent.
 
-`test/consensus/content_test.exs` is `async: true` and does real database work, including
-provoking the home-page CHECK violation. It is the file to copy.
+**The same bug exists in production, with a different fix.** `Consensus.Repo`'s own
+`Repo.transact/1` calls — `Accounts.set_admin/3`, `Accounts.delete_user/2`,
+`Activities.delete_activity/2`, `Activities.reorder_activities/3` — open deferred transactions
+too, by the ecto_sqlite3 default. Two organizers writing at the same moment on the single
+machine would hit the identical immediate `SQLITE_BUSY`, surfacing as a 500 instead of a short
+wait. `config/dev.exs` and the `:prod` block of `config/runtime.exs` now set
+`default_transaction_mode: :immediate`, which takes the write lock at `BEGIN` rather than on the
+first write — the state the busy handler *can* wait in — so the second writer queues for up to
+five seconds instead of failing outright. `config/test.exs` cannot use the same fix, because it
+is the sandbox's transaction that is deferred, not ours.
 
-**What forces `async: false` is global mutable state or DDL — not ordinary database work:**
+`test/consensus/activities_test.exs` is `async: true` and does real database work — inserts,
+updates, deletes, a `Repo.transact/1` reorder — and passes, because the suite no longer runs
+concurrently. It is the file to copy for a new context test.
+
+**What forces `async: false` today is global mutable state or DDL — the same rule as before,
+just re-derived against the current files, because `test/consensus/content_test.exs` (the file
+this skill used to point at) is deleted along with `Consensus.Content` (D-027):**
 
 | File | Why |
 |---|---|
@@ -469,24 +570,33 @@ provoking the home-page CHECK violation. It is the file to copy.
 | `test/consensus/accounts/user_notifier_test.exs` | `Application.put_env(:consensus, Consensus.Mailer, ...)` to swap the Swoosh adapter |
 | `test/consensus/application_test.exs`, `test/consensus/boot_check_test.exs` | `RELEASE_NAME`, application env, real directories and permissions; no repo |
 | `test/consensus/release_test.exs` | starts its own throwaway repo against a tmp-dir database |
+| `test/consensus/link_preview_test.exs` | the `Consensus.LinkPreview.Cache` ETS table is one named, process-global table (a real supervised child, not started per test), and some cases override `Application.put_env(:consensus, Consensus.LinkPreview, cache_error_ttl_ms: ...)` to make an expiry observable in milliseconds |
 | `test/consensus_web/controllers/health_controller_test.exs` | **DDL.** See below. |
 
-**The DDL rule is the SQLite-specific one, and it is the exception to everything above.**
-`health_controller_test.exs` proves `/health` can fail by running `ALTER TABLE … RENAME` inside
-the sandbox transaction. SQLite needs an **exclusive lock on the whole database file** for
-schema changes, and the sandbox cannot isolate that: under `async: true` the lock collides with
-every other checked-out connection still holding a read transaction and unrelated tests fail
-with `** (Exqlite.Error) Database busy`. ExUnit runs sync cases only after every async case has
-finished, so `async: false` hands that module the file to itself. The DDL still rolls back with
-the transaction. **Any test that issues DDL must be `async: false`**; inserts, updates and
-deletes remain perfectly safe async.
+**The DDL rule is the SQLite-specific one, and it still applies even though the suite no longer
+runs concurrently.** `health_controller_test.exs` proves `/health` can fail by running
+`ALTER TABLE … RENAME` inside the sandbox transaction. SQLite needs an **exclusive lock on the
+whole database file** for schema changes, and the sandbox cannot isolate that from a *shared*
+connection (the ordinary, non-`async` case) still holding a read transaction — so this module is
+pinned `async: false` on that basis independent of `max_cases`. The DDL still rolls back with the
+transaction. **Any test that issues DDL must be `async: false`**; inserts, updates and deletes
+remain perfectly safe async.
 
-Five files opt in explicitly: `test/consensus/content_test.exs`,
-`test/consensus_web/router_test.exs` and `test/consensus/deploy_config_test.exs` (both bare
-`ExUnit.Case` — no database at all; the latter only reads `fly.toml` as text) and the
-two controller tests `error_html_test.exs` and `error_json_test.exs`. The remaining files carry
-no `async:` flag, so they default to `false` — generator inheritance, not a considered decision.
-Promoting one is fair game; prove it with `--repeat-until-failure 20` before you leave it.
+Explicit `async: true` today: `test/consensus/activities_test.exs`,
+`test/consensus/deadlines_test.exs` (pure, `use ExUnit.Case` — no database),
+`test/consensus/deploy_config_test.exs` (reads `fly.toml` as text — no database),
+`test/consensus_web/router_test.exs` (no database), `test/consensus_web/journey_test.exs`,
+`test/consensus_web/live/group_live/new_test.exs`,
+`test/consensus_web/live/group_live/options_test.exs`,
+`test/consensus_web/live/home_live_test.exs`, and the two controller tests
+`error_html_test.exs` / `error_json_test.exs`. Everything else — `accounts_test.exs`,
+`user_auth_test.exs`, `user_session_controller_test.exs`, `admin_live/users_test.exs`,
+`group_live/review_test.exs`, `group_live/share_test.exs`, and every `user_live/*` test — carries
+no `async:` flag, which defaults to `false`: generator inheritance, not a considered decision.
+Promoting one is still fair game — it buys isolation hygiene even without concurrency — prove it
+with `--repeat-until-failure 20` first. Re-derive this list with
+`grep -rn "use Consensus.DataCase\|use ConsensusWeb.ConnCase\|use ExUnit.Case" test` rather than
+trusting it verbatim; several agents add test files to this tree.
 
 The `test` alias runs `ecto.create --quiet` and `ecto.migrate --quiet` first, so a fresh
 checkout needs only `mix test`.
@@ -512,27 +622,51 @@ checkout needs only `mix test`.
 
 ## Common failure modes
 
-**`** (Exqlite.Error) database is locked`**
-Another writer held the write lock for longer than the 5 s `busy_timeout`. Causes, most to
-least likely: (a) **two OS processes on the same file** — `iex -S mix phx.server` in one
-terminal and `mix ecto.migrate` in another, or two agents sharing this checkout; (b) a
-long-running transaction, e.g. a `Repo.transact/1` that does HTTP inside it; (c) in
-production, more than one machine. Five seconds is already generous, so treat this as real
-contention, not a tuning problem — raising `busy_timeout` further just turns a fast failure
-into a slow one.
+**`** (Exqlite.Error) database is locked` / `** (Exqlite.Error) Database busy`**
+Both phrasings show up in this repo's own comments for the same underlying condition — the
+literal text `exqlite` throws is `"Database busy"` (`deps/exqlite/lib/exqlite/sqlite3.ex:396`,
+mapping SQLite's `SQLITE_BUSY`) — so treat them as one failure mode, not two.
 
-Two things it is usually *not*: it is not `async: true` in the test suite (the sandbox gives
-each async test its own transaction, and the suite passes), and it is not a missing
-`busy_timeout` because `PRAGMA busy_timeout` says 0 (see the pragma section — that is
-expected). Note that a `mix` task hitting this can report it and then print misleading
-downstream output; `mix ecto.migrations` prints the lock error and then lists every
-migration as `down`.
+**There are two different mechanisms behind it, and which one you have changes the fix:**
 
-For genuinely bursty writes, `default_transaction_mode: :immediate` takes the write lock up
-front instead of upgrading mid-transaction, removing the deadlock window at the cost of
-serializing sooner. `Consensus.Accounts.set_admin/3` takes the other approach and rescues
-`Exqlite.Error` into `{:error, {:database_busy, message}}` so the caller can show something
-useful.
+1. **The connection was genuinely made to wait, and the wait ran out.** Another writer held the
+   lock for longer than the 5 s `busy_timeout`. Causes, most to least likely: (a) **two OS
+   processes on the same file** — `iex -S mix phx.server` in one terminal and `mix ecto.migrate`
+   in another, or two agents sharing this checkout; (b) a long-running transaction, e.g. a
+   `Repo.transact/1` that does HTTP inside it; (c) in production, more than one machine. Five
+   seconds is already generous, so treat this as real contention, not a tuning problem — raising
+   `busy_timeout` further just turns a fast failure into a slow one.
+2. **The connection was never made to wait at all — `busy_timeout` was never consulted.** This is
+   the mechanism D-033 exists to name. A connection that is already inside a transaction and
+   tries to *upgrade* it to a write cannot be made to wait for another writer, because it already
+   holds a read snapshot and blocking could deadlock the pair — so SQLite returns `SQLITE_BUSY`
+   **immediately**, before the busy handler ever runs. This is what a deferred transaction
+   (ecto_sqlite3's default `default_transaction_mode: :deferred`) does under contention, and it is
+   exactly what happened when the test suite ran cases concurrently: `Ecto.Adapters.SQL.Sandbox`
+   holds each test's transaction open for the whole test, so two `async: true` cases that both
+   touched the database were two open deferred transactions on one file, and the second one to
+   write failed instantly. **Raising `busy_timeout` cannot fix this shape at all** — it turns a
+   fast failure into the identical fast failure, because the handler it configures is never
+   reached. The fix is either not opening two write transactions on the file at once
+   (`test/test_helper.exs`'s `ExUnit.start(max_cases: 1)`, see above) or taking the write lock at
+   `BEGIN` instead of on the first write, which is what `default_transaction_mode: :immediate` in
+   `config/dev.exs` and the `:prod` block of `config/runtime.exs` does for our own
+   `Repo.transact/1` calls in production (D-033).
+
+Two things it is usually *not*: it is not ordinary `async: true` test contention any more — the
+suite runs one case at a time (`max_cases: 1`), so two tests cannot hold overlapping write
+transactions regardless of their `async:` tags — and it is not a missing `busy_timeout` because
+`PRAGMA busy_timeout` says 0 (see the pragma section — that is expected). Note that a `mix` task
+hitting mechanism 1 can report it and then print misleading downstream output; `mix
+ecto.migrations` prints the lock error and then lists every migration as `down`.
+
+`Consensus.Accounts.set_admin/3` and `delete_user/2` both `rescue Exqlite.Error` into
+`{:error, {:database_busy, message}}` so a caller can show something useful instead of crashing
+the LiveView (D-021). `Consensus.Activities`' own `Repo.transact/1` calls —
+`delete_activity/2`, `reorder_activities/3` — do **not** rescue this; a `Database busy` there
+still crashes the LiveView. That gap is real, worth knowing before you touch either function, and
+is not itself part of D-033 — D-033 is about why the contention happens, not about which callers
+recover from it.
 
 **`** (Exqlite.Error) Cannot add a NOT NULL column with default value NULL`**
 `ALTER TABLE ... ADD COLUMN x NOT NULL` on a table that has rows. Passes on empty dev/test
@@ -614,7 +748,11 @@ DDL.
 A missing column announces itself (`** (Exqlite.Error) no such column: …`). A *renamed
 constraint* does not. SQLite reports whatever the DDL called it, so with the old name still in
 the file the changeset's `check_constraint(:id, name: :new_name)` no longer matches, the error
-is never mapped onto the changeset, and the test that expected `{:error, changeset}` gets:
+is never mapped onto the changeset, and the test that expected `{:error, changeset}` gets — this
+is the `home_page` singleton constraint as it looked before D-027 deleted the table and its
+changeset; no current schema in `lib/` declares a `check_constraint/3`, so treat the illustration
+below as historical shape, not a live reproduction, and substitute your own table/constraint
+names:
 
 ```
 ** (Ecto.ConstraintError) constraint error when attempting to insert struct:

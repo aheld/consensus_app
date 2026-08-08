@@ -1,0 +1,59 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>1a · 01 · setup</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-serif;color:#17211C;
+     display:flex;align-items:flex-start;justify-content:flex-start;padding:0}
+@keyframes blink{50%{opacity:0}}
+</style></head><body>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="width:340px;height:700px;background:#fff;border:2px solid #17211C;border-radius:34px;box-shadow:6px 6px 0 #17211C;overflow:hidden;display:flex;flex-direction:column">
+  <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 22px 4px;font:500 11px 'DM Mono',monospace;color:#17211C"><span>9:41</span><span style="letter-spacing:.14em">▮▮▮</span></div>
+  <div style="display:flex;align-items:center;gap:12px;padding:8px 20px 14px">
+    <div style="width:34px;height:34px;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:600 16px/1 'Instrument Sans',sans-serif">‹</div>
+    <div style="display:flex;gap:5px;flex:1">
+      <div style="height:6px;flex:1;background:#6B46F0;border-radius:99px"></div>
+      <div style="height:6px;flex:1;background:rgba(23,33,28,.12);border-radius:99px"></div>
+      <div style="height:6px;flex:1;background:rgba(23,33,28,.12);border-radius:99px"></div>
+    </div>
+    <span style="font:500 10px 'DM Mono',monospace;color:#5E6D64">1/3</span>
+  </div>
+  <div style="padding:4px 20px 0;display:flex;flex-direction:column;gap:20px;flex:1">
+    <h1 style="margin:0;font:700 31px/1.08 'Instrument Sans',sans-serif;letter-spacing:-.025em">What's the<br>plan?</h1>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:600 11px 'DM Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5E6D64">Session title</span>
+      <div style="border:2px solid #17211C;border-radius:16px;padding:14px 16px;font:600 17px 'Instrument Sans',sans-serif;background:#fff;box-shadow:3px 3px 0 #B9EFC9;display:flex;align-items:center;gap:2px">Dinner Friday?<span style="width:2px;height:20px;background:#FF6A2B;display:inline-block;animation:blink 1.1s step-end infinite"></span></div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:600 11px 'DM Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5E6D64">Votes close</span>
+      <div style="display:flex;flex-wrap:wrap;gap:8px">
+        <div style="padding:9px 13px;border:2px solid #17211C;border-radius:99px;font:500 13px 'Instrument Sans',sans-serif;background:#fff" style-hover="background:#F3EFFE">Tonight 6pm</div>
+        <div style="padding:9px 13px;border:2px solid #17211C;border-radius:99px;font:600 13px 'Instrument Sans',sans-serif;background:#6B46F0;color:#fff;box-shadow:2px 2px 0 #17211C">Thu 6:00 PM</div>
+        <div style="padding:9px 13px;border:2px solid #17211C;border-radius:99px;font:500 13px 'Instrument Sans',sans-serif;background:#fff" style-hover="background:#F3EFFE">Fri noon</div>
+        <div style="padding:9px 13px;border:2px dashed #17211C;border-radius:99px;font:500 13px 'Instrument Sans',sans-serif;color:#5E6D64">Custom…</div>
+      </div>
+      <div style="font:400 11.5px/1.4 'Instrument Sans',sans-serif;color:#5E6D64">Hard deadline. Voting locks itself and picks the winner.</div>
+    </div>
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <span style="font:600 11px 'DM Mono',monospace;letter-spacing:.06em;text-transform:uppercase;color:#5E6D64">Group</span>
+      <div style="display:flex;align-items:center;gap:8px">
+        <div style="display:flex">
+          <div style="width:30px;height:30px;border-radius:50%;border:2px solid #17211C;background:#FFD84D;display:grid;place-items:center;font:600 11px 'Instrument Sans',sans-serif">S</div>
+          <div style="width:30px;height:30px;border-radius:50%;border:2px solid #17211C;background:#B9EFC9;display:grid;place-items:center;font:600 11px 'Instrument Sans',sans-serif;margin-left:-8px">A</div>
+          <div style="width:30px;height:30px;border-radius:50%;border:2px solid #17211C;background:#FFC2A3;display:grid;place-items:center;font:600 11px 'Instrument Sans',sans-serif;margin-left:-8px">J</div>
+          <div style="width:30px;height:30px;border-radius:50%;border:2px solid #17211C;background:#D6CCFB;display:grid;place-items:center;font:600 11px 'Instrument Sans',sans-serif;margin-left:-8px">+3</div>
+        </div>
+        <span style="font:500 12px 'Instrument Sans',sans-serif;color:#5E6D64">Thursday Crew · saved</span>
+      </div>
+    </div>
+  </div>
+  <div style="padding:14px 20px 22px;display:flex;flex-direction:column;gap:10px">
+    <div style="background:#FF6A2B;color:#fff;border:2px solid #17211C;border-radius:18px;box-shadow:4px 4px 0 #17211C;padding:16px;text-align:center;font:700 16px 'Instrument Sans',sans-serif;cursor:pointer" style-hover="transform:translate(1px,1px);box-shadow:3px 3px 0 #17211C">Pick a neighborhood →</div>
+  </div>
+</div>
+<div style="font:500 10.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">01 · setup</div>
+</div>
+</body></html>

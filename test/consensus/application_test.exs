@@ -63,6 +63,23 @@ defmodule Consensus.ApplicationTest do
              "Consensus.Seeds must start before ConsensusWeb.Endpoint accepts traffic"
     end
 
+    test "starts the link preview cache after the repo and before the endpoint" do
+      children = App.children()
+
+      repo = index_of(children, &(&1 == Consensus.Repo))
+      cache = index_of(children, &(&1 == Consensus.LinkPreview.Cache))
+      endpoint = index_of(children, &(&1 == ConsensusWeb.Endpoint))
+
+      assert cache,
+             "Consensus.LinkPreview.Cache is not in the supervision tree — " <>
+               "Consensus.LinkPreview.fetch/1 would have nowhere to cache into"
+
+      assert repo < cache, "Consensus.LinkPreview.Cache must start after Consensus.Repo"
+
+      assert cache < endpoint,
+             "Consensus.LinkPreview.Cache must start before ConsensusWeb.Endpoint accepts traffic"
+    end
+
     test "passes the configured repos and the current skip decisions through" do
       System.delete_env("RELEASE_NAME")
       Application.put_env(:consensus, :seed_on_boot, false)

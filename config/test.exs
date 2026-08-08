@@ -14,7 +14,15 @@ config :consensus, Consensus.Repo,
   pool: Ecto.Adapters.SQL.Sandbox,
   # SQLite serialises writes. Without a busy timeout, concurrent async tests
   # surface as "** (Exqlite.Error) database is locked" instead of simply waiting.
-  busy_timeout: 5_000
+  busy_timeout: 5_000,
+  # Match dev and prod. WAL lets readers proceed while a writer holds the lock, which is
+  # most of what the suite is doing at any moment.
+  #
+  # This does NOT make concurrent LiveView tests safe, and it was tried: `journal_mode`
+  # and `default_transaction_mode: :immediate` both left ~50 of 430 cases failing with
+  # `** (Exqlite.Error) Database busy` while `--max-cases 1` passed. The cause is not
+  # tuning, it is duration — see the `async:` note in test/support/conn_case.ex. D-033.
+  journal_mode: :wal
 
 # The test suite creates exactly the data each test needs. Seeding behind ExUnit's
 # back would leak a user into every `Accounts.list_users/0` assertion.
@@ -29,6 +37,12 @@ config :consensus, ConsensusWeb.Endpoint,
 
 # In test we don't send emails
 config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Test
+
+# Consensus.LinkPreview never touches the network in test. The stub lives in
+# test/support/link_preview_stub.ex rather than inside one test file, because the LiveView
+# tests need it too — and it walks `$callers` so a stub installed by a test is still found
+# when `fetch/1` runs inside a `start_async` Task. See its moduledoc.
+config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreviewStub
 
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
