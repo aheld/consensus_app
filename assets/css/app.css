@@ -1,5 +1,13 @@
-/* See the Tailwind configuration guide for advanced usage
-   https://tailwindcss.com/docs/configuration */
+/* Consensus — the "sticker" design system.
+ *
+ * Everything here comes from docs/design/DESIGN-SPEC.md, which was derived from the
+ * imported Claude Design doc in docs/design/. If you change a token, change the spec too.
+ *
+ * daisyUI is deliberately NOT loaded. The design is one hand-drawn light theme with a
+ * 2px ink outline and a hard offset shadow on every surface; a component library with its
+ * own opinions about borders, radii and shadows fought it on every screen. Tailwind v4
+ * gives us the tokens and the utilities; the five rules below are the whole look.
+ */
 
 @import "tailwindcss" source(none);
 @import "phoenix-colocated/consensus/colocated.css";
@@ -13,82 +21,45 @@
    The heroicons installation itself is managed by your mix.exs */
 @plugin "../vendor/heroicons";
 
-/* daisyUI Tailwind Plugin. */
-@plugin "daisyui/packages/bundle/daisyui" {
-  themes: false;
-}
+@theme {
+  /* --- palette. Names match docs/design/DESIGN-SPEC.md exactly. --- */
+  --color-ink: #17211c;
+  --color-ink-soft: #3b4a42;
+  --color-muted: #5e6d64;
+  --color-faint: #8a968e;
 
-/* daisyUI theme plugin.
-  We ship with two themes, a light one inspired on Phoenix colors and a dark one inspired
-  on Elixir colors. Build your own at: https://daisyui.com/theme-generator/ */
-@plugin "daisyui/packages/bundle/daisyui-theme" {
-  name: "dark";
-  default: false;
-  prefersdark: true;
-  color-scheme: "dark";
-  --color-base-100: oklch(30.33% 0.016 252.42);
-  --color-base-200: oklch(25.26% 0.014 253.1);
-  --color-base-300: oklch(20.15% 0.012 254.09);
-  --color-base-content: oklch(97.807% 0.029 256.847);
-  --color-primary: oklch(58% 0.233 277.117);
-  --color-primary-content: oklch(96% 0.018 272.314);
-  --color-secondary: oklch(58% 0.233 277.117);
-  --color-secondary-content: oklch(96% 0.018 272.314);
-  --color-accent: oklch(60% 0.25 292.717);
-  --color-accent-content: oklch(96% 0.016 293.756);
-  --color-neutral: oklch(37% 0.044 257.287);
-  --color-neutral-content: oklch(98% 0.003 247.858);
-  --color-info: oklch(58% 0.158 241.966);
-  --color-info-content: oklch(97% 0.013 236.62);
-  --color-success: oklch(60% 0.118 184.704);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
-}
+  --color-canvas: #ddf0e2;
+  --color-surface: #f7fbf8;
 
-@plugin "daisyui/packages/bundle/daisyui-theme" {
-  name: "light";
-  default: true;
-  prefersdark: false;
-  color-scheme: "light";
-  --color-base-100: oklch(98% 0 0);
-  --color-base-200: oklch(96% 0.001 286.375);
-  --color-base-300: oklch(92% 0.004 286.32);
-  --color-base-content: oklch(21% 0.006 285.885);
-  --color-primary: oklch(70% 0.213 47.604);
-  --color-primary-content: oklch(98% 0.016 73.684);
-  --color-secondary: oklch(55% 0.027 264.364);
-  --color-secondary-content: oklch(98% 0.002 247.839);
-  --color-accent: oklch(0% 0 0);
-  --color-accent-content: oklch(100% 0 0);
-  --color-neutral: oklch(44% 0.017 285.786);
-  --color-neutral-content: oklch(98% 0 0);
-  --color-info: oklch(62% 0.214 259.815);
-  --color-info-content: oklch(97% 0.014 254.604);
-  --color-success: oklch(70% 0.14 182.503);
-  --color-success-content: oklch(98% 0.014 180.72);
-  --color-warning: oklch(66% 0.179 58.318);
-  --color-warning-content: oklch(98% 0.022 95.277);
-  --color-error: oklch(58% 0.253 17.585);
-  --color-error-content: oklch(96% 0.015 12.422);
-  --radius-selector: 0.25rem;
-  --radius-field: 0.25rem;
-  --radius-box: 0.5rem;
-  --size-selector: 0.21875rem;
-  --size-field: 0.21875rem;
-  --border: 1.5px;
-  --depth: 1;
-  --noise: 0;
+  --color-tangerine: #ff6a2b;
+  --color-violet: #6b46f0;
+  --color-violet-tint: #f3effe;
+  --color-violet-soft: #d6ccfb;
+
+  --color-mint: #b9efc9;
+  --color-mint-soft: #c9e8d2;
+
+  --color-yellow: #ffd84d;
+  --color-yellow-soft: #ffe3a8;
+  --color-peach: #ffc2a3;
+
+  /* Hairline ink, for the de-emphasised "past" cards. */
+  --color-ink-30: rgba(23, 33, 28, 0.3);
+  --color-ink-12: rgba(23, 33, 28, 0.12);
+
+  /* --- type --- */
+  --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "DM Mono", ui-monospace, SFMono-Regular, monospace;
+
+  /* --- sticker chrome: hard offset shadows, never blurred --- */
+  --shadow-sticker-1: 1px 1px 0 var(--color-ink);
+  --shadow-sticker-2: 2px 2px 0 var(--color-ink);
+  --shadow-sticker-3: 3px 3px 0 var(--color-ink);
+  --shadow-sticker-4: 4px 4px 0 var(--color-ink);
+  --shadow-sticker-6: 6px 6px 0 var(--color-ink);
+  --shadow-field: 3px 3px 0 var(--color-mint);
+  --shadow-chip: 2px 2px 0 var(--color-mint);
+  --shadow-sheet: 0 -8px 24px rgba(23, 33, 28, 0.16);
 }
 
 /* Add variants based on LiveView classes */
@@ -96,10 +67,114 @@
 @custom-variant phx-submit-loading (.phx-submit-loading&, .phx-submit-loading &);
 @custom-variant phx-change-loading (.phx-change-loading&, .phx-change-loading &);
 
-/* Use the data attribute for dark mode  */
-@custom-variant dark (&:where([data-theme=dark], [data-theme=dark] *));
-
 /* Make LiveView wrapper divs transparent for layout */
-[data-phx-session], [data-phx-teleported-src] { display: contents }
+[data-phx-session],
+[data-phx-teleported-src] {
+  display: contents;
+}
 
-/* This file is for your main application CSS */
+@layer base {
+  html {
+    background: var(--color-canvas);
+  }
+
+  body {
+    margin: 0;
+    background: var(--color-canvas);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    -webkit-font-smoothing: antialiased;
+  }
+
+  /* The design never shows a focus ring — but a keyboard user needs one, and a 2px
+     violet outline offset off the ink border reads as part of the system rather than
+     as browser default chrome. */
+  :focus-visible {
+    outline: 2px solid var(--color-violet);
+    outline-offset: 2px;
+  }
+
+  ::placeholder {
+    color: var(--color-faint);
+  }
+}
+
+@layer components {
+  /* Rule 4 of the sticker system: anything you can click presses 1px into its own
+     shadow. Nothing fades and nothing scales. `.press-N` pairs with `shadow-sticker-N`. */
+  .press-2:not(:disabled):hover {
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-sticker-1);
+  }
+
+  .press-3:not(:disabled):hover {
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-sticker-2);
+  }
+
+  .press-4:not(:disabled):hover {
+    transform: translate(1px, 1px);
+    box-shadow: var(--shadow-sticker-3);
+  }
+
+  .press-2:not(:disabled):active,
+  .press-3:not(:disabled):active,
+  .press-4:not(:disabled):active {
+    transform: translate(2px, 2px);
+    box-shadow: none;
+  }
+
+  /* The uppercase DM Mono section label above every field group. */
+  .eyebrow {
+    font-family: var(--font-mono);
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.06em;
+    text-transform: uppercase;
+    color: var(--color-muted);
+  }
+
+  /* The diagonal stripe stand-in shown wherever a photo is missing.
+   *
+   * Five variants, cycled down a list, because that is what the design does and the reason
+   * is legibility rather than decoration: a pool of five options with one repeated stripe
+   * reads as a single grey block, and the eye stops separating the rows. `stripes-violet`
+   * is also the large single-photo placeholder on the option editor, where it stands alone.
+   * The colour pairs are taken from the design frames directly. */
+  .stripes-violet {
+    background: repeating-linear-gradient(135deg, #d6ccfb 0 12px, #ede7fe 12px 24px);
+  }
+
+  .stripes-mint {
+    background: repeating-linear-gradient(135deg, #c9e8d2 0 9px, #e6f5ea 9px 18px);
+  }
+
+  .stripes-peach {
+    background: repeating-linear-gradient(135deg, #ffdcc7 0 9px, #ffefe5 9px 18px);
+  }
+
+  .stripes-yellow {
+    background: repeating-linear-gradient(135deg, #ffe9ae 0 9px, #fff6dc 9px 18px);
+  }
+
+  .stripes-blue {
+    background: repeating-linear-gradient(135deg, #d9e6fb 0 9px, #edf3fe 9px 18px);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .press-2,
+  .press-3,
+  .press-4 {
+    transition: none;
+  }
+
+  .press-2:hover,
+  .press-3:hover,
+  .press-4:hover,
+  .press-2:active,
+  .press-3:active,
+  .press-4:active {
+    transform: none;
+  }
+}

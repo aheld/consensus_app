@@ -770,16 +770,6 @@ defmodule Consensus.AccountsTest do
       assert Repo.all_by(UserToken, user_id: user.id) == []
     end
 
-    test "nulls the home page's updated_by instead of failing", %{actor: actor} do
-      editor = admin_fixture(%{username: "editor"})
-      {:ok, _} = Consensus.Content.update_home_page(user_scope_fixture(editor), %{message: "hi"})
-      {:ok, {editor, _}} = Accounts.set_admin(actor, editor, false)
-
-      assert {:ok, _} = Accounts.delete_user(actor, editor)
-      assert Consensus.Content.get_home_page().message == "hi"
-      assert is_nil(Consensus.Content.get_home_page().updated_by_id)
-    end
-
     test "refuses to delete an admin", %{actor: actor} do
       other = admin_fixture()
 

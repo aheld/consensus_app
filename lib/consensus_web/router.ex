@@ -42,7 +42,6 @@ defmodule ConsensusWeb.Router do
       on_mount: [{ConsensusWeb.UserAuth, :require_admin}] do
       live "/", AdminLive.Users, :index
       live "/users", AdminLive.Users, :index
-      live "/home-page", AdminLive.HomePage, :edit
     end
   end
 
@@ -78,6 +77,17 @@ defmodule ConsensusWeb.Router do
       on_mount: [{ConsensusWeb.UserAuth, :require_authenticated}] do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+
+      # The organizer's creation flow. Every one of these is a step in the wizard the
+      # design calls 01 → 02 → 02b → 03 → 04; they share a live_session so that moving
+      # between them is a `push_navigate` inside one connected socket rather than a full
+      # page load, which is what makes the wizard feel like one screen.
+      live "/groups/new", GroupLive.New, :new
+      live "/groups/:id/edit", GroupLive.New, :edit
+      live "/groups/:id/options", GroupLive.Options, :index
+      live "/groups/:id/options/:activity_id", GroupLive.Options, :edit_activity
+      live "/groups/:id/review", GroupLive.Review, :show
+      live "/groups/:id/share", GroupLive.Share, :show
     end
 
     post "/users/update-password", UserSessionController, :update_password
@@ -88,6 +98,9 @@ defmodule ConsensusWeb.Router do
 
     live_session :current_user,
       on_mount: [{ConsensusWeb.UserAuth, :mount_current_scope}] do
+      # `/` is two screens behind one route: the 00a splash for a signed-out visitor and
+      # the 00 home list for a signed-in organizer. One route because the design treats
+      # them as the same place, and because a bookmark must not 404 after logging out.
       live "/", HomeLive, :show
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new

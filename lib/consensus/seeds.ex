@@ -32,7 +32,6 @@ defmodule Consensus.Seeds do
 
   alias Consensus.Accounts
   alias Consensus.Accounts.User
-  alias Consensus.Content
 
   @default_username "aheld"
   @default_email "aheld@example.com"
@@ -66,8 +65,7 @@ defmodule Consensus.Seeds do
   end
 
   @doc """
-  Creates the home page row, and a bootstrap admin **if this deployment has no
-  administrator at all**.
+  Creates a bootstrap admin **if this deployment has no administrator at all**.
 
   Idempotent, and it never modifies an existing user. The condition is deliberately
   "are there zero admins?" rather than "does the user `aheld` exist?": an operator's
@@ -76,14 +74,13 @@ defmodule Consensus.Seeds do
   account with the documented default password. Checking the *role* means the
   bootstrap account is created exactly once in the life of a database.
 
-  Returns `{:ok, %{admin: admin_or_nil, home_page: home_page}}`; `admin` is `nil` when
-  the deployment already had one.
+  Returns `{:ok, %{admin: admin_or_nil}}`; `admin` is `nil` when the deployment already
+  had one.
   """
   def run! do
-    home_page = Content.ensure_home_page!()
     admin = ensure_admin()
     warn_about_default_passwords()
-    {:ok, %{admin: admin, home_page: home_page}}
+    {:ok, %{admin: admin}}
   end
 
   @doc "The bootstrap admin's username (`ADMIN_USERNAME`, default `#{@default_username}`)."

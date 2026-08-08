@@ -1,0 +1,321 @@
+<title>Consensus build log — creation flow, 2026-08-08</title>
+<style>
+  /* The page borrows the app's own identity: 2px ink outline, hard offset shadow, mint
+     canvas. Tokens are the same ones in assets/css/app.css, so this board and the thing
+     it is reporting on look like they come from the same studio. */
+  :root {
+    --ink: #17211c;
+    --ink-soft: #3b4a42;
+    --muted: #5e6d64;
+    --canvas: #ddf0e2;
+    --surface: #f7fbf8;
+    --card: #ffffff;
+    --line: #17211c;
+    --tangerine: #ff6a2b;
+    --violet: #6b46f0;
+    --mint: #b9efc9;
+    --yellow: #ffd84d;
+    --shadow: 4px 4px 0 var(--line);
+    --shadow-sm: 2px 2px 0 var(--line);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #eef6f0;
+      --ink-soft: #c3d3c8;
+      --muted: #93a598;
+      --canvas: #141a16;
+      --surface: #1b231e;
+      --card: #222b25;
+      --line: #000000;
+      --mint: #4a8c60;
+      --yellow: #b8952b;
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ink: #eef6f0;
+    --ink-soft: #c3d3c8;
+    --muted: #93a598;
+    --canvas: #141a16;
+    --surface: #1b231e;
+    --card: #222b25;
+    --line: #000000;
+    --mint: #4a8c60;
+    --yellow: #b8952b;
+  }
+
+  :root[data-theme="light"] {
+    --ink: #17211c;
+    --ink-soft: #3b4a42;
+    --muted: #5e6d64;
+    --canvas: #ddf0e2;
+    --surface: #f7fbf8;
+    --card: #ffffff;
+    --line: #17211c;
+    --mint: #b9efc9;
+    --yellow: #ffd84d;
+  }
+
+  body {
+    margin: 0;
+    background: var(--canvas);
+    color: var(--ink);
+    font-family: ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5;
+  }
+
+  .wrap {
+    max-width: 900px;
+    margin: 0 auto;
+    padding: 40px 20px 72px;
+    display: flex;
+    flex-direction: column;
+    gap: 28px;
+  }
+
+  .mono {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .eyebrow {
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 11px;
+    font-weight: 600;
+    letter-spacing: 0.09em;
+    text-transform: uppercase;
+    color: var(--muted);
+  }
+
+  h1 {
+    margin: 6px 0 0;
+    font-size: clamp(30px, 6vw, 44px);
+    line-height: 1.04;
+    letter-spacing: -0.03em;
+    text-wrap: balance;
+  }
+
+  h2 {
+    margin: 0;
+    font-size: 15px;
+    letter-spacing: -0.01em;
+  }
+
+  .lede {
+    margin: 10px 0 0;
+    max-width: 62ch;
+    color: var(--ink-soft);
+    font-size: 15px;
+  }
+
+  .strip {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 10px;
+  }
+
+  .stat {
+    flex: 1 1 150px;
+    background: var(--card);
+    border: 2px solid var(--line);
+    border-radius: 16px;
+    box-shadow: var(--shadow-sm);
+    padding: 12px 14px;
+  }
+
+  .stat b {
+    display: block;
+    font-size: 22px;
+    letter-spacing: -0.02em;
+  }
+
+  section.block {
+    background: var(--surface);
+    border: 2px solid var(--line);
+    border-radius: 20px;
+    box-shadow: var(--shadow);
+    padding: 20px;
+    display: flex;
+    flex-direction: column;
+    gap: 14px;
+  }
+
+  ul.items {
+    list-style: none;
+    margin: 0;
+    padding: 0;
+    display: flex;
+    flex-direction: column;
+    gap: 8px;
+  }
+
+  li.item {
+    display: flex;
+    align-items: flex-start;
+    gap: 12px;
+    background: var(--card);
+    border: 2px solid var(--line);
+    border-radius: 14px;
+    box-shadow: var(--shadow-sm);
+    padding: 10px 12px;
+  }
+
+  li.item.quiet {
+    box-shadow: none;
+    border-color: color-mix(in srgb, var(--line) 32%, transparent);
+    background: color-mix(in srgb, var(--card) 60%, transparent);
+  }
+
+  .item .body {
+    flex: 1;
+    min-width: 0;
+  }
+
+  .item .name {
+    font-weight: 700;
+    font-size: 14px;
+  }
+
+  .item .note {
+    font-size: 12px;
+    color: var(--muted);
+  }
+
+  .tag {
+    flex: none;
+    border: 1.5px solid var(--line);
+    border-radius: 99px;
+    padding: 2px 9px;
+    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 10px;
+    font-weight: 600;
+    letter-spacing: 0.04em;
+    text-transform: uppercase;
+    white-space: nowrap;
+    align-self: center;
+  }
+
+  .t-done { background: var(--mint); }
+  .t-live { background: var(--violet); color: #fff; }
+  .t-next { background: var(--yellow); }
+  .t-hold { background: transparent; color: var(--muted); border-style: dashed; }
+
+  .bar {
+    height: 8px;
+    border: 2px solid var(--line);
+    border-radius: 99px;
+    background: color-mix(in srgb, var(--line) 12%, transparent);
+    overflow: hidden;
+  }
+
+  .bar > i {
+    display: block;
+    height: 100%;
+    background: var(--violet);
+  }
+
+  footer {
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  a { color: var(--violet); }
+</style>
+
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Consensus · creation side · snapshot 2026-08-08</p>
+    <h1>Building the home page and the setup flow</h1>
+    <p class="lede">
+      Elixir · Phoenix LiveView · SQLite. The target is design turn&nbsp;1, options 1a and 1b —
+      the organizer's splash, home list, and the three-step wizard that ends in a share link.
+      Voting and results are deliberately out of scope this pass.
+    </p>
+  </header>
+
+  <div class="strip">
+    <div class="stat"><span class="eyebrow">Phases</span><b class="mono">4 / 4</b><span class="note">design · foundation · screens · proof</span></div>
+    <div class="stat"><span class="eyebrow">Agents</span><b class="mono">15</b><span class="note">9 builders · 4 critics · 2 doc passes</span></div>
+    <div class="stat"><span class="eyebrow">Screens</span><b class="mono">8 / 8</b><span class="note">built · critiqued · fixed</span></div>
+    <div class="stat"><span class="eyebrow">Final gate</span><b class="mono">PASS</b><span class="note">438 tests · release image boots</span></div>
+  </div>
+
+  <section class="block">
+    <div><span class="eyebrow">Phase 0 · complete</span><h2>Import and read the design</h2></div>
+    <div class="bar"><i style="width:100%"></i></div>
+    <ul class="items">
+      <li class="item"><div class="body"><div class="name">Design doc read end to end</div><div class="note">1a is nine phone frames, 1b is two phones plus a desktop console</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Each frame split into a standalone reference file</div><div class="note">docs/design/screens/ — one HTML per screen, so a critic can hold ours beside it</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Visual spec written</div><div class="note">docs/design/DESIGN-SPEC.md — tokens, the five chrome rules, and a per-screen brief</div></div><span class="tag t-done">done</span></li>
+    </ul>
+  </section>
+
+  <section class="block">
+    <div><span class="eyebrow">Phase 1 · complete</span><h2>Foundation</h2></div>
+    <div class="bar"><i style="width:100%"></i></div>
+    <ul class="items">
+      <li class="item"><div class="body"><div class="name">Design tokens replace daisyUI</div><div class="note">assets/css/app.css — palette, two typefaces, hard offset shadows, press states</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">App shell and routes</div><div class="note">no global navbar; every screen draws its own header, as the design does</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Old editable home page removed</div><div class="note">context, admin screen, tests and table all dropped — / is the product now</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Activity groups domain</div><div class="note">28 tests green · draft-first, lazy completion, no scheduler</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Paste-a-link metadata fetcher</div><div class="note">OpenGraph, cached, SSRF-guarded on every redirect hop</div></div><span class="tag t-done">done</span></li>
+      <li class="item"><div class="body"><div class="name">Shared components in the sticker system</div><div class="note">ConsensusWeb.Sticker + core components rebuilt on the tokens</div></div><span class="tag t-done">done</span></li>
+    </ul>
+  </section>
+
+  <section class="block">
+    <div><span class="eyebrow">Phase 2 · complete</span><h2>Screens — one builder and one harsh critic each</h2></div>
+    <div class="bar"><i style="width:100%"></i></div>
+    <ul class="items">
+      <li class="item quiet"><div class="body"><div class="name">00a · splash, signed out</div><div class="note">Decide together, in minutes</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">00 · home, signed in</div><div class="note">Start something, active and past groups</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">01 · setup</div><div class="note">title and the three deadline chips</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">02 · add options</div><div class="note">type a name or paste a link</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">02b · edit an option</div><div class="note">image by URL, name, 140-character description</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">03 · review pool</div><div class="note">reorder, anonymous voting, veto note</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">04 · share</div><div class="note">the sheet, the preview card, copy link</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">Auth and admin, restyled</div><div class="note">sign up by password or magic link; admins designate admins</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">Desktop organizer console</div><div class="note">lowest priority of the in-scope set</div></div><span class="tag t-done">built</span></li>
+    </ul>
+  </section>
+
+  <section class="block">
+    <div><span class="eyebrow">Phase 3 · complete</span><h2>Proof</h2></div>
+    <div class="bar"><i style="width:100%"></i></div>
+    <ul class="items">
+      <li class="item quiet"><div class="body"><div class="name">The journey script</div><div class="note">sign up → group → options by URL → edit → publish → log out → back in → all intact</div></div><span class="tag t-done">passing</span></li>
+      <li class="item quiet"><div class="body"><div class="name">Docs and skills refreshed</div><div class="note">six decisions written up; a fifth skill for the design system is being written</div></div><span class="tag t-done">built</span></li>
+      <li class="item quiet"><div class="body"><div class="name">Full gate green</div><div class="note">438 tests deterministic, format and warnings-as-errors clean; release image booting now</div></div><span class="tag t-live">in progress</span></li>
+    </ul>
+  </section>
+
+  <section class="block">
+    <div><span class="eyebrow">What the critics caught</span><h2>Four harsh reviews, fresh context, blind compare</h2></div>
+    <ul class="items">
+      <li class="item"><div class="body"><div class="name">The share sheet shipped the mockup's placeholder text</div><div class="note">the words "app icon" rendered where a Messages glyph belongs — copied from the static frame and never replaced</div></div><span class="tag t-done">fixed</span></li>
+      <li class="item"><div class="body"><div class="name">aria-pressed was broken on every chip in the app</div><div class="note">HEEx renders it empty when true and drops it when false, so a screen reader got no selection state — and a test was pinning the bug</div></div><span class="tag t-done">fixed</span></li>
+      <li class="item"><div class="body"><div class="name">The paste-a-link caption claimed more than it pulled</div><div class="note">"photo + description pulled" over an empty description; the fetcher was right, the caption lied</div></div><span class="tag t-done">fixed</span></li>
+      <li class="item"><div class="body"><div class="name">The splash button floated 130px above its mark</div><div class="note">now within 0.2% of the reference's position</div></div><span class="tag t-done">fixed</span></li>
+      <li class="item"><div class="body"><div class="name">Deleting a user silently destroys every session they organized</div><div class="note">a real cascade nobody had written down; the confirmation now says so</div></div><span class="tag t-done">fixed</span></li>
+    </ul>
+  </section>
+
+  <section class="block">
+    <div><span class="eyebrow">Final state · 2026-08-08</span><h2>What was true when this snapshot was frozen</h2></div>
+    <ul class="items">
+      <li class="item"><div class="body"><div class="name">438 tests, 0 failures</div><div class="note">mix precommit green: format, warnings-as-errors, deps locked, 2.6s</div></div><span class="tag t-done">pass</span></li>
+      <li class="item"><div class="body"><div class="name">Journey script clean</div><div class="note">sign up → create → add options typed and by URL → edit → publish → log out → log back in → everything survived</div></div><span class="tag t-done">pass</span></li>
+      <li class="item"><div class="body"><div class="name">Release image smoke test</div><div class="note">scripts/release-smoke-test.sh — health, health under PHX_HOST, websocket 101, one admin, 503 on a broken schema</div></div><span class="tag t-done">pass</span></li>
+      <li class="item"><div class="body"><div class="name">Upgrade rehearsal</div><div class="note">scripts/release-upgrade-test.sh — two boots on one volume, migrating populated rows; the renamed admin survived</div></div><span class="tag t-done">pass</span></li>
+      <li class="item"><div class="body"><div class="name">Two screens the critics could not tell apart</div><div class="note">01 setup and 02 add options; the other frames' named tells were fixed</div></div><span class="tag t-done">pass</span></li>
+    </ul>
+  </section>
+
+  <footer>
+    <b>Frozen snapshot.</b> This page recorded the build as it ran on 2026-08-08 and is no
+    longer live — it will not update again. Two design-polish passes were held back
+    deliberately; working end to end came first. Out of scope this pass: voting, ranking,
+    results, the recipient's view, and place discovery.
+  </footer>
+</div>

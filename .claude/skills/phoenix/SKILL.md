@@ -1,6 +1,6 @@
 ---
 name: phoenix
-description: Phoenix 1.8 and LiveView 1.2 conventions for the Consensus app — layouts (Layouts.app plus root.html.heex, no app.html.heex), core components, HEEx syntax ({} vs <%= %>, :if/:for), the LiveView lifecycle (mount/handle_params/handle_event/handle_info), live_session and on_mount hooks, Phoenix 1.8 scopes (Consensus.Accounts.Scope and @current_scope, never current_user), revoking a mounted LiveView's access with UserAuth.disconnect_sessions/1, verified routes ~p, PubSub for real-time updates, the router pipelines in lib/consensus_web/router.ex, and testing with Phoenix.LiveViewTest. Use this when adding or editing anything under lib/consensus_web/ — a LiveView, a route, a component, a template, a LiveView test — or when debugging a missing current_scope assign, a ~p route warning, a HEEx compile error, or a LiveView test that fails on async assigns.
+description: Phoenix 1.8 and LiveView 1.2 conventions for the Consensus app — layouts (Layouts.app plus root.html.heex, no app.html.heex, no global navbar — D-032), core components, HEEx syntax ({} vs <%= %>, :if/:for), the LiveView lifecycle (mount/handle_params/handle_event/handle_info/handle_async), start_async for a network call like Consensus.LinkPreview.fetch/1, LiveView streams and the reset: true reload idiom, live_session and on_mount hooks, Phoenix 1.8 scopes (Consensus.Accounts.Scope and @current_scope, never current_user), revoking a mounted LiveView's access with UserAuth.disconnect_sessions/1, verified routes ~p including the organizer's creation-flow wizard under /groups, PubSub for real-time updates, the router pipelines in lib/consensus_web/router.ex, and testing with Phoenix.LiveViewTest (render_async, the $callers link-preview stub, journey_test.exs). Use this when adding or editing anything under lib/consensus_web/ — a LiveView, a route, a component, a template, a LiveView test — or when debugging a missing current_scope assign, a ~p route warning, a HEEx compile error, a LiveView test that fails on async assigns, or a start_async task that can't find its test stub. For button/input/card/chip/pill styling and the sticker design tokens, see the design-system skill instead.
 ---
 
 # Phoenix 1.8 + LiveView in this repo
@@ -60,11 +60,14 @@ lib/consensus_web/router.ex                # pipelines, scopes, live_sessions
 lib/consensus_web/user_auth.ex             # plugs + on_mount hooks (extended: admin)
 lib/consensus_web/endpoint.ex
 lib/consensus_web/components/
-  layouts.ex                               # Layouts.app/1, flash_group/1, theme_toggle/1
-  layouts/root.html.heex                   # the ONLY .heex layout file
+  layouts.ex                               # Layouts.app/1, avatar/1, account_menu/1, flash_group/1
+  layouts/root.html.heex                   # the ONLY .heex layout file — no <script> theme toggle
   core_components.ex                       # flash, button, input, header, table, list, icon, ...
-lib/consensus_web/live/home_live.ex        # public "/" — reads Content, subscribes to PubSub
-lib/consensus_web/live/admin_live/         # users.ex, home_page.ex
+  sticker.ex                               # ConsensusWeb.Sticker — see the design-system skill
+lib/consensus_web/live/home_live.ex        # "/" — splash (signed out) or group list (signed in)
+lib/consensus_web/live/admin_live/         # users.ex — home_page.ex is gone (D-027)
+lib/consensus_web/live/group_live/         # new.ex, options.ex, review.ex, share.ex — the
+                                           #   organizer's creation wizard, see "Router" below
 lib/consensus_web/live/user_live/          # login, registration, confirmation, settings (all edited)
 lib/consensus_web/controllers/             # error_html.ex, error_json.ex,
                                            #   health_controller.ex, user_session_controller.ex
@@ -92,12 +95,15 @@ raising and `rescue` would miss it (same reasoning as `UserNotifier`). `config/p
 to the machine's private address and a 301 could never pass. Do not move this route into
 `:browser`, and do not point the check at `/`.
 
-All seven LiveViews now exist on disk: `live/home_live.ex`, `live/admin_live/{users,home_page}.ex`,
-`live/user_live/{login,registration,confirmation,settings}.ex`. `mix compile --warnings-as-errors`
-and `mix format --check-formatted` both exit 0 (verified 2026-08-08). The app is still being written
-concurrently, so `ls lib/consensus_web/live/` before assuming a module's shape.
+Ten LiveViews exist on disk today: `live/home_live.ex`, `live/admin_live/users.ex`,
+`live/group_live/{new,options,review,share}.ex` (the creation wizard, D-027/D-029 through D-032),
+`live/user_live/{login,registration,confirmation,settings}.ex`. `live/admin_live/home_page.ex` is
+**gone** (D-027 — the admin-editable home page was deleted; `Consensus.Content` no longer exists).
+`mix compile --warnings-as-errors` and `mix format --check-formatted` both exit 0 (verified
+2026-08-08). The app is still being written concurrently, so `ls lib/consensus_web/live/` before
+assuming a module's shape.
 
-## Layouts: 1.8 has no `app.html.heex`
+## Layouts: 1.8 has no `app.html.heex`, and this app has no navbar (D-032)
 
 Phoenix 1.7 had `layouts/root.html.heex` **and** `layouts/app.html.heex`. **1.8 deleted the second one.**
 There is exactly one layout template file here, `layouts/root.html.heex`, set by the `:browser` pipeline:
@@ -116,23 +122,47 @@ LiveViews call it themselves. Every LiveView/HTML template in this app must open
 </Layouts.app>
 ```
 
-Rules that fall out of that:
+**`Layouts.app/1` is canvas, column and flash only — nothing else.** daisyUI is gone (D-028) and
+there is no global navigation bar (D-032): the design gives every screen a different header —
+the home screen has a wordmark and an avatar, the wizard steps have a back button and a
+three-segment progress bar, the option editor has a close button and a destructive `Remove` —
+and a shared bar above all of them would either duplicate the back affordance or push the
+progress bar down a row. So `app/1` renders exactly `<main>` + a centred `<div>` column +
+`<.flash_group>`, and every screen draws its own header inside the `inner_block` slot. Rules
+that fall out of that:
 
 - `Layouts` is already aliased by `html_helpers/0` in `lib/consensus_web.ex`. Never alias it again.
 - `attr :flash, :map, required: true` — omitting `flash=` is a compile-time error.
-- `attr :current_scope, :map, default: nil` — optional to the component, but pass it: `root.html.heex`
-  reads `@current_scope` for the nav, and the app's own header will need it.
+- `attr :current_scope, :map, default: nil` — optional to the component. `Layouts.app/1` itself
+  does not read it (it renders no nav of its own); pass it anyway so a screen's own header can.
+- **Two more attrs exist and neither is generator-default: `width` (`:phone`, the default 440px
+  column every design frame was drawn at, or `:wide` for the desktop organizer console — a
+  1280px column, not the phone column stretched) and `background` (a Tailwind class string,
+  default `"bg-surface"`, the colour behind the column).** Pass `width={:wide}` on the one screen
+  that needs it (the desktop console reuses `Layouts.app/1` rather than a second layout module);
+  everything else takes the default.
 - `<.flash_group>` lives in `Layouts` and is rendered *inside* `Layouts.app`. Never call it anywhere else.
-- **The account menu lives in `Layouts.app/1`, not in `root.html.heex`.** The generator put it in the
-  root layout; this app moved it out (there is a comment in `root.html.heex` saying so) so LiveViews and
-  controller-rendered pages get the same nav. If you are adding a nav item, edit `layouts.ex`.
-- `Layouts.admin?/1` is a local helper on the `Scope` struct — `admin?(%Scope{user: %User{is_admin: true}})`
-  is `true`, everything else `false`. It drives `<li :if={admin?(@current_scope)}>` for the Admin link.
-  Use it rather than reaching into `@current_scope.user.is_admin` in a template, which blows up on `nil`.
-- The theme toggle (`Layouts.theme_toggle/1`) pairs with the inline `<script>` in the `<head>` of
-  `root.html.heex` that sets `data-theme` before paint. Leave that script alone.
-- `root.html.heex` is the only place an inline `<script>` is allowed. Everything else goes through
-  `assets/js/app.js` (esbuild bundles `app.js` and `app.css` only — no CDN `src`/`href`).
+- **There is no account menu inside `Layouts.app/1`, and no `<li :if={admin?(@current_scope)}>`
+  nav item anywhere.** `Layouts.account_menu/1` is a separate function component — a `<details>`
+  element (works before LiveView connects, closes on `Escape`, no JS of ours) that a screen
+  renders itself, wherever the design puts it (`HomeLive` and `GroupLive.New` both call it
+  today). It requires `current_scope` and renders `Layouts.avatar/1` (a circle with the user's
+  upper-cased first initial — no upload, so it is always available) plus the email, an
+  `<.link :if={admin?(@current_scope)} navigate={~p"/admin/users"}>Admin</.link>`, Settings and
+  Log out. `Layouts.admin?/1` still exists and still means the same thing —
+  `admin?(%Scope{user: %User{is_admin: true}})` is `true`, everything else `false`, safe to call
+  with `nil` — it is just no longer wired to a navbar `<li>`.
+- **daisyUI is removed (D-028) and there is no theme toggle, no dark mode, and no inline
+  `<script>` in `root.html.heex` at all any more** — the generator's `data-theme`-before-paint
+  script is gone along with the theme it toggled. `root.html.heex` is now doctype/head/body and
+  `{@inner_content}`, nothing more; its own comment explains why (D-032). If you see
+  `Layouts.theme_toggle/1`, `btn`, `input`, `card`, `alert`, `badge`, `menu`, `tabs`, `toggle` or
+  `fieldset` classes anywhere in HEEx, they render as **nothing** — grep before adding one. For
+  what replaced daisyUI (the sticker design tokens, `ConsensusWeb.Sticker`'s primitives, the
+  restyled `CoreComponents`), see the **`design-system`** skill; this skill stays about Phoenix
+  mechanics and does not duplicate that content.
+- Everything JS goes through `assets/js/app.js` (esbuild bundles `app.js` and `app.css` only —
+  no CDN `src`/`href`).
 
 ## Core components (`ConsensusWeb.CoreComponents`)
 
@@ -197,7 +227,8 @@ the same key on the socket. Read the user as `@current_scope.user`.
 
 Because `for_user(nil)` returns `nil`, guard both levels — `socket.assigns.current_scope &&
 socket.assigns.current_scope.user` — which is exactly what `UserAuth.on_mount(:require_authenticated, ...)`
-does. In `layouts.ex` the account menu does the same: `<%= if @current_scope && @current_scope.user do %>`.
+does. `Layouts.account_menu/1` does the same, as a HEEx tag modifier rather than a block:
+`<details :if={@current_scope && @current_scope.user} ...>`.
 
 `current_user` does not appear as an assign, a conn key, or a parameter anywhere in this app.
 `Accounts.login_user_by_magic_link/1` used to take the currently-signed-in user as a second
@@ -220,9 +251,15 @@ registration, i.e. by the very password under suspicion.) Two web-layer conseque
   is stale. Never write UI copy telling someone to "log in with their password first", and never
   offer it as a way to *keep* the password — it is not one.
 
-**Context functions take a scope, not a user.** `Consensus.Content.update_home_page/2` pattern-matches
-`%Scope{user: %User{is_admin: true}}` in the head, so a non-admin caller raises `FunctionClauseError`
-rather than falling through a branch. Follow that shape for new write functions.
+**Context functions take a scope, not a user.** `Consensus.Activities.update_group/3` binds the
+scope's `user_id` and the group's `organizer_id` to the same variable name in the head —
+`update_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group, attrs)`
+— so a call on someone else's group fails to match any clause and raises `FunctionClauseError`
+rather than falling through a branch. Follow that shape for new write functions; see the `elixir`
+skill for the one exception (`update_activity/3`/`delete_activity/2`, which re-read the owning
+group from the database instead, because an `%Activity{}` carries no organizer field to pattern
+match against). `Consensus.Content` — the module this section used to point at — is deleted
+(D-027).
 
 ## Router: pipelines, scopes, live_sessions
 
@@ -234,7 +271,6 @@ LiveDashboard's `/admin/dashboard/{css,js}-:md5` asset routes and the `GET`/`POS
 GET     /health                                ConsensusWeb.HealthController :index
 GET     /admin                                 ConsensusWeb.AdminLive.Users :index
 GET     /admin/users                           ConsensusWeb.AdminLive.Users :index
-GET     /admin/home-page                       ConsensusWeb.AdminLive.HomePage :edit
 GET     /admin/dashboard                       Phoenix.LiveDashboard.PageLive :home
 GET     /admin/dashboard/:page                 Phoenix.LiveDashboard.PageLive :page
 GET     /admin/dashboard/:node/:page           Phoenix.LiveDashboard.PageLive :page
@@ -242,6 +278,12 @@ GET     /admin/dashboard/:node/:page           Phoenix.LiveDashboard.PageLive :p
 GET     /users/settings                        ConsensusWeb.UserLive.Settings :edit
 GET     /users/settings/confirm-email/:token   ConsensusWeb.UserLive.Settings :confirm_email
 POST    /users/update-password                 ConsensusWeb.UserSessionController :update_password
+GET     /groups/new                            ConsensusWeb.GroupLive.New :new
+GET     /groups/:id/edit                       ConsensusWeb.GroupLive.New :edit
+GET     /groups/:id/options                    ConsensusWeb.GroupLive.Options :index
+GET     /groups/:id/options/:activity_id       ConsensusWeb.GroupLive.Options :edit_activity
+GET     /groups/:id/review                     ConsensusWeb.GroupLive.Review :show
+GET     /groups/:id/share                      ConsensusWeb.GroupLive.Share :show
 GET     /                                      ConsensusWeb.HomeLive :show
 GET     /users/register                        ConsensusWeb.UserLive.Registration :new
 GET     /users/log-in                          ConsensusWeb.UserLive.Login :new
@@ -251,6 +293,13 @@ DELETE  /users/log-out                         ConsensusWeb.UserSessionControlle
 WS      /live/websocket                        Phoenix.LiveView.Socket
 ```
 
+**`/admin/home-page` is gone** (D-027, the admin-editable home page was deleted) — do not
+document it as a route. **`/join/:slug` does not exist yet** either: `docs/plans/creation-flow.md`
+names `Consensus.Activities.get_group_by_slug/1` as "the `/join/<slug>` lookup a guest voter
+follows", but there is no route or LiveView behind it in `router.ex` today — it is a public,
+unauthenticated screen for a future pass, not part of the `:require_authenticated_user`
+live_session below. Don't imply a shared join link resolves to a page; it does not yet.
+
 Three `live_session`s, each with its own `on_mount`:
 
 | live_session | on_mount | who |
@@ -258,6 +307,16 @@ Three `live_session`s, each with its own `on_mount`:
 | `:current_user` | `{UserAuth, :mount_current_scope}` | public; `@current_scope` may be `nil` |
 | `:require_authenticated_user` | `{UserAuth, :require_authenticated}` | signed-in |
 | `:require_admin` | `{UserAuth, :require_admin}` | `%User{is_admin: true}` |
+
+**The organizer's creation wizard lives inside `:require_authenticated_user`, alongside
+`/users/settings` — it does not get its own live_session.** `router.ex`'s own comment says why:
+all six wizard routes (`GroupLive.New` at `:new`/`:edit`, `GroupLive.Options` at
+`:index`/`:edit_activity`, `GroupLive.Review`, `GroupLive.Share`) are steps in one flow — the
+design calls them `01 → 02 → 02b → 03 → 04` — and sharing one live_session means moving between
+them is a `push_navigate` inside a single connected socket, never a full page reload. Adding a
+`live` route for a new wizard step means adding it inside this existing block, not a new
+`live_session` — see "Adding an authenticated LiveView route" below for why a second block with
+the same name raises.
 
 `UserAuth` also exposes `:require_sudo_mode` for sensitive actions. It calls
 `Accounts.sudo_mode?(user, -10)` — **10 minutes**, passed explicitly. Do not read the window off
@@ -364,35 +423,157 @@ Four rules that come with it:
 `{Phoenix.PubSub, name: Consensus.PubSub}` is started in `Consensus.Application`, and
 `config/config.exs` sets `pubsub_server: Consensus.PubSub` on the endpoint.
 
-`Consensus.Content` + `ConsensusWeb.HomeLive` are the working reference implementation in this repo —
-**contexts own the topic, LiveViews just subscribe**. The topic is `@topic "content:home_page"`, private
-to `Consensus.Content`; the message is `{:home_page_updated, %HomePage{}}`. Read those two files rather
-than copying from here if you are adding a second real-time surface:
+`Consensus.Activities` + `ConsensusWeb.GroupLive.Review` are the working reference implementation
+in this repo now that `Consensus.Content` and `HomeLive`'s old home-page subscription are both
+gone (D-027) — **contexts own the topic, LiveViews just subscribe**. The topic is
+`"activity_group:<id>"`, built by a private `topic/1` in `Consensus.Activities` from the group's
+id; the messages are `{:group_updated, %Group{}}`, `{:activity_added, %Activity{}}`,
+`{:activity_updated, %Activity{}}` and `{:activities_changed, [%Activity{}]}` (the last one after
+a delete-and-renumber or a full reorder, since either can move more than one row at once). Read
+`lib/consensus/activities.ex` and `lib/consensus_web/live/group_live/review.ex` rather than
+copying from here if you are adding a second real-time surface:
 
 ```elixir
 # context
-def subscribe_home_page, do: Phoenix.PubSub.subscribe(Consensus.PubSub, "content:home_page")
+def subscribe_group(group_id), do: Phoenix.PubSub.subscribe(Consensus.PubSub, topic(group_id))
 # ...after a successful write:
-Phoenix.PubSub.broadcast(Consensus.PubSub, @topic, {:home_page_updated, home_page})
+broadcast(group.id, {:group_updated, group})
 ```
 
 ```elixir
-# LiveView
-def mount(_params, _session, socket) do
-  if connected?(socket), do: Consensus.Content.subscribe_home_page()
-  {:ok, assign(socket, home_page: Consensus.Content.get_home_page())}
+# LiveView — GroupLive.Review, so a friend adding options while the organizer is on this
+# screen shows up without a refresh (CLAUDE.md product invariant 4)
+def mount(%{"id" => id}, _session, socket) do
+  group = Activities.get_group!(socket.assigns.current_scope, id)
+  if connected?(socket), do: Activities.subscribe_group(group.id)
+  {:ok, assign_group(socket, group)}
 end
 
-def handle_info({:home_page_updated, home_page}, socket) do
-  {:noreply, assign(socket, :home_page, home_page)}
-end
+def handle_info({:group_updated, _group}, socket), do: {:noreply, reload(socket)}
+def handle_info({:activity_added, _activity}, socket), do: {:noreply, reload(socket)}
+def handle_info({:activity_updated, _activity}, socket), do: {:noreply, reload(socket)}
+def handle_info({:activities_changed, _activities}, socket), do: {:noreply, reload(socket)}
 ```
+
+Note `Review` re-reads from storage on every message (`reload/1` calls `get_group!/2` again)
+rather than patching the broadcast payload into the socket directly — the same function also
+handles a rejected client-side reorder snapping back to the saved order, so one code path covers
+both "a friend changed something" and "my own optimistic UI guess was wrong". `HomeLive` follows
+the same PubSub-subscribe shape for its list of groups (see its own moduledoc for the exact
+topics it joins across all of a signed-in organizer's active groups).
 
 Do not call `Phoenix.PubSub.broadcast/3` from a LiveView. Do not subscribe outside `connected?/1` — the
 dead render would leak a subscription in the HTTP process.
 
 For per-user or per-session fan-out, scope the topic string off `current_scope` (that is why the `Scope`
 moduledoc mentions pubsub) rather than broadcasting globally and filtering in `handle_info`.
+
+## Async work: `start_async`/`handle_async`, and never inline in `handle_event`
+
+`ConsensusWeb.GroupLive.Options` (design frames `02`/`02b`) is the load-bearing example of this
+pattern in the app: a LiveView process is one process handling one user's whole page, so a
+network call made inline inside a `handle_event/3` callback — `Consensus.LinkPreview.fetch/1`
+included — blocks that process, and with it the user's entire page, for as long as the remote
+server takes. **A LiveView must never make a network call inline in `handle_event`.**
+
+`start_async/3` spawns a `Task` and returns immediately; the result arrives later as a
+`handle_async/3` message. The name you give it is a key, and `Options` keys by *activity id*
+deliberately — pasting a second link cannot clobber the in-flight fetch for a different row,
+because `start_async/3`'s own contract is "if there is an in-flight task with the same name, the
+later `start_async` wins", and two different activities never share a name:
+
+```elixir
+# lib/consensus_web/live/group_live/options.ex
+defp add_link_activity(socket, url, host) do
+  attrs = %{name: host, source_url: url}
+
+  case Activities.add_activity(socket.assigns.current_scope, socket.assigns.group, attrs) do
+    {:ok, activity} ->
+      socket =
+        socket
+        |> insert_activity(activity)
+        |> mark_fetching(activity.id)
+        |> start_async({:link_preview, activity.id, host}, fn -> LinkPreview.fetch(url) end)
+
+      {:noreply, socket}
+
+    {:error, _reason} ->
+      {:noreply, put_flash(socket, :error, "Could not add that option.")}
+  end
+end
+
+@impl true
+def handle_async({:link_preview, activity_id, provisional_name}, {:ok, {:ok, preview}}, socket) do
+  {:noreply, apply_preview(socket, activity_id, preview, provisional_name)}
+end
+
+def handle_async({:link_preview, activity_id, _provisional_name}, {:ok, {:error, _reason}}, socket) do
+  {:noreply, mark_fetch_failed(socket, activity_id)}
+end
+
+def handle_async({:link_preview, activity_id, _provisional_name}, {:exit, _reason}, socket) do
+  {:noreply, mark_fetch_failed(socket, activity_id)}
+end
+```
+
+Three things to copy along with the shape:
+
+- **The row is created immediately, with a provisional name, and enriched later.** The activity
+  exists and renders before the fetch resolves — `@fetching`/`@fetch_failed` are plain (non-DB)
+  socket `MapSet`s the template reads to show "fetching details…" / "couldn't read that page",
+  because the schema has no "fetch in progress" column and shouldn't grow one for a rendering
+  concern.
+- **`handle_async/3` always has three clauses for a network call: success, a returned `{:error,
+  _}`, and `{:exit, _reason}`.** `Task` delivers `{:ok, task_result}` when the function returned
+  normally (even if `task_result` is itself `{:error, _}` — `Consensus.LinkPreview.fetch/1` never
+  raises, so that is the ordinary failure shape) and `{:exit, reason}` when the function crashed.
+  Missing the `{:exit, _}` clause is a `handle_async/3` that silently ignores a Task crash instead
+  of updating `@fetch_failed`.
+- **Refetch reuses the same mechanism with a different key** (`{:refetch, activity_id}`, no
+  provisional-name tracking) so a deliberate "Refetch" click on the edit screen and the original
+  paste-triggered fetch cannot be confused with each other even for the same activity.
+
+## LiveView streams, and the `reset: true` reload idiom
+
+`GroupLive.Options` and `GroupLive.Review` both use `stream/4` for the activity pool — a `phx-update="stream"`
+container the server does not retain the list for, per the LiveView lifecycle note above.
+`Review` is the one to read for the `reset: true` idiom: its drag-to-reorder hook reorders the DOM
+**optimistically**, client-side, before the server has confirmed anything, and the `"reorder"`
+event handler always ends the same way regardless of whether `Consensus.Activities.reorder_activities/3`
+accepted or refused the new order:
+
+```elixir
+def handle_event("reorder", %{"ids" => ids}, socket) do
+  case parse_ids(ids) do
+    {:ok, ordered_ids} ->
+      Activities.reorder_activities(socket.assigns.current_scope, socket.assigns.group, ordered_ids)
+
+    :error ->
+      :ok
+  end
+
+  # The hook already reordered the DOM optimistically. Whatever just happened — accepted or
+  # refused — reloading from storage is what makes the stored order the truth: on success this
+  # reflects the new order, and on refusal it snaps the DOM back to the order that was actually
+  # saved, undoing the client's guess.
+  {:noreply, reload(socket)}
+end
+
+defp assign_group(socket, group) do
+  socket
+  |> assign(:group, group)
+  |> stream(:activities, group.activities, reset: true)
+end
+```
+
+Without `reset: true`, `stream/4` only *adds* entries it has not seen — it will not remove or
+reorder what the client already rendered, so a rejected reorder (or a delete-triggered renumber,
+which `Options` handles the same way via its own `reload_and_reset/2`) would leave the DOM
+showing the client's wrong guess forever. `reset: true` throws the stream's rendered state away
+and replaces it wholesale with what was just read from storage — the correct move whenever a
+write might have changed more than one row's identity or order, as opposed to `stream_insert/3`,
+which is for updating or inserting exactly one known item without disturbing the rest (`Options`
+uses that for a single-activity save).
 
 ## Verified routes `~p`
 
@@ -430,22 +611,70 @@ defmodule ConsensusWeb.ThingLiveTest do
 end
 ```
 
-**On `async: true`:** there is no blanket ban in this repo, despite the stock "not recommended for
-other databases" moduledoc in `conn_case.ex`. The Ecto sandbox gives each async case its own
-transaction (`shared: not tags[:async]`) and `config/test.exs` sets `busy_timeout: 5_000` so real
-write contention waits instead of failing. `test/consensus/content_test.exs` runs `async: true`
-against the database and passes; the full suite is 0 failures (323 tests on 2026-08-08, and
-climbing — re-run rather than quoting the number). Three
-web tests run `async: true` — `router_test.exs` (a bare `use ExUnit.Case, async: true`,
-no database), `error_html_test.exs` and `error_json_test.exs`.
-Every LiveView test, plus `user_auth_test.exs` and `user_session_controller_test.exs`, carries
+**On `async: true`:** the test suite runs one case at a time regardless of the tag —
+`test/test_helper.exs` calls `ExUnit.start(max_cases: 1)` (D-033) — so `async: true` still buys
+the Ecto sandbox's per-case isolation (own connection, own transaction, rolled back at exit) but
+no longer buys concurrent wall-clock time. Full mechanism in the `sqlite` skill; the practical
+upshot for a web test is that `async: true` is still the right default to reach for, it just does
+not need defending against a "SQLite can't do concurrent writers" objection any more than it
+already couldn't. `test/consensus_web/live/group_live/new_test.exs`,
+`test/consensus_web/live/group_live/options_test.exs`, `test/consensus_web/live/home_live_test.exs`
+and `test/consensus_web/journey_test.exs` are all `async: true` LiveView tests that do real
+database work and pass. `router_test.exs` (a bare `use ExUnit.Case, async: true`, no database),
+`error_html_test.exs` and `error_json_test.exs` are the other `async: true` web tests.
+Most LiveView tests, plus `user_auth_test.exs` and `user_session_controller_test.exs`, still carry
 no `async:` flag, which is generator inheritance rather than a decision.
 `health_controller_test.exs` is the one web test **pinned** `async: false`, and its comment
-explains why: it runs `ALTER TABLE … RENAME` to prove `/health` can fail, SQLite takes an
-exclusive lock on the whole file for DDL, and under `async: true` that lock makes unrelated
-tests die with `** (Exqlite.Error) Database busy`. **Any test you write that issues DDL needs
+explains why: it runs `ALTER TABLE … RENAME` to prove `/health` can fail, and SQLite needs an
+exclusive lock on the whole file for DDL, which collides with a shared (non-async) connection's
+read transaction independent of `max_cases`. **Any test you write that issues DDL needs
 `async: false`** — ordinary inserts and updates do not. Details in the `elixir` and `sqlite`
 skills.
+
+**`render_async/1,2` is how a LiveView test waits on a `start_async` task**, and
+`test/consensus_web/live/group_live/options_test.exs` ("adding a link" · "creates the row
+immediately with a provisional name, then fills it in asynchronously") is the worked example —
+it blocks the stub on a message from the test process specifically so the "row exists
+immediately, with a provisional name" assertions cannot race the async fill-in, then releases it
+and calls `render_async/1`:
+
+```elixir
+LinkPreviewStub.stub(fn requested_url, _opts ->
+  send(test_pid, {:fetch_started, self()})
+  receive do: (:continue -> {:ok, %{status: 200, headers: [...], body: html_preview(), url: requested_url}})
+end)
+
+view |> form("#add-option-form", add_option: %{query: url}) |> render_submit()
+assert_receive {:fetch_started, task_pid}, 1000
+
+# the row exists, with a provisional name, before the fetch has resolved
+assert [created] = Activities.get_group!(scope, group.id).activities
+assert created.name == @link_host
+refute created.metadata_fetched_at
+
+send(task_pid, :continue)
+html = render_async(view)
+
+assert html =~ "Sushi Enya"
+```
+
+`render_async/2` defaults to ExUnit's `assert_receive_timeout`, **100 ms** — too short for
+anything that genuinely waits — so pass an explicit timeout when a case is slow rather than
+assuming the default covers it.
+
+**The trap that actually cost time here: a stub installed in the test process is invisible from
+inside the `Task` a `start_async` spawns, unless the stub goes looking for it.**
+`Consensus.LinkPreview.fetch/1` calls out to whatever `config :consensus, Consensus.LinkPreview,
+fetcher:` names — `Consensus.LinkPreviewStub` in test (`test/support/link_preview_stub.ex`) — and
+that Task runs in a *different* process from the one that called `stub/1` or `stub_html/2`.
+`Task.async`/`start_async` copies the spawning process's `:"$callers"` chain into the new
+process's dictionary specifically so this kind of thing can be found, and the stub walks it —
+`Enum.find_value([self() | Process.get(:"$callers", [])], ...)` — the same mechanism Mox's
+`allow/3` automates, done by hand because this project carries no Mox. Forgetting this and
+storing the stub function keyed only on `self()` would make every LiveView test that pastes a
+link fail with `{:error, :not_configured}`, for a reason that has nothing to do with the LiveView
+under test — context tests would still pass, because there `fetch/1` runs in the test process
+itself.
 
 `ConsensusWeb.ConnCase` provides `log_in_user/3` and `register_and_log_in_user/1` (which also accepts a
 `:token_authenticated_at` context key for sudo-mode tests). Fixtures in `Consensus.AccountsFixtures`:
@@ -458,6 +687,20 @@ hand-rolling a timestamp. Use `admin_fixture/1` for `/admin` route
 tests rather than hand-rolling the role. Note it writes `is_admin` via `User.admin_changeset/2`
 directly, *not* through `Accounts.set_admin/3` — that function requires an admin actor, which is a
 chicken-and-egg problem for the first admin. The fixture carries a comment saying so.
+`Consensus.ActivitiesFixtures` (`test/support/fixtures/activities_fixtures.ex`) is the wizard
+screens' equivalent: `group_fixture/2` takes a `%Scope{}`, `activity_fixture/2` takes a `%Group{}`.
+
+**`test/consensus_web/journey_test.exs` is the end-to-end acceptance test for the creation side,
+and it is deliberately one test, not a suite of small ones.** It drives a single organizer
+through the whole flow in one `conn` and then a *second*, fresh one: sign up → create a group →
+add options (both typed and by pasting a link) → edit an option → review and publish → get the
+share link → log out → log back in with a new session and confirm everything survived. Every
+screen already has its own file covering its own branches; this test exists to catch what only
+shows up *between* screens — a wizard step that `push_navigate`s somewhere that does not exist,
+a value that renders but was never actually written, a draft that cannot be resumed after the
+websocket is thrown away and rebuilt from scratch. Run it whenever a change touches more than one
+screen in the wizard; a change confined to one screen's own file is usually covered by that
+screen's own test.
 
 Three web tests are not LiveView tests and are easy to miss.
 `test/consensus_web/router_test.exs` walks `ConsensusWeb.Router.__routes__/0` and the router source to

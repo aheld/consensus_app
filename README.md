@@ -1,27 +1,26 @@
 # Consensus
 
 A Phoenix 1.8 / LiveView application: SQLite-backed, deployable to a single Fly.io machine,
-with username-or-email authentication, an admin area, and a public home page whose content an
-administrator edits at runtime — every open browser sees the change without a refresh.
+with username-or-email authentication, an admin area, and the beginning of the actual
+product — an organizer can sign up, build a titled activity group with a hard deadline, fill
+it with options (typed by hand or pasted as a URL that gets its title/description/image
+pulled from the page automatically), review and reorder the pool, and publish it to a share
+link. Voting on that link, ranking, tallying, and the results screen are **not built yet** —
+see *What is not built yet* below.
 
-> **Read this before you clone.** The application code is **not committed yet.** `git ls-files`
-> currently returns ten files — `.gitignore`, `.claude/settings.json`, `CLAUDE.md`, `README.md`
-> and the six files under `docs/`. Everything this README describes below (`mix.exs`, `lib/`,
-> `config/`, `test/`, `priv/`, `assets/`, `Dockerfile`, `fly.toml`, `.github/`, `rel/`,
-> `AGENTS.md`, `TODO.md`) exists in the working tree but is **untracked**, so a fresh
-> `git clone` produces a checkout with no application in it — `mix setup` there fails with
-> `** (Mix) The task "setup" could not be found`.
->
-> The first commit is the repository owner's to make, and [TODO.md](TODO.md) **§1, "Push this
-> repository to GitHub"**, is the checklist that does it (`git add -A`, review what
-> `.gitignore` catches, commit, push). Everything below assumes you are working **in this
-> directory**, not in a clone of it. Run `git ls-files` if you are unsure which you have.
+**Status.** The foundation (accounts, sessions, roles, an admin area, first-boot seeding, a
+Docker release image, a CI/CD pipeline) is production-ready and was committed at `8825433`
+("Add the Consensus application: auth, admin area, editable home page, Fly release") — this
+is a normal git repository; `git clone` gets you everything below. On top of it, the
+organizer's creation flow (D-027 through D-033 in [docs/decisions.md](docs/decisions.md))
+replaced the placeholder home page with the real product landing at `/`. Run `git status
+--short` if you want to know exactly what is committed versus staged in your working copy at
+any given moment — the two layers above were built at different times and may not both be
+committed yet.
 
-**Status.** What is in this working tree today is a production-ready *foundation*: accounts,
-sessions, roles, an admin area, first-boot seeding, a Docker release image, and a CI/CD
-pipeline. The product it is a foundation *for* — a group activity-voting PWA where an organizer
+The product this is a foundation *for* — a group activity-voting PWA where an organizer
 shares a link and 4–7 friends vote with no downloads and no accounts — is specified in
-[docs/PRD.md](docs/PRD.md) and is not built yet. Technical decisions are logged in
+[docs/PRD.md](docs/PRD.md). Technical decisions are logged in
 [docs/decisions.md](docs/decisions.md); open ones in
 [docs/open-questions.md](docs/open-questions.md).
 
@@ -125,10 +124,6 @@ exactly.
 
 ## Quick start
 
-**From this directory, not from a clone** — see the note at the top of this file: the code is
-untracked, so cloning gets you the docs and nothing else. [TODO.md](TODO.md) §1 is how it becomes
-a real repository.
-
 **Prerequisites:** Elixir 1.20.3 on Erlang/OTP 29.0.5 — the versions pinned by
 [`Dockerfile`](Dockerfile) (`ARG ELIXIR_VERSION` / `ARG OTP_VERSION`) and by the CI matrix in
 [.github/workflows/ci.yml](.github/workflows/ci.yml). Check yours:
@@ -153,25 +148,57 @@ Then open <http://localhost:4000>. `mix setup` prints the seeded credentials; th
 The dev database is a file: `consensus_dev.db` in the project root (`consensus_test.db` for
 tests). `mix ecto.reset` drops and rebuilds it.
 
+### What you can do in the app right now
+
+1. Open `/` signed out — the splash screen, with **Get started** going to `/users/register`.
+2. Register (username + email + password). You are signed in immediately; no email round trip
+   is required.
+3. `/` now shows your (empty) list of groups and a **Start something** button.
+4. **Build a session:** `/groups/new` — a title and one of three computed deadline chips
+   ("Tonight 5pm" / "Tomorrow 5pm" / "Thu noon", in your browser's own time zone offset).
+   Submitting creates the group as a `:draft` immediately and takes you to the options
+   screen — nothing is lost if you close the tab here and come back later.
+5. **Add options** at `/groups/:id/options` — type a name, or paste a URL and watch its
+   title, description and photo fill in from the page's OpenGraph tags a moment later. Every
+   pulled field stays editable; open a row's **Edit** to change it or replace the image URL.
+6. **Review** at `/groups/:id/review` — drag (or use the ↑/↓ buttons) to reorder, toggle
+   anonymous voting, see the one-veto rule, and hit **Get the share link** — this is the
+   moment the group leaves `:draft` and becomes `:voting`.
+7. **Share** at `/groups/:id/share` shows the join link and a copy button.
+8. Log out and back in: everything you built is still there, under your account.
+
+### What is not built yet
+
+The recipient's side of the link (`/join/:slug`), voting itself, ranking, tallying, the live
+results screen, the winner/booking CTA, and any place-discovery integration (Yelp/Places) do
+not exist. A published group's share link currently has nothing on the other end to vote with.
+See `docs/PRD.md` for what all of that is supposed to do, and `docs/open-questions.md` for
+what is still undecided about it (guest identity, veto semantics, the votes/participants
+schema, and more).
+
 ---
 
 ## Feature tour
 
 | Route | What it is |
 |---|---|
-| `/` | Public home page ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)). Renders the admin-editable message. Subscribes to `Consensus.Content`, so an admin's edit appears here live, in every open browser. |
+| `/` | One route, two faces ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)). Signed out: the public splash, with **Get started** → registration. Signed in: the organizer's list of activity groups — `ACTIVE` (drafts and groups still voting, with a live countdown) and `PAST` (completed/cancelled). Real-time: subscribes to every active group's PubSub topic, so an edit from another tab (or, once voting exists, another participant) updates the list without a refresh. |
 | `/users/register` | Sign-up: **username + email + password**. Creates the account and signs it in immediately. |
 | `/users/log-in` | Two forms on one page: password log-in (the identifier field accepts **either** the username or the email), and magic-link log-in by email. |
 | `/users/log-in/:token` | Magic link landing page. Always usable. When an unconfirmed account already holds a password, the page warns **before** the button is pressed that confirming here will remove that password, then confirms and signs you in (see the recovery section below). |
 | `/users/settings` | Change username, email, or password. Gated by sudo mode (`:require_sudo_mode`) on top of authentication. Email changes go through a confirmation link; username changes do not — a username is an in-app identifier, not proof of controlling an inbox. |
 | `/users/log-out` | `DELETE`. Deletes the session token and broadcasts a disconnect to that session's LiveViews. |
-| `/admin`, `/admin/users` | Admin → Users ([`AdminLive.Users`](lib/consensus_web/live/admin_live/users.ex)). Lists every account; **Promote**, **Demote** and **Delete**. Refuses to demote the last admin (`{:error, :last_admin}`); both demotion and deletion disconnect that user's live sessions. **Delete** renders only for a non-admin who is not you — demote an administrator before deleting them — and is the account-recovery lever on a deployment with no mail provider. All three actions need **sudo mode** (a log-in within the last 20 minutes): out of it, the page shows a `#sudo-notice` banner and greys the buttons, and `Consensus.Accounts` refuses regardless of what the client sends. Renders the default-password banner. |
-| `/admin/home-page` | Admin → Home page. Edits the `/` message (plain text, 2000 graphemes and 8000 bytes max). The textarea deliberately has **no `maxlength`** — a browser counts UTF-16 code units and truncates a paste silently; a live grapheme counter under the field warns instead, and the changeset enforces. Saving broadcasts over PubSub. |
+| `/groups/new`, `/groups/:id/edit` | Wizard step 1 — title and a hard deadline. Creates (or edits) a `:draft` group. See [`GroupLive.New`](lib/consensus_web/live/group_live/new.ex). |
+| `/groups/:id/options`, `/groups/:id/options/:activity_id` | Wizard step 2 — the option pool, and the full-screen editor for one option. A pasted link is fetched server-side, asynchronously; a typed name is not. See [`GroupLive.Options`](lib/consensus_web/live/group_live/options.ex). |
+| `/groups/:id/review` | Wizard step 3 — reorder, toggle anonymous voting, publish (`:draft` → `:voting`) or cancel. See [`GroupLive.Review`](lib/consensus_web/live/group_live/review.ex). |
+| `/groups/:id/share` | The share link, shown after publishing. See [`GroupLive.Share`](lib/consensus_web/live/group_live/share.ex). |
+| `/admin`, `/admin/users` | Admin → Users ([`AdminLive.Users`](lib/consensus_web/live/admin_live/users.ex)). Lists every account; **Promote**, **Demote** and **Delete**. Refuses to demote the last admin (`{:error, :last_admin}`); both demotion and deletion disconnect that user's live sessions, and **deleting a non-admin now cascades to every activity group they organize** (see *Architecture* below). All three actions need **sudo mode** (a log-in within the last 20 minutes): out of it, the page shows a `#sudo-notice` banner and greys the buttons, and `Consensus.Accounts` refuses regardless of what the client sends. Renders the default-password banner. |
 | `/admin/dashboard` | Phoenix LiveDashboard. Mounted in **every** environment, admin-only — not left on `:dev_routes`. |
 | `/dev/mailbox` | Swoosh mailbox preview. Development only, gated on `Application.compile_env(:consensus, :dev_routes)`. |
 | `/health` | Readiness probe for Fly's health checker ([`HealthController`](lib/consensus_web/controllers/health_controller.ex)). Outside the `:browser` pipeline — no session, CSRF or layout — and excluded from `force_ssl`. `200 ok` only when no migration is pending *and* the `users` table is readable; otherwise `503`. See *Deployment*. |
 
-`mix phx.routes` prints the authoritative list.
+`mix phx.routes` prints the authoritative list. There is no `/join/:slug` route yet — that is
+the recipient's side of the link, and it is not built (see *What is not built yet* above).
 
 ---
 
@@ -201,7 +228,11 @@ tests). `mix ecto.reset` drops and rebuilds it.
   - `delete_user/2` — admin-only. Refuses to delete an administrator (demote first,
     `{:error, :is_admin}`) and refuses self-deletion (`{:error, :self}`). Session tokens go with
     the row by `ON DELETE CASCADE` — collected *before* the delete, so they can still be
-    disconnected — and `home_page.updated_by_id` is nulled by `ON DELETE SET NULL`.
+    disconnected. **Deleting a non-admin also cascades to `activity_groups`**
+    (`organizer_id` references `users` with `on_delete: :delete_all`), which in turn cascades to
+    that group's `activities` — so deleting an organizer destroys every group they built, not
+    just their account. An activity someone else *added* to a group they don't organize
+    survives with `added_by_id` nulled (`on_delete: :nilify_all`).
 
   Both also write an audit line: `[audit] grant_admin|revoke_admin|delete_user actor_id=… actor=…
   target_id=… target=…` at `:info` on success, and `[audit] … REFUSED <reason> …` at `:warning` on
@@ -209,14 +240,43 @@ tests). `mix ecto.reset` drops and rebuilds it.
   With one machine, no external audit sink and no undo, that line is the only record of who
   promoted or deleted whom — and a run of `REFUSED :unauthorized` is what someone acting from a
   revoked session looks like. See [docs/decisions.md](docs/decisions.md) D-021.
-- [`Consensus.Content`](lib/consensus/content.ex) — runtime-editable site content, today just
-  the home page message. Reads are open; `update_home_page/2` pattern-matches
-  `%Scope{user: %User{is_admin: true}}` in the function head, so a non-admin call raises
-  `FunctionClauseError` rather than taking a runtime branch — and then re-reads the actor's role
-  from the database, returning `{:error, :unauthorized}` for an admin who was demoted while the
-  editor tab stayed open. The row is a singleton (`id = 1`,
-  enforced by a CHECK constraint in
-  [the migration](priv/repo/migrations/20260808040000_create_home_page.exs)).
+
+- [`Consensus.Activities`](lib/consensus/activities.ex) — activity groups (a titled, deadlined
+  pool of options) and the activities (options) inside them. Scope-first, like `Accounts`:
+  functions that take an already-loaded `%Group{}` or (indirectly) `%Activity{}` check ownership
+  as a **precondition in the function head** — the scope's `user_id` and the group's
+  `organizer_id` are bound to the same variable, so a call on someone else's group raises
+  `FunctionClauseError` rather than taking a runtime branch. `update_activity/3` and
+  `delete_activity/2` are the exception: an `%Activity{}` carries only `group_id`, not the
+  organizer, so those two re-read the owning group from the database instead and return
+  `{:error, :unauthorized}`.
+
+  A group's `status` moves `:draft → :voting → :completed | :cancelled`. Step 1 of the wizard
+  creates the row as a `:draft` immediately, so nothing is lost to a closed tab.
+  `publish_group/2` (on step 3, "Get the share link") moves it to `:voting`; that is also when
+  the share link starts working. There is **no scheduler or background job** for deadline
+  expiry — `maybe_complete_group/1` runs lazily on every read (`list_groups/1`, `get_group!/2`,
+  `get_group_by_slug/1`), so a group whose deadline passed while nobody was looking is reported
+  (and, on its first read since expiry, persisted) as `:completed` the next time anyone looks.
+  Changes broadcast over `Phoenix.PubSub` on `"activity_group:<id>"`, the same pattern
+  `ConsensusWeb.HomeLive` and the wizard screens use for live updates (CLAUDE.md product
+  invariant 4). See D-029.
+
+- [`Consensus.LinkPreview`](lib/consensus/link_preview.ex) — fetches a pasted URL's OpenGraph
+  (falling back to `<title>`/`<meta name=description>`) so an option can be prefilled. Refuses
+  non-`http(s)` URLs and any host that resolves to loopback/private/link-local — re-checked on
+  every redirect hop, up to 3 — times out at 5s, caps the body at 512 KB, and **never raises**:
+  every failure is `{:error, atom}`. Results and errors are both cached in ETS (6h / 5m). The
+  image is stored as a **URL only** — nothing is downloaded, proxied or hosted; a dead image
+  degrades to a placeholder in the UI. Callers must invoke it from `start_async`, never inline
+  in a `handle_event` — it's a real network call with multi-second timeouts, and a LiveView is
+  one process. See D-030.
+
+- [`Consensus.Deadlines`](lib/consensus/deadlines.ex) — pure functions, no database. Computes
+  the three deadline chips on `/groups/new` and the countdown label on the home screen, from
+  UTC arithmetic shifted by the browser's UTC offset (sent in the LiveView connect params —
+  there is no time zone database in this app, so a DST transition inside the chip's window can
+  be off by an hour). See D-031.
 
 **Web layer** (`lib/consensus_web/`): two controllers of its own, plus the generated error views.
 [`UserSessionController`](lib/consensus_web/controllers/user_session_controller.ex) exists because
@@ -228,6 +288,17 @@ websocket, a session or a layout. `error_html.ex` and `error_json.ex` are genera
 Everything else is a LiveView. Phoenix 1.8 scopes are used
 throughout: `@current_scope` holds a [`Consensus.Accounts.Scope`](lib/consensus/accounts/scope.ex),
 never a bare `current_user`.
+
+**There is no global navigation bar.** `ConsensusWeb.Layouts.app/1` is the canvas, a centred
+column and the flash group — nothing else. Every screen draws its own header (the home screen's
+wordmark and avatar, the wizard's back button and progress bar, the option editor's close
+button), because the design gives each one different content and a shared bar would either
+duplicate an affordance or crowd a header that has no room to spare on a 390px phone. The
+account menu (`Layouts.account_menu/1`) is a `<details>` element rather than a JS dropdown, so
+it works before the LiveView socket connects. See D-032. Styling is a hand-rolled Tailwind v4
+`@theme` token system rather than daisyUI — see
+[.claude/skills/design-system/SKILL.md](.claude/skills/design-system/SKILL.md) and D-028; there
+is no dark theme.
 
 **Authorization** lives in [`ConsensusWeb.UserAuth`](lib/consensus_web/user_auth.ex) and is
 applied twice to every admin route, because a plug pipeline does not run for a LiveView
@@ -241,10 +312,11 @@ Non-admins who are already signed in are redirected to `/` (not to the log-in fo
 be a dead end); anonymous visitors are sent to `/users/log-in` with a stored return path. See
 [`router.ex`](lib/consensus_web/router.ex).
 
-**Live updates** use `Phoenix.PubSub` on the topic `content:home_page`. `HomeLive.mount/3` calls
-`Content.subscribe_home_page/0` when `connected?(socket)`; a successful `update_home_page/2`
-broadcasts `{:home_page_updated, home_page}`; `HomeLive.handle_info/2` re-assigns. No polling,
-no manual refresh.
+**Live updates** use `Phoenix.PubSub`. `Consensus.Activities.subscribe_group/1` subscribes the
+calling process to `"activity_group:<id>"`; a successful write broadcasts `{:group_updated,
+group}`, `{:activity_added, activity}`, `{:activity_updated, activity}` or
+`{:activities_changed, activities}`, and `HomeLive`/`GroupLive.*` re-assign on receipt. No
+polling, no manual refresh.
 
 **Boot order** ([`Consensus.Application`](lib/consensus/application.ex)). Before any child starts,
 `start/2` calls [`Consensus.BootCheck.run!/0`](lib/consensus/boot_check.ex), which preflights the
@@ -287,6 +359,7 @@ Consensus.Repo
 {Consensus.Seeds,             skip: skip_seeds?()}   # must stay directly after Ecto.Migrator
 {DNSCluster, ...}
 {Phoenix.PubSub, name: Consensus.PubSub}
+Consensus.LinkPreview.Cache                          # the ETS table Consensus.LinkPreview.fetch/1 caches into
 ConsensusWeb.Endpoint
 ```
 
@@ -299,11 +372,11 @@ into an assertion.
 
 The same idempotent `Consensus.Seeds.run!/0` is reachable from three places: the supervision
 tree, [`priv/repo/seeds.exs`](priv/repo/seeds.exs) (via `mix ecto.setup`), and
-`Consensus.Release.seed/0` (by hand, e.g. over `fly ssh console`). It ensures the home page row,
-then creates a bootstrap admin only if `Accounts.count_admins()` is `0` — keyed on the *role*, not
-on the username, so renaming or re-emailing the account cannot make the next boot look like a first
-boot and recreate `aheld` with the documented default password. Where an admin already exists it
-returns `{:ok, %{admin: nil, home_page: home_page}}`.
+`Consensus.Release.seed/0` (by hand, e.g. over `fly ssh console`). It creates a bootstrap admin
+only if `Accounts.count_admins()` is `0` — keyed on the *role*, not on the username, so renaming
+or re-emailing the account cannot make the next boot look like a first boot and recreate `aheld`
+with the documented default password. Where an admin already exists it returns
+`{:ok, %{admin: nil}}`.
 
 ---
 
@@ -395,7 +468,8 @@ chose. The UI says so up front.
   address and the username for a fresh registration. `Accounts.delete_user/2` refuses to delete an
   administrator (demote them first) and refuses self-deletion, so the admin area cannot be used to
   lock itself out. That is the whole reason the button exists; see
-  [docs/decisions.md](docs/decisions.md) D-015.
+  [docs/decisions.md](docs/decisions.md) D-015. **Note this also deletes every activity group the
+  person organized** — see *Architecture* above.
 
 ### Caveat: production has a mail adapter, but no mail *provider*
 
@@ -420,7 +494,8 @@ send in a `catch`, turning both an `{:error, _}` tuple and a process **exit** in
 What that does *not* buy you is delivery. Nothing reaches an inbox in production, so magic-link
 log-in and the confirm-your-email-change flow go nowhere until you configure a provider in the
 "Configuring the mailer" section of `config/runtime.exs`. Password log-in — the path registration
-puts everyone on — works regardless.
+puts everyone on — works regardless, and it is also how every organizer builds and reaches their
+own groups, so nothing in the creation flow above depends on mail either.
 
 ---
 
@@ -443,48 +518,71 @@ Every environment variable the application actually reads:
 | `ADMIN_EMAIL` | `lib/consensus/seeds.ex` | `aheld@example.com` | No. Same gate as `ADMIN_USERNAME`, and read on the same boot or not at all. |
 | `ADMIN_PASSWORD` | `lib/consensus/seeds.ex` | `adminpass` | **Strongly recommended before the first boot.** See the security section. |
 
-Also configured but not via environment: production SQLite runs `journal_mode: :wal` with
-`busy_timeout: 5_000` (`config/runtime.exs`); the test database sets the same busy timeout so
-concurrent async tests wait instead of raising `Exqlite.Error … database is locked`.
+Also configured but not via environment: `Consensus.Repo` runs `journal_mode: :wal` with
+`busy_timeout: 5_000` in every environment, and `default_transaction_mode: :immediate` in dev and
+prod (not test, which runs under the Ecto sandbox) — SQLite permits one write transaction at a
+time, and taking the write lock at `BEGIN` rather than on the first write is what lets a second,
+simultaneous writer actually wait out the busy timeout instead of failing immediately. See
+[docs/decisions.md](docs/decisions.md) D-013 and D-033.
 
 ---
 
 ## Testing
 
 ```sh
-mix test                        # 323 tests, 0 failures (~1.7s warm)
+mix test                        # 438 tests, 0 failures (~2.6-3.1s warm)
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
 
-Set `MIX_TEST_PARTITION=<n>` to get your own `consensus_test<n>.db` if something else may be
-running the suite at the same time. `mix precommit` honours it too.
+**The suite runs one test case at a time (`max_cases: 1` in `test/test_helper.exs`) — this is a
+SQLite correctness requirement, not a performance setting.** SQLite allows exactly one write
+transaction across the whole database file, and the Ecto sandbox holds each test's transaction
+open for the entire test; two write-touching cases running concurrently collide by construction,
+and SQLite cannot make the loser wait for a busy timeout it never gets to consult. `async: true`
+on a test case is still meaningful — under the sandbox it still means its own connection and its
+own rolled-back transaction — it just no longer means "runs at the same time as its neighbours."
+See D-033.
 
-Coverage is concentrated where the divergences are: `Consensus.Accounts` (79 tests — including
-username uniqueness and case-insensitivity, login-by-either-identifier, the last-admin guard,
-the sudo-mode gate on both admin writes, `delete_user/2`'s refusals, and every branch of the
-magic-link rule, up to an end-to-end pre-stuffing scenario and an assertion that no arity-2
-`login_user_by_magic_link` exists),
-`ConsensusWeb.UserAuth` (35, with `describe` blocks for `require_admin_user/2` and
-`on_mount :require_admin`), `AdminLive.Users` (32 — including that demoting an admin severs their
-live sockets, that deleting one does too, and that the actions are refused and visibly disabled
-out of sudo mode), `Consensus.Content` (18), `Consensus.Seeds` (17, including idempotency and the
-zero-admins gate), `Consensus.BootCheck` (15, against real directories under a `tmp_dir`, including
-a root-owned `-wal` sidecar beside a healthy database), the settings LiveView (15),
-`ConsensusWeb.HomeLive` (13), `UserSessionController` (13),
-`Consensus.Application` (11, asserting the supervision-tree shape — there is no
-`release_command`, so that list is the only thing that migrates a release),
-`HealthController` (10, including that
-it answers 503 on a pending migration and on a missing table), the admin home-page editor (10),
-`Consensus.Release` (8, against a
-throwaway repo under the test's own `tmp_dir` — never the suite database — and pinning that
-`migrate/0`, `seed/0` *and* `rollback/2` all preflight),
-`Consensus.Accounts.UserNotifier` (8 — stand-in adapters that exit and that return `{:error, _}`,
-neither of which `Swoosh.Adapters.Test` can reproduce), the router (4 — asserting that every
+Set `MIX_TEST_PARTITION=<n>` to get your own `consensus_test<n>.db` if something else may be
+running the suite at the same time — this now matters more than it used to, since two
+unpartitioned runs against the same file can produce real assertion failures (extra rows, wrong
+counts), not just contention errors. `mix precommit` honours the variable too.
+
+Coverage is concentrated where the divergences are: `Consensus.Accounts` (username uniqueness
+and case-insensitivity, login-by-either-identifier, the last-admin guard, the sudo-mode gate on
+both admin writes, `delete_user/2`'s refusals, and every branch of the magic-link rule, up to an
+end-to-end pre-stuffing scenario and an assertion that no arity-2 `login_user_by_magic_link`
+exists), `Consensus.Activities` (the scope-first authorization split described in *Architecture*,
+publish/cancel/complete transitions, lazy deadline completion, position renumbering on delete,
+and full-pool reordering), `Consensus.LinkPreview` (the SSRF guard against literal IPs and
+resolved hostnames, redirect-hop re-checking, the cache, and that fetch failures never raise),
+`Consensus.Deadlines` (the three chips and the countdown label across weekdays and UTC offsets,
+pure — no database), `ConsensusWeb.UserAuth` (`require_admin_user/2` and `on_mount
+:require_admin`), `AdminLive.Users` (including that demoting an admin severs their live sockets,
+that deleting one does too — and now cascades their groups — and that the actions are refused and
+visibly disabled out of sudo mode), the wizard LiveViews under `test/consensus_web/live/group_live/`
+(one file per screen), `Consensus.Seeds` (idempotency and the zero-admins gate),
+`Consensus.BootCheck` (against real directories under a `tmp_dir`, including a root-owned `-wal`
+sidecar beside a healthy database), the settings LiveView, `ConsensusWeb.HomeLive` (both faces of
+`/`), `UserSessionController`, `Consensus.Application` (asserting the supervision-tree shape —
+there is no `release_command`, so that list is the only thing that migrates a release),
+`HealthController` (including that it answers 503 on a pending migration and on a missing table),
+`Consensus.Release` (against a throwaway repo under the test's own `tmp_dir` — never the suite
+database — and pinning that `migrate/0`, `seed/0` *and* `rollback/2` all preflight),
+`Consensus.Accounts.UserNotifier` (stand-in adapters that exit and that return `{:error, _}`,
+neither of which `Swoosh.Adapters.Test` can reproduce), the router (asserting that every
 `/admin` route carries *both* the plug and the `on_mount` guard, since dropping either is a silent
-hole), `Consensus.DeployConfig` (4 — `fly.toml` read as text, no database: `app` vs `PHX_HOST`,
+hole), `Consensus.DeployConfig` (`fly.toml` read as text, no database: `app` vs `PHX_HOST`,
 `PORT` vs `internal_port`, `DATABASE_PATH` inside the mount, and the single-quoted shape `ci.yml`'s
-`sed` expects), plus registration, log-in and confirmation.
+`sed` expects), registration, log-in and confirmation.
+
+**[`test/consensus_web/journey_test.exs`](test/consensus_web/journey_test.exs) is the one
+end-to-end acceptance test**, deliberately singular: sign up → create a group → add one typed
+option and one pasted-URL option → edit an option → review and publish → get the share link →
+log out → log back in with a brand-new connection → confirm everything survived and nothing
+leaked into another organizer's account. Per-screen tests cover their own branches; this one
+exists to catch failures that only appear *between* screens.
 
 Note that `mix precommit` and CI are **not** the same checks. `precommit` *rewrites* files
 (`mix format`, `mix deps.unlock --unused`); [CI](.github/workflows/ci.yml) *asserts*
@@ -543,7 +641,9 @@ database and every LiveView websocket down with it.
 There is deliberately **no `[deploy] release_command`** in [`fly.toml`](fly.toml): a release
 machine has no volume mounted, so it would migrate a throwaway database. Migrations run at boot
 instead, from the supervision tree (see *Architecture* above) — the pattern Fly's own
-[SQLite3 guide](https://fly.io/docs/elixir/advanced-guides/sqlite3/) prescribes.
+[SQLite3 guide](https://fly.io/docs/elixir/advanced-guides/sqlite3/) prescribes. **This app has
+never actually been deployed to Fly** — [TODO.md](TODO.md) is the first-deploy runbook, written
+and reviewed but not yet run end to end against a live app.
 
 `fly.toml` does carry a `[[http_service.checks]]` block — a **`GET /health`** every 30s, 5s
 timeout, after a 15s grace period. `fly deploy` watches a new machine for about ten seconds and
@@ -606,35 +706,47 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │   │                            #   docker job: build, boot + smoke test, boot twice on
 │   │                            #   one volume
 │   └── fly-deploy.yml           # calls ci.yml, then flyctl deploy
-├── .claude/skills/              # elixir, phoenix, sqlite, fly-io
-├── assets/                      # app.css (Tailwind + daisyUI), app.js, vendored heroicons/topbar
+├── .claude/skills/              # elixir, phoenix, sqlite, fly-io, design-system
+├── assets/                      # app.css (Tailwind v4 @theme tokens, no daisyUI), app.js
+│                                 #   (sends the browser's tz offset in the LiveView connect
+│                                 #   params), hooks.js, vendored heroicons/topbar
 ├── config/                      # config, dev, test, prod, runtime
 ├── docs/
-│   ├── PRD.md                   # product north star (the voting product, not yet built)
-│   ├── decisions.md             # ADR-lite technical log
+│   ├── PRD.md                   # product north star (voting, ranking, results are not built)
+│   ├── decisions.md             # ADR-lite technical log, D-001 through D-033
 │   ├── open-questions.md
-│   ├── plans/                   # per-feature implementation plans
+│   ├── design/                  # DESIGN-SPEC.md (visual source of truth) + per-screen extracts
+│   ├── plans/                   # per-feature implementation plans, incl. creation-flow.md
 │   ├── prd-technical-extracts.md    # unratified draft
 │   └── technical-roadmap-v1-draft.md # unratified draft
 ├── lib/
-│   ├── consensus/               # Accounts, Content, Seeds, Release, Repo, Application, BootCheck
+│   ├── consensus/               # Accounts, Activities, LinkPreview, Deadlines, Seeds,
+│   │   │                        #   Release, Repo, Application, BootCheck
 │   │   ├── accounts/            # user.ex, scope.ex, user_token.ex, user_notifier.ex
-│   │   ├── boot_check.ex        # DATABASE_PATH/volume preflight, run before Consensus.Repo
-│   │   └── content/             # home_page.ex
+│   │   ├── activities/          # group.ex, activity.ex
+│   │   ├── link_preview/        # cache.ex, fetcher.ex
+│   │   └── boot_check.ex        # DATABASE_PATH/volume preflight, run before Consensus.Repo
 │   └── consensus_web/
-│       ├── components/          # core_components.ex, layouts.ex, layouts/root.html.heex
+│       ├── components/          # core_components.ex, layouts.ex (no navbar — see
+│       │                        #   Architecture), sticker.ex, layouts/root.html.heex
 │       ├── controllers/         # user_session_controller.ex, health_controller.ex,
 │       │                        #   error_html/json
-│       ├── live/                # home_live.ex, admin_live/, user_live/
+│       ├── live/                # home_live.ex, admin_live/ (users.ex only — the home-page
+│       │                        #   editor was deleted), group_live/ (the creation wizard),
+│       │                        #   user_live/
 │       ├── router.ex
 │       └── user_auth.ex         # plugs + on_mount hooks; all authorization lives here
 ├── priv/repo/
-│   ├── migrations/              # users+tokens (with username/is_admin), home_page singleton
+│   ├── migrations/              # users+tokens (with username/is_admin); home_page (created,
+│   │                            #   then dropped by a later migration — the home page was
+│   │                            #   deleted, see decisions.md D-027); activity_groups + activities
 │   └── seeds.exs                # delegates to Consensus.Seeds.run!/0
 ├── rel/overlays/bin/            # server (release entrypoint; sets PHX_SERVER=true) and
 │                                #   migrate, plus their .bat pairs. migrate is generator
 │                                #   output and is NOT in the deploy path — migrations run
 │                                #   from the supervision tree; see Deployment.
-└── test/                        # mirrors lib/, plus support/ (ConnCase, DataCase, fixtures)
-                                 #   and deploy_config_test.exs, which reads fly.toml as text
+└── test/                        # 438 tests; mirrors lib/, plus support/ (ConnCase, DataCase,
+                                 #   fixtures, link_preview_stub.ex), journey_test.exs (the one
+                                 #   end-to-end acceptance test), and deploy_config_test.exs,
+                                 #   which reads fly.toml as text
 ```

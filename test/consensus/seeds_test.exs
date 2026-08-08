@@ -7,7 +7,6 @@ defmodule Consensus.SeedsTest do
 
   alias Consensus.Accounts
   alias Consensus.Accounts.User
-  alias Consensus.Content
   alias Consensus.Repo
   alias Consensus.Seeds
 
@@ -30,11 +29,6 @@ defmodule Consensus.SeedsTest do
       assert admin.confirmed_at
       assert Accounts.get_user_by_login_and_password("aheld", "adminpass")
       assert Accounts.get_user_by_login_and_password(admin.email, "adminpass")
-    end
-
-    test "creates the home page row" do
-      Seeds.run!()
-      assert Content.get_home_page().message == Content.default_message()
     end
 
     test "is idempotent" do

@@ -32,8 +32,13 @@ defmodule ConsensusWeb.RouterTest do
 
     assert "/admin" in paths
     assert "/admin/users" in paths
-    assert "/admin/home-page" in paths
     assert Enum.any?(paths, &String.starts_with?(&1, "/admin/dashboard"))
+
+    # `/admin/home-page` was deleted with the editable home page (D-027). Asserting its
+    # absence keeps the route from being reintroduced by a revert without the context
+    # behind it — the two admin routes above are now the whole admin surface, and
+    # "designate administrators" is the only role feature this product has.
+    refute "/admin/home-page" in paths
   end
 
   test "every admin LiveView mounts the :require_admin hook" do

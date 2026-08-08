@@ -47,8 +47,12 @@ defmodule Consensus.ReleaseTest do
       tables = tables(database)
       assert "users" in tables
       assert "users_tokens" in tables
-      assert "home_page" in tables
+      assert "activity_groups" in tables
+      assert "activities" in tables
       assert "schema_migrations" in tables
+      # Created by an early migration and dropped by the newest one. Asserting its
+      # absence here is what proves migrate/0 ran the whole chain and not a prefix.
+      refute "home_page" in tables
     end
 
     test "is idempotent — a second run has nothing to apply", %{tmp_dir: tmp} do
@@ -69,8 +73,10 @@ defmodule Consensus.ReleaseTest do
 
       assert {:ok, [^last], _} = Consensus.Release.rollback(TmpRepo, last)
 
+      # The newest migration drops `home_page`, so reversing exactly that one has to
+      # bring the table back — which is also the only assertion that its `down/0` runs.
       tables = tables(database)
-      refute "home_page" in tables
+      assert "home_page" in tables
       assert "users" in tables
     end
 
@@ -84,6 +90,8 @@ defmodule Consensus.ReleaseTest do
       tables = tables(database)
       refute "users" in tables
       refute "home_page" in tables
+      refute "activity_groups" in tables
+      refute "activities" in tables
     end
   end
 

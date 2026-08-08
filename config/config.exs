@@ -49,6 +49,11 @@ config :phoenix_live_view,
 # at the `config/runtime.exs`.
 config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Local
 
+# Consensus.LinkPreview fetches OpenGraph/HTML metadata for a pasted URL through this
+# module (config/test.exs points it at a stub instead). cache_ttl_ms / cache_error_ttl_ms
+# are read by Consensus.LinkPreview.Cache and default to 6 hours / 5 minutes when unset.
+config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreview.Fetcher.Req
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",
