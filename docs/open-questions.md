@@ -1,52 +1,167 @@
 # Open Questions
 
-Everything that needs a decision before implementation starts. Resolved items move to
-[decisions.md](decisions.md) and get deleted from here.
+Two kinds of open item, kept apart on purpose:
+
+1. **Foundation gaps** (`F-` numbers, first section) — known limitations of code that has already
+   shipped. Each was found by an adversarial review round and left open deliberately. Nothing here
+   blocks the app from running, deploying, or meeting its acceptance criteria.
+2. **Product questions** (`Q-` numbers, the rest) — decisions still needed before the voting engine
+   is implemented.
+
+Resolved items in either group move to [decisions.md](decisions.md) and get deleted from here.
 
 The draft roadmap and the technical content extracted from the PRD answer several of these already;
 they're listed because the answers are worth re-examining, not because the docs are silent. Prior
 proposals: [technical-roadmap-v1-draft.md](technical-roadmap-v1-draft.md),
 [prd-technical-extracts.md](prd-technical-extracts.md).
 
+**Q-1, Q-2 and Q-3 have been deleted from this file, per the rule above.** All three were settled
+together by [decisions.md](decisions.md) **D-003**, and the foundation described there is built:
+Phoenix LiveView on the BEAM answers "one deploy target or two" (one), the framework's own
+websocket answers "realtime transport" (no managed service, no polling), and `Phoenix.PubSub` in
+the supervision tree plus SQLite answers "is Redis needed" (no — for neither fan-out nor caching).
+The surviving numbers are unchanged, so this list still starts at Q-4.
+
 ---
 
-## Blocking — decide before writing code
+## Foundation — known gaps in code that has already shipped
 
-### Q-1. One deploy target or two?
+These are not undecided *product* questions like the Q-numbered items below. They are limitations of
+the foundation as built, each one found by an adversarial review round, each one deliberately left
+open rather than missed. They are recorded here because the next person to work on this repo needs
+them, and a conversation is not a place to keep them.
 
-The draft splits frontend (Vercel) from backend (NestJS on Render / ECS Fargate). That's two
-deploys, two envs, a CORS surface, and two things to pay for — largely because persistent
-WebSockets don't run on Vercel functions.
+Every one of these is a *known* gap with a *known* shape. None of them blocks the app from running,
+deploying, or passing its acceptance criteria. Close them when the surrounding work makes them cheap,
+not as a batch.
 
-Alternative: keep everything in Next.js (route handlers + server actions) and get realtime from a
-managed service, so nothing needs to hold an open socket in our own process.
+### F-1. A genuinely new migration never runs against a populated database
 
-**Bearing on this:** the PRD originally proposed "PostgreSQL with Supabase Realtime," which
-contradicts the roadmap's NestJS + Socket.io + Redis pub/sub. The two source docs disagree and one
-of them has to give. (That proposal now lives in
-[prd-technical-extracts.md](prd-technical-extracts.md) § From §4, having been removed from the
-product-only PRD.)
+**Scoped down by an explicit call from the repo owner (2026-08-08): down migrations are not
+maintained. On SQLite, the answer to a bad migration is a fresh database, not a rollback.** That
+removes most of what this item used to worry about — "a `down` that is not a faithful inverse of its
+`up`" is not a risk the project is carrying. Do not reintroduce reversibility as a requirement
+without revisiting that decision.
 
-### Q-2. Realtime transport: managed, self-hosted sockets, or polling?
+What remains, narrower and still real: a new `up` migration is never exercised against a database
+that has rows in it. ecto_sqlite3 emulates `ALTER COLUMN` and `ADD CONSTRAINT` by copy-and-swap, and
+those rebuilds can fail against real data or a real foreign key while passing cleanly against the
+empty database `mix test` and the CI smoke step both use. Migrating at boot is this app's *only*
+migration path (D-009) on a single machine with no `release_command` fallback, so a migration that
+fails there fails the boot.
 
-Three real options for "votes update without a refresh":
+The mitigation the project actually relies on is the one the owner named — recreate the volume — and
+[TODO.md](../TODO.md) §7 documents that path. That is a defensible answer while there is no
+production data. It stops being defensible the moment real accounts exist, and that is the trigger
+for revisiting this, not a schedule.
 
-| Option | Cost of complexity |
-|---|---|
-| Managed realtime (Supabase / Ably / Pusher) | Near zero infra; vendor dependency |
-| Own WebSocket server + Redis pub/sub | Highest — stateful nodes, horizontal scaling, the roadmap's Risk #2 |
-| Short polling (2–3s) on a session endpoint | Almost none; slightly less crisp |
+**Consequence to act on, not yet done:** CI's `docker` job manufactures its "pending migration" by
+rolling the newest one *down* and re-applying it. With downs unmaintained, that step now rehearses a
+mechanism the project has declared unsupported — it produces the *appearance* of upgrade-path
+coverage from a path nobody intends to use. Either manufacture the pending migration another way
+(a throwaway migration file generated in the job) or relabel the step to say what it actually
+proves: that the boot-time migrator runs and finds nothing to do on a populated database.
 
-Sessions are 5–8 people and live for hours, not days. Polling is likely indistinguishable from
-sockets at this group size and deletes the entire "WebSocket flooding" risk. Worth deciding
-deliberately rather than defaulting to sockets because they sound right.
+### F-2. Nothing has ever been deployed to Fly.io
 
-### Q-3. Is Redis actually needed?
+Deployability is demonstrated, not performed: the image builds, boots on a mounted volume, migrates,
+seeds, serves, survives a restart, and every `flyctl` command in [TODO.md](../TODO.md) was checked
+against the real binary. But no Fly app exists, `flyctl` on this machine is not logged in, and the
+first real deploy is still the first real deploy. The `[[http_service.checks]]` behaviour, the
+volume's mount semantics, and the GitHub Actions → Fly hand-off are all reasoned from the official
+guides rather than observed.
 
-The draft uses Redis for two unrelated jobs: WebSocket room fan-out and caching third-party
-search results. If Q-2 resolves to managed realtime or polling, job one disappears. Job two — a
-24h cache of "tacos in Santa Monica" — can be a Postgres table with a TTL column and a unique
-index on the normalized query. That would remove a whole piece of infrastructure from the MVP.
+Related and more specific: `Consensus.BootCheck` has only ever been exercised against Docker named
+volumes, which reproduce uid/gid semantics but not Fly's mount behaviour. And the snapshot-restore
+procedure in TODO.md §7 (steps R1–R8) is documented, self-consistent and labelled untested — it has
+never been executed against a live app, and it necessarily destroys and recreates the Machine
+(D-019).
+
+### F-3. Production has a mail adapter but no mail provider
+
+`config/runtime.exs` pins `Swoosh.Adapters.Logger` for `:prod`, which logs the recipient — not the
+body, so no working magic link reaches `fly logs` — and returns `{:ok, _}`. Nothing is delivered.
+Magic-link login and the confirm-your-email-change flow therefore reach nobody in production.
+
+Registration takes a password and signs the new account in immediately, so nobody is *blocked*, and
+`Accounts.delete_user/2` from `/admin/users` is the account-recovery lever this deployment actually
+has. But the credential pre-stuffing defence in D-017 only fires when the real owner clicks a link
+they can only receive by email — so today it is a correct mechanism with no delivery channel. Adding
+a provider is a one-line change in `config/runtime.exs`; until it lands, do not document magic-link
+login as a working production path.
+
+### F-4. Two test guards weaken silently in environments unlike this one
+
+Worth knowing before trusting a green run from somewhere else:
+
+- The permission assertions in [test/consensus/boot_check_test.exs](../test/consensus/boot_check_test.exs)
+  are wrapped in `if append_denied?(...)` / `if write_denied?(...)` guards, because `chmod` does not
+  restrain uid 0. Run the suite **as root** — which some CI containers do — and those tests pass
+  *vacuously* rather than failing. They were verified to fail on the intended mutants as a non-root
+  user only.
+- The 375px layout measurements behind the navbar fix were taken in a same-origin iframe, not a
+  real phone-width browser window, because the automation could not resize the window. Width-driven
+  layout and media queries are equivalent there and the numbers matched, but the iframe does not
+  model device-pixel-ratio, mobile user-agent behaviour, or an overlay scrollbar stealing width.
+  One confirming look on a real phone would close this.
+
+Separately, `aria-live="polite"` on `<p id="home-message">` was verified as an attribute in the DOM,
+not by listening to a screen reader.
+
+### F-6. Found by the final review round and deliberately not fixed
+
+The last round of adversarial review ended by owner decision with these open. Each is real, each was
+reproduced, none blocks anything. Listed roughly by value.
+
+- **The sudo windows are inverted relative to risk.** `Consensus.Accounts.@sudo_mode_minutes` is
+  **20** and gates `set_admin/3` and `delete_user/2`; `UserAuth.on_mount(:require_sudo_mode, ...)`
+  passes **-10** and gates `/users/settings`. So the strictly more dangerous action — minting an
+  administrator — has the *looser* freshness requirement. D-021 records the two windows as
+  deliberate, which they are, but does not confront the inversion. Deciding this properly means
+  picking one window or justifying two; it is a behaviour change with test fallout, which is why it
+  was left.
+- **`Consensus.BootCheck` reports a read-only mount as a permission problem.** Booting against a
+  read-only `/data` produces `Cannot write the SQLite database (:erofs).` followed by
+  `refused : /data — directory, uid 65534:gid 0, mode 750` — correct ownership, correct mode — and
+  then recommends a `chown` that cannot help. `:erofs`, `:enospc` and `:eacces` want different
+  sentences.
+- **A preflight crash writes `erl_crash.dump` into `/app` inside the container.** On Fly a raising
+  preflight is a restart loop, so that is one multi-megabyte dump per restart, on a machine whose
+  disk problem may be what is causing the loop. Set `ERL_CRASH_DUMP_SECONDS=0` in the release
+  environment, or point the dump somewhere bounded.
+- **CI never issues a single HTML request against the release image.** `/health` deliberately
+  bypasses the `:browser` pipeline, the session, the layout and the digested-asset lookup, and the
+  websocket assertion renders no HTML — so `cache_static_manifest` and `Plug.Static` are exercised by
+  nothing in the pipeline. A broken asset digest in a release would ship green. One `curl -f /` with
+  an assertion on the served CSS path would close it.
+- **After a successful pre-stuffing reclaim the account keeps the attacker's chosen username.**
+  Nothing tells the victim to change it. `/users/settings` can, but the flow does not mention it.
+- **`Consensus.Seeds` prints `http://localhost:4000/...` with the port hardcoded**, while the
+  endpoint's port comes from `PORT`. Cosmetic, dev-only, wrong whenever `PORT` is set.
+- **The `test` job pins Elixir 1.20.3 / OTP 29.0.5 with a comment saying to keep it in step with the
+  Dockerfile's `ELIXIR_VERSION` / `OTP_VERSION`, and nothing enforces it.** Self-correcting in
+  practice, since drift that matters breaks `docker build`.
+- **`/admin/dashboard/applications?info=consensus` returns 500** — `phoenix_live_dashboard` 0.8.7,
+  not this repo's code, and not reachable from any link the app renders. Upstream.
+- Two documentation nits: `aria-live="polite"` on `<p id="home-message">` is test-guarded and
+  explained in CLAUDE.md but has no `decisions.md` entry; and D-024 quotes the navbar `<ul>` class
+  string without its trailing `px-1`.
+
+### F-5. Deferred by explicit decision, listed so they are not rediscovered as bugs
+
+- **The admin sudo window is computed once, at mount.** A long-open `/admin/users` renders enabled
+  buttons that bounce to the log-in page. Accepted by the repo owner; see D-021, which also records
+  that the honest fix is refreshing the assign rather than widening the window.
+- **No `user_audit_events` table.** The `[audit]` Logger line is the floor, not the ceiling —
+  durable audit is a schema, a retention policy and a migration, and it belongs beside the
+  voting-engine schema decisions rather than ahead of them (D-021).
+- **`Content.update_home_page/2` carries no sudo check and no audit line**, deliberately: editing
+  prose is not exercising authority (D-021). If the home page ever becomes something an attacker
+  would want to control, revisit that.
+
+---
+
+## Blocking — decide before writing voting-engine code
 
 ### Q-4. Guest identity — localStorage is not enough
 
@@ -83,7 +198,9 @@ specified. (See [prd-technical-extracts.md](prd-technical-extracts.md) § From �
   headline cost mitigation *is* a 24-hour cache — verify that's permitted before it becomes
   load-bearing. Place IDs and our own derived data are the safer things to persist.
 
-Also unstated: **what's the monthly infra + API budget?** That number decides most of Q-1 → Q-3.
+Also unstated: **what's the monthly infra + API budget?** It no longer decides the stack — D-003
+settled that, and one Fly machine with one volume is the whole hosting bill — but it is still the
+number that decides how much third-party search this app can afford, and therefore this question.
 
 ### Q-7. How does anyone learn the winner?
 

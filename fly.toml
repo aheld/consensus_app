@@ -1,0 +1,98 @@
+# fly.toml — deployment configuration for Consensus.
+#
+# Reference: https://fly.io/docs/reference/configuration/
+#
+# Two things you MUST change before the first deploy (TODO.md walks you through it):
+#   1. `app`            — must be globally unique across all of Fly.io.
+#   2. `primary_region` — pick one close to you: `fly platform regions`.
+# Then make PHX_HOST match the hostname Fly gives you.
+
+app = 'consensus-app'
+primary_region = 'iad'
+
+# Give the BEAM somewhere to spill on a small machine. Without swap, a memory spike
+# is an OOM kill, and with a single machine an OOM kill is an outage.
+swap_size_mb = 512
+
+# The BEAM shuts down cleanly on SIGTERM: it stops accepting connections, lets
+# in-flight requests finish, and closes the SQLite database (checkpointing the WAL)
+# instead of being killed mid-write.
+kill_signal = 'SIGTERM'
+kill_timeout = '30s'
+
+[build]
+
+[env]
+  PHX_HOST = 'consensus-app.fly.dev'
+  PORT = '8080'
+  # Must live inside the [mounts] destination below, or the database is silently
+  # recreated (empty) on every deploy.
+  DATABASE_PATH = '/data/consensus.db'
+
+# NOTE: there is deliberately no [deploy] release_command.
+#
+# The release command runs in a temporary machine that has NO volume attached, so a
+# `release_command = "/app/bin/migrate"` would migrate a throwaway database and leave
+# the real one untouched. Fly's own SQLite3 guide says migrations must run at
+# application start instead — which this app does through the `{Ecto.Migrator, ...}`
+# child in lib/consensus/application.ex, followed by `{Consensus.Seeds, ...}`.
+#   https://fly.io/docs/elixir/advanced-guides/sqlite3/
+# See docs/decisions.md.
+
+[http_service]
+  # Must equal PORT above.
+  internal_port = 8080
+  force_https = true
+
+  # A stopped machine drops every open LiveView WebSocket, and the database lives on
+  # this machine's volume. Keep it running. `auto_start_machines` and
+  # `auto_stop_machines` must be enabled or disabled together — a machine that stops
+  # with auto-start disabled never comes back.
+  auto_stop_machines = 'off'
+  auto_start_machines = false
+  min_machines_running = 1
+
+  processes = ['app']
+
+  # Without this, nothing watches the app after the deploy's ~10s smoke window. The grace
+  # period has to cover boot-time migrations and seeding; those measure well under a
+  # second on a fresh database, so 15s is deliberately generous.
+  #
+  # It must NOT point at '/'. Fly's checker connects over plain HTTP to the machine's
+  # private address, and `force_ssl` in config/prod.exs 301-redirects everything that is
+  # not on its exclusion list — so a check on '/' could never return 200. `/health` is
+  # on that list, skips the browser pipeline, and queries the database, so a machine
+  # whose volume has gone away reports unhealthy instead of cheerfully serving 200.
+  [[http_service.checks]]
+    grace_period = '15s'
+    interval = '30s'
+    timeout = '5s'
+    method = 'GET'
+    path = '/health'
+
+  [http_service.concurrency]
+    # Idle LiveView WebSockets count as connections, so keep the limits generous.
+    type = 'connections'
+    soft_limit = 200
+    hard_limit = 250
+
+# SQLite lives on a Fly Volume. One machine mounts one volume: never run two machines
+# (`fly deploy --ha=false`, never `fly scale count 2`) — the second gets its own
+# volume and its own divergent database.
+[[mounts]]
+  source = 'consensus_data'
+  destination = '/data'
+  initial_size = '1gb'
+  # Fly takes a snapshot daily; the default retention of 5 days is short for an app
+  # where corruption could go unnoticed over a long weekend.
+  snapshot_retention = 30
+  # Grow the volume automatically rather than waking up to a full disk.
+  auto_extend_size_threshold = 80
+  auto_extend_size_increment = '1gb'
+  auto_extend_size_limit = '10gb'
+
+[[vm]]
+  size = 'shared-cpu-1x'
+  memory = '512mb'
+  cpu_kind = 'shared'
+  cpus = 1

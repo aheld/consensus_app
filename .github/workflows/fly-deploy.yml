@@ -1,0 +1,47 @@
+# Continuous deployment to Fly.io.
+#
+# Straight from https://fly.io/docs/launch/continuous-deployment-with-github-actions/,
+# with two additions: it waits for CI to pass first, and it only ever runs one deploy
+# at a time (two concurrent deploys would fight over the single volume).
+#
+# Setup — see TODO.md, step 4:
+#   fly tokens create deploy -x 999999h
+#   gh secret set FLY_API_TOKEN --app actions   # paste the whole token, incl. "FlyV1 "
+
+name: Fly Deploy
+
+on:
+  push:
+    branches:
+      - main
+  workflow_dispatch:
+
+# Nothing in this workflow writes to the repository.
+permissions:
+  contents: read
+
+# Never let two deploys overlap. `cancel-in-progress: false` means a queued deploy
+# waits its turn rather than being dropped.
+concurrency:
+  group: deploy-group
+  cancel-in-progress: false
+
+jobs:
+  test:
+    # Reuse the exact same checks that guard pull requests.
+    uses: ./.github/workflows/ci.yml
+
+  deploy:
+    name: Deploy app
+    needs: test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: superfly/flyctl-actions/setup-flyctl@master
+
+      # --ha=false keeps this at a single machine. This app stores its data in SQLite
+      # on one Fly Volume; a second machine would get a second, divergent database.
+      - run: flyctl deploy --remote-only --ha=false
+        env:
+          FLY_API_TOKEN: ${{ secrets.FLY_API_TOKEN }}

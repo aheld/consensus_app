@@ -1,0 +1,347 @@
+# The checks that must pass before anything is deployed.
+#
+# Called directly on pull requests, and reused as a gate by fly-deploy.yml via
+# `jobs.<id>.uses`, so a red build can never reach production.
+
+name: CI
+
+# Deliberately not triggered by `push` to main: fly-deploy.yml calls this workflow as its
+# gate, so a push would otherwise run the whole matrix and the Docker build twice.
+on:
+  pull_request:
+  workflow_call:
+
+permissions:
+  contents: read
+
+env:
+  MIX_ENV: test
+
+jobs:
+  test:
+    name: mix test (Elixir ${{ matrix.elixir }} / OTP ${{ matrix.otp }})
+    runs-on: ubuntu-latest
+
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # Keep in step with the ELIXIR_VERSION / OTP_VERSION args in the Dockerfile,
+          # so CI runs the same toolchain that builds the release image.
+          - elixir: '1.20.3'
+            otp: '29.0.5'
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Set up Elixir
+        uses: erlef/setup-beam@v1
+        with:
+          elixir-version: ${{ matrix.elixir }}
+          otp-version: ${{ matrix.otp }}
+
+      - name: Restore dependency and build cache
+        uses: actions/cache@v4
+        with:
+          path: |
+            deps
+            _build
+          key: ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-${{ hashFiles('**/mix.lock') }}
+          restore-keys: |
+            ${{ runner.os }}-mix-${{ matrix.otp }}-${{ matrix.elixir }}-
+
+      - name: Install dependencies
+        run: mix deps.get --check-locked
+
+      - name: Check that mix.lock has no unused entries
+        run: mix deps.unlock --check-unused
+
+      - name: Check formatting
+        run: mix format --check-formatted
+
+      - name: Compile without warnings
+        run: mix compile --warnings-as-errors
+
+      - name: Run tests
+        run: mix test
+
+  docker:
+    name: docker build + boot smoke test
+    runs-on: ubuntu-latest
+
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: docker/setup-buildx-action@v3
+
+      # Proves the release image still builds before a deploy tries it for real.
+      # `load: true` puts it in the local daemon so the next step can actually run it.
+      - name: Build the release image
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: false
+          load: true
+          tags: consensus:ci
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      # Building the image proves it compiles, not that it boots. `mix test` never starts
+      # a release, so without this step NOTHING in the repo exercises the boot-time
+      # `{Ecto.Migrator, ...}` child, `Consensus.Seeds`, `Consensus.BootCheck.run!/0`
+      # or the `config_env() == :prod` half of config/runtime.exs — a release that never
+      # migrates would sail through CI and deploy green.
+      #
+      # /data is a tmpfs owned by uid 65534 (`nobody`) because that is how Fly presents
+      # an empty volume to a release that runs as `nobody`. A root-owned /data is exactly
+      # what the boot preflight exists to reject, so do not "fix" a failure here by
+      # dropping the uid/gid and running as root.
+      - name: Boot the release image and smoke test it
+        run: |
+          set -euo pipefail
+
+          # Boot under the hostname this app actually deploys with, read out of fly.toml
+          # rather than hardcoded. `-e PHX_HOST=localhost` used to be a convenient lie,
+          # and it hid two different failures:
+          #
+          #   * `check_origin` defaults to true in prod and validates the browser Origin
+          #     against the endpoint's `:url` host — which is PHX_HOST. Every page in this
+          #     app is a LiveView, so a PHX_HOST that does not match the real hostname
+          #     403s every socket upgrade and leaves the app completely non-interactive,
+          #     while `GET /` still answers 200 (LiveView static-renders on the dead-render
+          #     pass) and `/health` still answers 200 (origin-free, session-free, outside
+          #     `:browser`). Fly's check polls exactly that route, so the machine reports
+          #     healthy and the deploy succeeds.
+          #   * Curling 127.0.0.1 does not prove the `force_ssl` `paths: ["/health"]`
+          #     exclusion works, because that Host is already covered by the `hosts:`
+          #     exclusion in config/prod.exs. Only a request carrying the deployed
+          #     hostname distinguishes the two.
+          #
+          # This step feeds the container the same value it then asserts against, so it
+          # cannot catch fly.toml's `app` and PHX_HOST drifting apart. That is the job of
+          # test/consensus/deploy_config_test.exs, which fails on a pull request instead
+          # of only here.
+          phx_host="$(sed -n "s/^[[:space:]]*PHX_HOST[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" fly.toml | head -n 1)"
+          if [ -z "$phx_host" ]; then
+            echo "::error::could not read PHX_HOST out of the [env] block in fly.toml"
+            exit 1
+          fi
+          echo "booting with PHX_HOST=${phx_host} (read from fly.toml)"
+
+          docker run -d --name consensus-smoke \
+            --tmpfs /data:rw,mode=0750,uid=65534,gid=0 \
+            -e DATABASE_PATH=/data/consensus.db \
+            -e SECRET_KEY_BASE="$(openssl rand -base64 48)" \
+            -e PHX_HOST="$phx_host" \
+            -e PORT=4000 \
+            -p 4000:4000 \
+            consensus:ci
+
+          # Poll exactly what fly.toml's [[http_service.checks]] polls. It stays 503
+          # until the boot-time migrator has applied every migration.
+          ok=""
+          body=""
+          for i in $(seq 1 60); do
+            body="$(curl -fsS http://127.0.0.1:4000/health 2>/dev/null || true)"
+            if [ "$body" = "ok" ]; then
+              ok=1
+              echo "/health returned 200 ok after ${i}s"
+              break
+            fi
+            sleep 1
+          done
+
+          if [ "$ok" != "1" ]; then
+            echo "::error::/health never returned 200 ok; last body was '${body}'"
+            exit 1
+          fi
+
+          # The same route again, this time carrying the deployed hostname. The poll
+          # above went to Host: 127.0.0.1, which config/prod.exs excludes from force_ssl
+          # by *host* — so it stays 200 even if `paths: ["/health"]` is deleted. Fly's
+          # checker sends the machine's own hostname, not 127.0.0.1, so only this
+          # assertion proves the check can ever go green in production.
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Host: $phx_host" --max-time 5 "http://127.0.0.1:4000/health")"
+          if [ "$code" != "200" ]; then
+            echo "::error::/health answered ${code} under Host: ${phx_host}, expected 200 — force_ssl is redirecting it. Check exclude: [paths: [\"/health\"]] in config/prod.exs."
+            exit 1
+          fi
+          echo "/health answers 200 under the deployed hostname (force_ssl paths: exclusion intact)"
+
+          # And the LiveView socket, which is the entire user-facing surface of this app.
+          # `x-forwarded-proto: https` stands in for Fly Proxy terminating TLS; without it
+          # force_ssl 301s this request too and the assertion would be about the wrong
+          # thing. Verified to discriminate against the release image: 101 when the Origin
+          # matches PHX_HOST, 403 when it does not.
+          #
+          # `|| true` is load-bearing: on a successful upgrade the server keeps the
+          # connection open and curl exits 28 (timed out) once --max-time elapses. It
+          # still writes the -w status first, and without the guard `set -e` would abort
+          # this step silently on the *passing* path.
+          code="$(curl -s -o /dev/null -w '%{http_code}' \
+            -H "Host: $phx_host" -H "Origin: https://$phx_host" -H 'x-forwarded-proto: https' \
+            -H 'Upgrade: websocket' -H 'Connection: Upgrade' \
+            -H 'Sec-WebSocket-Key: dGhlIHNhbXBsZSBub25jZQ==' -H 'Sec-WebSocket-Version: 13' \
+            --max-time 5 "http://127.0.0.1:4000/live/websocket?vsn=2.0.0" || true)"
+          if [ "$code" != "101" ]; then
+            echo "::error::LiveView socket upgrade answered ${code}, expected 101. Phoenix rejected the handshake — a 403 means check_origin refused Origin: https://${phx_host}, i.e. the endpoint :url host and PHX_HOST disagree. Every LiveView in the app would be dead while / and /health still answered 200."
+            exit 1
+          fi
+          echo "LiveView socket upgraded (101) under Origin: https://${phx_host}"
+
+          # 200 means the schema is current. Seeding is a separate child of the
+          # supervision tree, so assert the bootstrap admin separately.
+          rpc_out="$(docker exec consensus-smoke /app/bin/consensus rpc \
+            'IO.puts("ADMIN_COUNT=" <> Integer.to_string(Consensus.Accounts.count_admins()))' 2>&1 || true)"
+          admins="$(printf '%s\n' "$rpc_out" | tr -d '\r' | grep -o 'ADMIN_COUNT=[0-9]*' | cut -d= -f2 || true)"
+
+          if [ "$admins" != "1" ]; then
+            echo "::error::expected exactly one bootstrap admin after first boot, got '${admins}'"
+            printf '%s\n' "$rpc_out"
+            exit 1
+          fi
+          echo "bootstrap admin seeded: count_admins() == 1"
+
+          # A health check that cannot fail proves nothing, and this endpoint used to
+          # answer 200 against a schemaless database. Break the schema, expect 503.
+          docker exec consensus-smoke /app/bin/consensus rpc \
+            'Consensus.Repo.query!("ALTER TABLE users RENAME TO users_gone")' >/dev/null 2>&1
+          code="$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:4000/health)"
+          if [ "$code" != "503" ]; then
+            echo "::error::/health answered ${code} against a database with no users table; it must answer 503"
+            exit 1
+          fi
+          echo "/health correctly reports 503 when the schema is gone"
+
+      # Everything above boots onto an empty /data, and `mix test` starts from an empty
+      # database file — so nothing in this repo has ever migrated a database that already
+      # had rows in it, which is what every deploy after the first one does.
+      #
+      # This boots twice on one real Docker volume. Between the boots it renames the
+      # bootstrap admin (standing in for an operator's first act) and rolls the newest
+      # migration back down, so the second boot has a genuinely pending migration and a
+      # populated `users` table. The second boot must then:
+      #
+      #   * report /health 200 — which it only can if the boot-time `{Ecto.Migrator, ...}`
+      #     child applied the pending migration; the endpoint answers 503 "migrations
+      #     pending" otherwise;
+      #   * still see exactly one admin, still called by its *new* name. `Consensus.Seeds`
+      #     gates on "are there zero admins?" rather than on the bootstrap username
+      #     precisely so a renamed account is not treated as a first boot and quietly
+      #     recreated with the documented default password.
+      #
+      # A fresh named volume inherits /data's `nobody:root` ownership from the Dockerfile,
+      # so `Consensus.BootCheck.run!/0` is exercised the same way the tmpfs run exercises
+      # it. Different published ports because consensus-smoke still holds 4000.
+      #
+      # What this does NOT cover: a migration that has never run anywhere. The pending
+      # migration here is one that already succeeded on the first boot, so a `down` that
+      # is not a faithful inverse of its `up`, or a SQLite `ALTER TABLE` that only fails
+      # against real rows, would still slip through.
+      - name: Boot twice on one volume, migrating a populated database
+        run: |
+          set -euo pipefail
+
+          phx_host="$(sed -n "s/^[[:space:]]*PHX_HOST[[:space:]]*=[[:space:]]*'\([^']*\)'.*/\1/p" fly.toml | head -n 1)"
+          secret="$(openssl rand -base64 48)"
+          marker="renamed-by-the-operator"
+
+          docker volume create consensus-upgrade >/dev/null
+
+          boot() {  # $1 = container name, $2 = published port
+            docker run -d --name "$1" \
+              -v consensus-upgrade:/data \
+              -e DATABASE_PATH=/data/consensus.db \
+              -e SECRET_KEY_BASE="$secret" \
+              -e PHX_HOST="$phx_host" \
+              -e PORT=4000 \
+              -p "$2":4000 \
+              consensus:ci >/dev/null
+
+            for _ in $(seq 1 60); do
+              if [ "$(curl -fsS "http://127.0.0.1:$2/health" 2>/dev/null || true)" = "ok" ]; then
+                return 0
+              fi
+              sleep 1
+            done
+
+            echo "::error::${1} never reported /health 200 ok"
+            docker logs "$1" 2>&1 | tail -50 || true
+            return 1
+          }
+
+          boot consensus-upgrade-1 4001
+          echo "first boot healthy"
+
+          # Rename the seeded admin, then take the machine down cleanly.
+          docker exec consensus-upgrade-1 /app/bin/consensus rpc \
+            "import Ecto.Query
+             {1, _} = Consensus.Repo.update_all(from(u in \"users\", where: u.is_admin == true), set: [username: \"${marker}\"])" \
+            >/dev/null
+          docker stop consensus-upgrade-1 >/dev/null
+          docker rm consensus-upgrade-1 >/dev/null
+
+          # Roll the newest migration back down, so the next boot has real work to do
+          # against a database that already holds the admin row. `eval` runs in a fresh
+          # node without the supervision tree, which is also how an operator would do
+          # this over `fly ssh console`.
+          docker run --rm \
+            -v consensus-upgrade:/data \
+            -e DATABASE_PATH=/data/consensus.db \
+            -e SECRET_KEY_BASE="$secret" \
+            -e PHX_HOST="$phx_host" \
+            -e PORT=4000 \
+            consensus:ci /app/bin/consensus eval \
+            'Application.ensure_all_started(:ssl)
+             Application.ensure_loaded(:consensus)
+             {:ok, _, _} = Ecto.Migrator.with_repo(Consensus.Repo, &Ecto.Migrator.run(&1, :down, step: 1))'
+
+          boot consensus-upgrade-2 4002
+          echo "second boot healthy against the populated volume"
+
+          # /health going green already implies the migrator ran, but assert the log line
+          # too: if the rollback above silently did nothing, the second boot would be
+          # healthy without ever proving anything.
+          if ! docker logs consensus-upgrade-2 2>&1 | grep -q "== Migrated"; then
+            echo "::error::the second boot applied no migration — the rollback did not leave one pending, so this step proved nothing"
+            docker logs consensus-upgrade-2 2>&1 | tail -50 || true
+            exit 1
+          fi
+          echo "the boot-time migrator applied a pending migration to a populated database"
+
+          rpc_out="$(docker exec consensus-upgrade-2 /app/bin/consensus rpc \
+            'admins = Consensus.Accounts.list_admins()
+             IO.puts("ADMIN_COUNT=" <> Integer.to_string(length(admins)))
+             IO.puts("ADMIN_NAME=" <> Enum.map_join(admins, ",", & &1.username))' 2>&1 || true)"
+          rpc_out="$(printf '%s\n' "$rpc_out" | tr -d '\r')"
+          admins="$(printf '%s\n' "$rpc_out" | grep -o 'ADMIN_COUNT=[0-9]*' | cut -d= -f2 || true)"
+          name="$(printf '%s\n' "$rpc_out" | grep -o 'ADMIN_NAME=.*' | cut -d= -f2 || true)"
+
+          if [ "$admins" != "1" ]; then
+            echo "::error::expected exactly one admin after the second boot, got '${admins}' — Consensus.Seeds re-seeded a database that already had an administrator"
+            printf '%s\n' "$rpc_out"
+            exit 1
+          fi
+
+          if [ "$name" != "$marker" ]; then
+            echo "::error::the admin is now '${name}', expected '${marker}' — the second boot did not preserve the existing row (either the volume was not reused, or Consensus.Seeds overwrote it)"
+            printf '%s\n' "$rpc_out"
+            exit 1
+          fi
+          echo "existing admin survived the upgrade untouched: 1 admin, still named '${marker}'"
+
+      - name: Release logs
+        if: always()
+        run: |
+          for c in consensus-smoke consensus-upgrade-1 consensus-upgrade-2; do
+            echo "::group::docker logs ${c}"
+            docker logs "$c" 2>&1 || true
+            echo "::endgroup::"
+          done
+
+      - name: Tear down the smoke-test containers
+        if: always()
+        run: |
+          docker rm -f consensus-smoke consensus-upgrade-1 consensus-upgrade-2 || true
+          docker volume rm consensus-upgrade || true

@@ -1,40 +1,58 @@
-# dependencies
-node_modules/
-.pnp
-.pnp.js
-.yarn/
+# The directory Mix will write compiled artifacts to.
+/_build/
 
-# env — never commit API keys (Places/Yelp/TMDB)
+# If you run "mix test --cover", coverage assets end up here.
+/cover/
+
+# The directory Mix downloads your dependencies sources to.
+/deps/
+
+# Where 3rd-party dependencies like ExDoc output generated docs.
+/doc/
+
+# Ignore .fetch files in case you like to edit your project deps locally.
+/.fetch
+
+# If the VM crashes, it generates a dump, let's ignore it too.
+erl_crash.dump
+
+# Also ignore archive artifacts (built via "mix archive.build").
+*.ez
+
+# Temporary files, for example, from tests.
+/tmp/
+
+# Ignore package tarball (built via "mix hex.build").
+consensus-*.tar
+
+# Ignore assets that are produced by build tools.
+/priv/static/assets/
+
+# Ignore digested assets cache.
+/priv/static/cache_manifest.json
+
+# In case you use Node.js/npm, you want to ignore these.
+npm-debug.log
+/assets/node_modules/
+
+# Database files
+*.db
+*.db-*
+
+
+# Environment — never commit secrets or API keys
 .env
 .env.*
 !.env.example
 
-# build output
-.next/
-out/
-build/
-dist/
-*.tsbuildinfo
-
-# test & coverage
-coverage/
-playwright-report/
-test-results/
-
-# logs
-*.log
-npm-debug.log*
-yarn-error.log*
-pnpm-debug.log*
-
-# hosting
-.vercel/
-
-# editor & os
+# macOS
 .DS_Store
-.idea/
-*.swp
 
-# claude local state
+# Claude Code local state
 .claude/settings.local.json
 .claude/worktrees/
+
+# Elixir language server / editor tooling caches
+/.elixir_ls/
+/.elixir-tools/
+/.lexical/
