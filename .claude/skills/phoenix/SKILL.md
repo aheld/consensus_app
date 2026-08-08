@@ -8,8 +8,17 @@ description: Phoenix 1.8 and LiveView 1.2 conventions for the Consensus app — 
 `mix phx.new consensus --database sqlite3` → `mix phx.gen.auth Accounts User users` →
 `mix phx.gen.release --docker`. Phoenix 1.8.9, phoenix_live_view 1.2.8, Elixir 1.20.3, OTP 29.
 
-A pristine copy of that generator output lives at
-`/private/tmp/claude-501/-Users-aheld-Projects-consensus-app/ae875c1c-a7e9-4615-8dd8-8949816c8f19/scratchpad/reference/consensus`.
+A pristine copy of that generator output is the yardstick for "does Phoenix do X, or did we?" —
+regenerate it into a throwaway directory whenever you need one (it is ~230 MB with deps, which is
+why it is not committed):
+
+```bash
+cd "$(mktemp -d)" && yes | mix phx.new consensus --database sqlite3 >/dev/null \
+  && cd consensus && yes | mix phx.gen.auth Accounts User users >/dev/null \
+  && mix deps.get >/dev/null && mix phx.gen.release --docker >/dev/null && pwd
+```
+
+Never modify it, and never read it to learn *this* app — only to learn what stock ships.
 Diff against it before claiming "Phoenix does X":
 
 ```bash

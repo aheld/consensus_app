@@ -15,7 +15,8 @@ health check, and the CI trigger split). First-time setup is **`TODO.md`** — a
 volume, secrets, first deploy, CD token, verification. Follow it rather than improvising; it
 is not duplicated here.
 
-Platform behaviour is checked against `scratchpad/refs/fly-official.md`, a transcription of
+Platform behaviour is checked against [docs/fly-official-guides.md](../../../docs/fly-official-guides.md),
+a verbatim transcription (fetched 2026-08-07) of
 the official [SQLite3 on Fly](https://fly.io/docs/elixir/advanced-guides/sqlite3/),
 [fly.toml](https://fly.io/docs/reference/configuration/),
 [Volumes](https://fly.io/docs/volumes/overview/),

@@ -20,8 +20,9 @@ Product scope → `docs/PRD.md`, `CLAUDE.md`. Settled technical choices →
 `docs/decisions.md` (append there when you settle one). Deploy → `Dockerfile`,
 `rel/overlays/bin/`, `config/runtime.exs`.
 
-The pristine generator copy at `…/scratchpad/reference/consensus` answers only "what
-does stock Phoenix 1.8.9 ship?" — never read it to learn *this* app, never modify it.
+A pristine generator copy answers only "what does stock Phoenix 1.8.9 ship?" — never read it to
+learn *this* app, never modify it. It is not committed (~230 MB with deps); regenerate one when you
+need it — see the command in `.claude/skills/phoenix/SKILL.md`.
 
 ## Toolchain (verified 2026-08-08 — `elixir --version`, `mix.lock`)
 
