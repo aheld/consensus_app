@@ -21,10 +21,11 @@
     </script>
   </head>
   <body class="bg-canvas text-ink">
-    <%!-- There is no global navigation here on purpose (D-032): every screen draws its own
-          header, because the design gives each one a different one — a wordmark and avatar
-          on home, a back button and progress bar in the wizard, a close button in the option
-          editor. Screens that want an account menu render `Layouts.account_menu/1`. --%>
+    <%!-- The global chrome is not here either — it is `ConsensusWeb.Chrome.header/1` and
+          `footer/1`, rendered by `Layouts.app/1` *inside* the app column (D-041). This
+          skeleton stays the document, nothing more: the chrome has to sit inside the
+          centred 440px column, and a header emitted here would span the whole viewport
+          on a desktop instead. --%>
     {@inner_content}
   </body>
 </html>

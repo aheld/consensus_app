@@ -22,7 +22,7 @@ this paragraph can be deleted.
 
 Read first: [CLAUDE.md](../../CLAUDE.md) engineering invariants 1, 11, 12, 13, 14, 15;
 [docs/decisions.md](../decisions.md) D-029 (group lifecycle), D-030 (link preview),
-D-031 (deadline offsets), D-032 (no navbar), D-033 (`max_cases: 1` +
+D-031 (deadline offsets), D-032 (no navbar — since superseded by D-041, which put a global header and footer on every screen), D-033 (`max_cases: 1` +
 `default_transaction_mode: :immediate`); [docs/design/DESIGN-SPEC.md](../design/DESIGN-SPEC.md).
 
 ## The design frames this builds
@@ -34,12 +34,17 @@ has been re-run and `docs/design/screens/` now holds the complete set.
 | Frame | File | Becomes |
 |---|---|---|
 | `06` recipient's first view | `1a-8-06-recipient-s-first-view.html` | `GET /join/:slug` |
-| ballot — "sticker grid · kept in play" | `1b-4-sticker-grid-kept-in-play.html` | `/join/:slug/vote` |
+| ballot — "sticker grid · kept in play" | `1c-1-sticker-grid-kept-in-play.html` | `/join/:slug/vote` |
 | `05` live results (organizer) | `1a-6-05-live-results-organizer.html` | `/groups/:id/results` |
 | `05b` after anyone votes | `1a-7-05b-same-screen-after-anyone-votes.html` | `/join/:slug/results` |
 
-`1b-3-swipe-deck-kept-in-play.html` is the *alternative* ballot treatment. Build the sticker
-grid (`1b-4`); the swipe deck is not in scope.
+~~`1c-0-swipe-deck-kept-in-play.html` is the *alternative* ballot treatment. Build the sticker
+grid (`1c-1`); the swipe deck is not in scope.~~ **Reversed by D-044** — the deck ships as a
+second *view* of the same ballot, opt-in behind a `Grid` / `Swipe` switch that appears on both,
+with the grid still the default. The reasoning above still holds for *which is the lead*; only
+"not in scope" is dead. (The frames were also renumbered: the deck is `1c-0`, the grid `1c-1`.
+`1b-3` and `1b-4` now name entirely different screens — see the "`1b-4` filename trap" note in
+`docs/design/IMPORT-NOTES.md`.)
 
 `DESIGN-SPEC.md`'s "What matches the design means for a critic" section governs fidelity, and
 its two global caveats still hold: **do not build the `9:41 ▮▮▮` iOS status bar**, and
@@ -199,7 +204,7 @@ Signed-in visitors additionally get a one-line affordance to join **as their acc
 Never *require* it — product invariant 1: voter friction is zero, and a guest must never see
 a signup, a password, or an email field.
 
-**Ballot (`JoinLive.Ballot`)** — the `1b-4` sticker grid. Two-column grid of tappable cards;
+**Ballot (`JoinLive.Ballot`)** — the `1c-1` sticker grid. Two-column grid of tappable cards;
 selected = `--mint` fill + the 21px ink circle `✓` top-right; unselected = white, hover
 `#FFF6DC`. The 38px image strip is `Sticker.photo_frame` (invariant 14: it must degrade to the
 striped placeholder when a third-party image 404s, never error). Footer: the DM Mono
@@ -221,8 +226,12 @@ label, the avatar row (voted = filled + mint ring; waiting = dashed + `--faint`)
 tally with violet bars, the `VETOED` treatment, and the anonymity caption.
 
 Footer differs by viewer: organizer gets **Nudge N friends** + **Close now**
-(`Activities.complete_group/2`); a participant gets the "Your ranking is in" mint confirmation
-card, the muted "Only <Organizer> can nudge or close early" notice, and — per D-036 — a locked
+(`Activities.complete_group/2`); a participant gets the "Your votes are in." mint confirmation
+card (this plan said "Your ranking is in"; D-045 corrected the string, because nothing in this
+app ranks anything), a footer enumerated over every {status} × {participation} cell rather than
+the muted "Only <Organizer> can nudge or close early" notice this plan called for (D-045 deleted
+that sentence: there is no nudge path in `lib/`, and it rendered on `:completed` groups too,
+telling a voter the organizer could "close early" a vote that had already closed), and — per D-036 — a locked
 state where the mockup drew "Change my ranking".
 
 Completed group ⇒ the winner is announced with the booking/paste-back CTA that product

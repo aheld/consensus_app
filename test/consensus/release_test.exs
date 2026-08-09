@@ -73,12 +73,14 @@ defmodule Consensus.ReleaseTest do
 
       assert {:ok, [^last], _} = Consensus.Release.rollback(TmpRepo, last)
 
-      # The newest migration creates the voting tables, so reversing exactly that one
-      # has to take them away — which is also the only assertion that its `down/0`
-      # runs — while leaving everything an earlier migration created in place.
+      # The newest migration creates the `feedback` table (D-042), so reversing exactly
+      # that one has to take it away — which is also the only assertion that its
+      # `down/0` runs — while leaving everything an earlier migration created in place,
+      # including the voting tables the migration before it added.
       tables = tables(database)
-      refute "participants" in tables
-      refute "votes" in tables
+      refute "feedback" in tables
+      assert "participants" in tables
+      assert "votes" in tables
       assert "activity_groups" in tables
       assert "activities" in tables
       assert "users" in tables

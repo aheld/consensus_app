@@ -103,8 +103,13 @@ hour off in a `phx-no-connect` render, which is acceptable and self-corrects on 
 
 1. **`/` is one route with two faces.** Signed out renders `00a`; signed in renders `00`.
    A bookmark must not 404 after logging out, and the design treats them as one place.
-2. **No global navigation bar.** Each screen draws its own header, because the design's
-   headers differ per screen. `Layouts.app/1` is canvas, column and flash only.
+2. **No global navigation bar.** ~~Each screen draws its own header, because the design's
+   headers differ per screen. `Layouts.app/1` is canvas, column and flash only.~~
+   **Reversed by D-041** (`docs/plans/chrome-and-feedback.md`, piece P1): `Layouts.app/1` now
+   renders `ConsensusWeb.Chrome.header/1` and `footer/1` on every screen, and the wizard's
+   back chevron moved out of `Sticker.step_progress/1` and into that header. The headers *do*
+   still differ per screen — that is now the `context`/`variant`/`back` attributes and the row
+   each screen draws below the chrome, not a header of its own.
 3. **A group is created as a `:draft` on step 1** and edited in place through steps 2 and 3.
    That is what makes "never re-enter anything" true: leaving the browser mid-wizard and
    coming back lands on the same draft with its options intact. The home screen lists drafts

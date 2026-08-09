@@ -12,7 +12,13 @@ body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-se
 <div style="display:flex;flex-direction:column;gap:8px">
 <div style="width:340px;height:700px;background:#F7FBF8;border:2px solid #17211C;border-radius:34px;box-shadow:6px 6px 0 #17211C;overflow:hidden;display:flex;flex-direction:column">
   <div style="display:flex;justify-content:space-between;align-items:center;padding:12px 22px 4px;font:500 11px 'DM Mono',monospace"><span>9:41</span><span style="letter-spacing:.14em">▮▮▮</span></div>
-  <div style="padding:12px 20px 16px;background:#6B46F0;border-bottom:2px solid #17211C;color:#fff;display:flex;flex-direction:column;gap:6px">
+  <div style="flex:none;display:flex;align-items:center;gap:9px;padding:6px 13px 8px;border-bottom:2px solid #17211C;background:#fff">
+    <div style="width:29px;height:29px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:600 15px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">‹</div>
+    <a href="#1b" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:#17211C"><img src="./icon.svg" width="19" height="19" alt=""><span style="font:700 13px 'Instrument Sans',sans-serif">Consensus</span></a>
+    <span style="flex:1;text-align:right;font:500 10.5px 'DM Mono',monospace;color:#5E6D64;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">LIVE SESSION</span>
+    <div style="width:29px;height:29px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:700 13px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">⋯</div>
+  </div>
+  <div style="flex:none;padding:11px 20px 13px;background:#6B46F0;border-bottom:2px solid #17211C;color:#fff;display:flex;flex-direction:column;gap:5px">
     <div style="display:flex;justify-content:space-between;align-items:baseline"><span style="font:600 12px 'Instrument Sans',sans-serif;opacity:.85">Dinner Friday?</span><span style="font:500 10.5px 'DM Mono',monospace;opacity:.8">LIVE</span></div>
     <div style="font:500 34px/1 'DM Mono',monospace;letter-spacing:-.02em">{{ countdown }}</div>
     <div style="font:400 12px 'Instrument Sans',sans-serif;opacity:.85">until votes close</div>
@@ -51,6 +57,18 @@ body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-se
   <div style="padding:12px 20px 20px;display:flex;gap:9px">
     <div style="flex:1;background:#fff;border:2px solid #17211C;border-radius:15px;padding:14px;text-align:center;font:700 14px 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">Nudge 3 friends</div>
     <div style="border:2px solid #17211C;border-radius:15px;padding:14px 16px;font:600 14px 'Instrument Sans',sans-serif;color:#3B4A42;cursor:pointer" style-hover="background:#fff">Close now</div>
+  </div>
+  <div style="position:relative;flex:none;border-top:2px solid #17211C;background:#F7FBF8;padding:7px 14px 9px;display:flex;flex-direction:column;align-items:center;gap:2px">
+    <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px">
+      <span style="font:600 10.5px 'Instrument Sans',sans-serif;color:#3B4A42">How's this going?</span>
+      <div title="Good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#B9EFC9;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 14.6c1 1.2 2.4 1.8 4 1.8s3-.6 4-1.8"/></svg></div>
+      <div title="Not good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#FFC2A3;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 16.4c1-1.2 2.4-1.8 4-1.8s3 .6 4 1.8"/></svg></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font:600 10.5px 'Instrument Sans',sans-serif">
+      <a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">About us</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">How it works</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">Privacy</a>
+    </div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center"><a href="https://marketfinder.us" style="color:#6B46F0;text-decoration:none" style-hover="color:#FF6A2B">also check out marketfinder.us</a></div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">Made with ❤️ in Philadelphia</div>
   </div>
 </div>
 <div style="font:500 10.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">05 · live results (organizer)</div>

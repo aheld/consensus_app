@@ -27,9 +27,30 @@ defmodule ConsensusWeb.CoreComponents do
   @doc """
   Renders flash notices.
 
-  A fixed, top-centred sticker card: mint for `:info`, tangerine for `:error`. Must keep
+  A sticker card in the normal flow: mint for `:info`, tangerine for `:error`. Must keep
   working with `Layouts.flash_group/1`, which passes `id`, `kind`, `title`, `flash` and the
   `phx-disconnected`/`phx-connected`/`hidden` attributes used for the connection-error flashes.
+
+  **It is not `fixed`, and must not go back to being `fixed`.** It shipped as
+  `fixed left-1/2 top-4 z-50`, which landed squarely on the 48px `sticky` header D-041
+  added — covering the `‹` and the `⋯` and swallowing their clicks. Moving it to
+  `top-[56px]` cleared the header and then landed on the *next* thing on the page: measured,
+  it hid the `<h1>` outright on `/` signed in ("Your sessions"), on `/users/log-in`
+  ("Log in") and on `/admin/users` ("Users"), and cut the wizard's progress bar in half on
+  `/groups/:id/options`. A flash is shown on precisely the screen someone lands on right
+  after acting, so the screen whose title it hides is the screen whose title matters most.
+  There is no safe hard-coded `top`: every screen puts something different first.
+
+  A second, quieter failure came with `left-1/2 -translate-x-1/2`, which centres on the
+  **initial containing block**, not the viewport. On `/admin/users` a wide table inside an
+  `overflow-x-auto` box grew `documentElement.scrollWidth` to 648px in a 420px viewport, so
+  the card rendered at x=132 with its dismiss ✕ off-screen and untappable.
+
+  Both are gone by construction now: `Layouts.app/1` renders `flash_group/1` **inside** the
+  centred column, directly under the header, so a flash pushes the page down by its own
+  height and is bounded by the column. The margins live here (`mx-4 mt-2`) rather than on the
+  group, because the two connection-error flashes are always present in the DOM and merely
+  `hidden` — padding on the container would reserve their space on every screen forever.
 
   ## Examples
 
@@ -61,7 +82,7 @@ defmodule ConsensusWeb.CoreComponents do
       phx-click={JS.push("lv:clear-flash", value: %{key: @kind}) |> hide("##{@id}")}
       role="alert"
       class={[
-        "fixed left-1/2 top-4 z-50 w-[calc(100%-2rem)] max-w-sm -translate-x-1/2",
+        "mx-4 mt-2 cursor-pointer",
         "flex items-start gap-3 rounded-2xl border-2 border-ink p-4 shadow-sticker-3",
         @kind == :info && "bg-mint text-ink",
         @kind == :error && "bg-tangerine text-white"
@@ -316,7 +337,19 @@ defmodule ConsensusWeb.CoreComponents do
           class={
             [
               # `class` is appended, not substituted — see the note on `button/1`.
-              "min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-4 py-3.5 text-[13.5px] font-normal leading-[1.45] shadow-field",
+              # **16px, and it must not go back down.** iOS Safari zooms the whole page
+              # whenever a focused field's computed `font-size` is under 16px, and it does
+              # not zoom back out — so on an iPhone the name and email fields on `/feedback`
+              # (16px, via the text clause below) behaved and then the one multi-line field
+              # the screen exists to collect threw the layout. This clause is the shared
+              # textarea primitive, so it was every textarea in the app: the option
+              # description on `02b` and `entry_message` on `/feedback`.
+              #
+              # IMPORT-NOTES §6.3 pins `400 13.5px/1.45` here. A static mockup measured in a
+              # design tool is not evidence about focus zoom on a phone, and this is a
+              # phone-first app whose frames were never opened on one. The deviation is
+              # recorded in `docs/design/DESIGN-SPEC.md` under `00c` and in D-046.
+              "min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-4 py-3.5 text-[16px] font-normal leading-[1.45] shadow-field",
               @class,
               @errors != [] && (@error_class || "border-tangerine")
             ]
@@ -579,5 +612,113 @@ defmodule ConsensusWeb.CoreComponents do
   """
   def translate_errors(errors, field) when is_list(errors) do
     for {^field, {msg, opts}} <- errors, do: translate_error({msg, opts})
+  end
+
+  # `/dev/mailbox` is mounted by `Application.compile_env(:consensus, :dev_routes)` in
+  # `ConsensusWeb.Router`, so that is the only correct gate on a *link* to it — gating on
+  # the mailer adapter alone can render a link to a route that does not exist. The adapter
+  # check is the second half of the same question: the route existing is not the same as
+  # mail actually landing there. Both, at compile time and at run time respectively.
+  @dev_routes? Application.compile_env(:consensus, :dev_routes, false)
+
+  @doc """
+  True only where a developer can actually open the sent mail: `/dev/mailbox` is routed
+  **and** the mailer is the local preview adapter. See `check_your_email/1`.
+  """
+  def dev_mailbox?,
+    do:
+      @dev_routes? and
+        Application.get_env(:consensus, Consensus.Mailer)[:adapter] == Swoosh.Adapters.Local
+
+  @doc """
+  The full-page **"we sent you something, now go and look"** screen (D-045).
+
+  Three flows in this app end with the user's next real action being *off-site*: opening
+  their inbox. All three used to `put_flash` — a transient strip over a screen that still
+  looked exactly like the one just acted on — which reads as "nothing happened". This is
+  the shape all three now share, and it is deliberately a *state of the LiveView that
+  produced it*, never its own route: a `/check-your-email` URL is a page a reader can
+  bookmark and return to out of context, asserting a send that never happened.
+
+  It answers four questions in a fixed order, because omitting any one of them is what put
+  the user back on the "sit and wait" path:
+
+    1. **what happened** — the `heading`;
+    2. **which address it went to** — `address`, rendered in mono and `break-all`, because
+       the single most common failure here is a typo the sender cannot see in a form they
+       have already left;
+    3. **what to do next** — the `lede` slot;
+    4. **what to do if it does not arrive** — the `fallback` slot and the `actions` slot.
+       This is not padding. Without it the screen is still a dead end, just a prettier
+       one: the user has nothing to do but wait indefinitely.
+
+  In development it also points at `/dev/mailbox`, gated by `dev_mailbox?/0` **and** by
+  `sent?`. A caller that reaches this screen having sent nothing — `settings.ex` does,
+  when its per-mount send budget refuses the submit — passes `sent?={false}`, and the dev
+  card goes with the rest of the claims: "The message is waiting in the local mailbox" is
+  exactly as false as "check the spam folder" when no message was ever created. The lede,
+  the fallback and the actions are slots and are the caller's to branch; this one line is
+  the component's own, so it needs the flag.
+
+  ## Examples
+
+      <.check_your_email id="magic-link-sent" heading="Check your email" address={@sent_to}>
+        <:lede>…</:lede>
+        <:fallback>…</:fallback>
+        <:actions>…</:actions>
+      </.check_your_email>
+  """
+  attr :id, :string, required: true
+  attr :heading, :string, required: true
+  attr :address, :string, required: true
+
+  attr :sent?, :boolean,
+    default: true,
+    doc: "false when this screen was reached without mailing anything — see the moduledoc"
+
+  slot :lede, required: true, doc: "what happens next, in the reader's terms"
+  slot :fallback, required: true, doc: "what it means if nothing arrives"
+  slot :actions, required: true, doc: "the real controls — at least a resend and a way back"
+
+  def check_your_email(assigns) do
+    ~H"""
+    <div id={@id} class="mx-auto flex w-full max-w-sm flex-1 flex-col gap-5 px-6 pb-10 pt-8">
+      <span
+        class="grid size-11 shrink-0 place-items-center rounded-full border-2 border-ink bg-mint shadow-sticker-2"
+        aria-hidden="true"
+      >
+        <.icon name="hero-envelope" class="size-5 text-ink" />
+      </span>
+
+      <div class="flex flex-col gap-2">
+        <h1 class="text-[27px] font-bold leading-[1.08] tracking-[-0.025em]">{@heading}</h1>
+        <p class="text-[14.5px] leading-[1.45] text-ink-soft">{render_slot(@lede)}</p>
+        <p class="break-all font-mono text-[12.5px] font-medium text-ink">{@address}</p>
+      </div>
+
+      <div class="rounded-2xl border-2 border-ink-30 bg-white/65 p-3.5 text-[12.5px] leading-[1.5] text-ink-soft">
+        {render_slot(@fallback)}
+      </div>
+
+      <div
+        :if={dev_mailbox?() and @sent?}
+        class="flex items-start gap-3 rounded-2xl border-2 border-ink bg-violet-tint p-3.5 shadow-sticker-2"
+      >
+        <.icon name="hero-wrench-screwdriver" class="size-4 shrink-0 text-violet" />
+        <%!-- The link body is on one line on purpose: broken across lines, the anchor's
+              text node carries the surrounding whitespace, the underline runs past the
+              word and the screen reads "the local mailbox ." — the whitespace-significant
+              string trap CLAUDE.md invariant 11 / D-026 already documents. --%>
+        <p class="text-[12px] leading-[1.4] text-ink">
+          Development build — nothing is really sent. The message is waiting in <.link
+            href="/dev/mailbox"
+            class="font-semibold underline decoration-2 underline-offset-2"
+          >the local mailbox</.link>.
+        </p>
+      </div>
+
+      <div class="flex flex-col gap-3 pt-1">{render_slot(@actions)}</div>
+    </div>
+    """
   end
 end

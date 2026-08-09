@@ -14,7 +14,7 @@ defmodule ConsensusWeb.HomeLiveTest do
       assert html =~ "Decide"
 
       assert lv
-             |> element(~s|a[href="#{~p"/users/register"}"]|, "Get started")
+             |> element(~s|a[href="#{~p"/users/register"}"]|, "Start something")
              |> has_element?()
     end
   end
@@ -103,6 +103,25 @@ defmodule ConsensusWeb.HomeLiveTest do
       # `live/2` call above would have returned a different view or this render would 404.
       assert render(lv) =~ "Renamed plan"
       refute render(lv) =~ "Original title"
+    end
+
+    test "survives the voting broadcasts that share the group's topic", %{
+      conn: conn,
+      scope: scope
+    } do
+      # `Consensus.Voting` publishes on `Activities.topic/1`, the same topic this screen
+      # subscribes to, so an organizer sitting on `/` receives every join and every
+      # ballot on their live groups. Before this test the LiveView had no matching
+      # `handle_info/2` head and terminated with a `FunctionClauseError` the moment
+      # anybody voted — observed in a browser, invisible to the suite.
+      group = group_fixture(scope, %{title: "Broadcast target"})
+
+      {:ok, lv, _html} = live(conn, ~p"/")
+
+      for message <- [{:participant_joined, group.id}, {:ballot_cast, group.id}] do
+        Phoenix.PubSub.broadcast(Consensus.PubSub, Activities.topic(group.id), message)
+        assert render(lv) =~ "Broadcast target"
+      end
     end
   end
 end

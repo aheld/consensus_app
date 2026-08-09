@@ -42,6 +42,16 @@ defmodule ConsensusWeb.Router do
       on_mount: [{ConsensusWeb.UserAuth, :require_admin}] do
       live "/", AdminLive.Users, :index
       live "/users", AdminLive.Users, :index
+
+      # The triage queue for what `ConsensusWeb.Chrome.footer/1`'s two faces collect
+      # (D-043). Inside the admin scope above and the existing
+      # `live_session :require_admin` — a live_session name is declared once — so it
+      # inherits both guards without restating either.
+      #
+      # (Do not write the scope's own path literal in this comment: `router_test.exs`
+      # finds the admin scopes by scanning this file for it, and a mention in a comment
+      # is indistinguishable from a scope that pipes through nothing.)
+      live "/feedback", AdminLive.Feedback, :index
     end
   end
 
@@ -49,6 +59,15 @@ defmodule ConsensusWeb.Router do
   # the generated comment recommends doing instead of leaving it on :dev_routes.
   # `live_dashboard/2` declares its own live_session, so it cannot be nested in the
   # one above — it takes the same on_mount hook directly.
+  #
+  # It is also the one route in this app that does **not** wear the global chrome
+  # (D-041): it declares its own layout as well as its own live_session, so
+  # `Layouts.app/1` never runs for it and there is no way to wrap it short of forking a
+  # third-party LiveView. That is accepted rather than worked around. LiveDashboard has
+  # no "back to your app" affordance to configure — `home_app:` only labels the app on
+  # its own home page, verified in a browser — and nothing in `lib/` links here anyway:
+  # the route is reachable only by typing the URL, and the way out is the browser's own
+  # back button. Read "every screen" in D-041 as "every screen this app renders".
   scope "/admin" do
     pipe_through [:browser, :require_authenticated_user, :require_admin_user]
 
@@ -146,6 +165,19 @@ defmodule ConsensusWeb.Router do
       live "/users/register", UserLive.Registration, :new
       live "/users/log-in", UserLive.Login, :new
       live "/users/log-in/:token", UserLive.Confirmation, :new
+
+      # The standing pages the global footer links to (D-041). They live here, in
+      # `:current_user`, because every one of them must render for a signed-out
+      # visitor *and* pick up `@current_scope` when there is one — the footer is on
+      # every screen in the app, so these are reachable from the splash, from the
+      # wizard, and from a guest's ballot alike. A footer link that 404s is the exact
+      # dead end this work exists to remove.
+      live "/how-it-works", HowItWorksLive, :show
+      live "/about", AboutLive, :show
+      live "/privacy", PrivacyLive, :show
+
+      # Where the footer's two faces land, carrying `?mood=happy` / `?mood=sad`.
+      live "/feedback", FeedbackLive, :new
     end
 
     post "/users/log-in", UserSessionController, :create

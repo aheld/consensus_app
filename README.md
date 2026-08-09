@@ -151,7 +151,7 @@ tests). `mix ecto.reset` drops and rebuilds it.
 
 ### What you can do in the app right now
 
-1. Open `/` signed out — the splash screen, with **Get started** going to `/users/register`.
+1. Open `/` signed out — the splash screen, with **Start something** going to `/users/register`.
 2. Register (username + email + password). You are signed in immediately; no email round trip
    is required.
 3. `/` now shows your (empty) list of groups and a **Start something** button.
@@ -186,7 +186,7 @@ honestly as `:no_consensus` rather than crowning something the group struck out 
 
 | Route | What it is |
 |---|---|
-| `/` | One route, two faces ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)). Signed out: the public splash, with **Get started** → registration. Signed in: the organizer's list of activity groups — `ACTIVE` (drafts and groups still voting, with a live countdown) and `PAST` (completed/cancelled). Real-time: subscribes to every active group's PubSub topic, so an edit from another tab (or, once voting exists, another participant) updates the list without a refresh. |
+| `/` | One route, two faces ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)). Signed out: the public splash, with **Start something** → registration. Signed in: the organizer's list of activity groups — `ACTIVE` (drafts and groups still voting, with a live countdown) and `PAST` (completed/cancelled). Real-time: subscribes to every active group's PubSub topic, so an edit from another tab (or, once voting exists, another participant) updates the list without a refresh. |
 | `/users/register` | Sign-up: **username + email + password**. Creates the account and signs it in immediately. |
 | `/users/log-in` | Two forms on one page: password log-in (the identifier field accepts **either** the username or the email), and magic-link log-in by email. |
 | `/users/log-in/:token` | Magic link landing page. Always usable. When an unconfirmed account already holds a password, the page warns **before** the button is pressed that confirming here will remove that password, then confirms and signs you in (see the recovery section below). |
@@ -196,13 +196,18 @@ honestly as `:no_consensus` rather than crowning something the group struck out 
 | `/groups/:id/options`, `/groups/:id/options/:activity_id` | Wizard step 2 — the option pool, and the full-screen editor for one option. A pasted link is fetched server-side, asynchronously; a typed name is not. See [`GroupLive.Options`](lib/consensus_web/live/group_live/options.ex). |
 | `/groups/:id/review` | Wizard step 3 — reorder, toggle anonymous voting, publish (`:draft` → `:voting`) or cancel. See [`GroupLive.Review`](lib/consensus_web/live/group_live/review.ex). |
 | `/groups/:id/share` | The share link, shown after publishing. See [`GroupLive.Share`](lib/consensus_web/live/group_live/share.ex). |
-| `/groups/:id/results` | The organizer's live results (design frame `05`): a violet countdown, the voted/waiting avatar row, the running tally with veto elimination and a tangerine star on the leader, plus **Nudge** and **Close now**. Updates over PubSub as ballots land. See [`GroupLive.Results`](lib/consensus_web/live/group_live/results.ex). |
+| `/groups/:id/results` | The organizer's live results (design frame `05`): a violet countdown, the voted/waiting avatar row, the running tally with veto elimination and a violet star on whoever is ahead — on all of them, captioned `TIED FOR THE LEAD`, when the top count is shared (D-047) — plus **Close now** and a **Nudge** that is not built and says so (`disabled`, captioned `Soon`, and rendered only while somebody has still to vote). Updates over PubSub as ballots land. See [`GroupLive.Results`](lib/consensus_web/live/group_live/results.ex). |
 | `/join/:slug` | **The recipient's front door** (frame `06`), public and account-free. Name, `skip →` for anonymous, or — if you happen to be signed in — *Continue as \<username\>*. See [`JoinLive.Entry`](lib/consensus_web/live/join_live/entry.ex). |
 | `/join/:slug/enter` | `POST`. The one path that mints a participant. A **controller**, not a LiveView, because a LiveView cannot write a session cookie — and the guest's identity is a signed token in that cookie, keyed by group. See [`JoinController`](lib/consensus_web/controllers/join_controller.ex). |
-| `/join/:slug/vote` | The sticker-grid ballot: approval voting ("tap all you'd be happy with") plus at most one veto. Once cast, **the ballot is locked** (D-036) — returning here redirects to results, because the lock is a route-level fact rather than a disabled button. See [`JoinLive.Ballot`](lib/consensus_web/live/join_live/ballot.ex). |
-| `/join/:slug/results` | The participant's view of the same live tally (frame `05b`), with the "Your ranking is in" confirmation. Deliberately has no "Change my ranking" button — see D-036. See [`JoinLive.Results`](lib/consensus_web/live/join_live/results.ex). |
+| `/join/:slug/vote` | The ballot: approval voting ("tap all you'd be happy with") plus at most one veto. Once cast, **the ballot is locked** (D-036) — returning here redirects to results, because the lock is a route-level fact rather than a disabled button. Two views of the same ballot — the sticker grid (default) and a swipe deck, switched from either, sharing one `Voting.cast_ballot/3` write (D-044). See [`JoinLive.Ballot`](lib/consensus_web/live/join_live/ballot.ex). |
+| `/join/:slug/results` | The participant's view of the same live tally (frame `05b`), with the "Your votes are in." confirmation (it said "Your ranking is in" until D-045 — nothing in this app ranks anything). Deliberately has no "Change my ranking" button — see D-036. Its footer covers every {status} × {participation} cell — ten of them, since D-046 split `{:completed, :stranger}` on whether this mount watched the deadline pass — so a latecomer who opens the link after voting closed still gets an exit, and someone who was already reading the tally when it closed is not told they arrived too late. See [`JoinLive.Results`](lib/consensus_web/live/join_live/results.ex). |
+| `/about` | What Consensus is and who built it ([`ConsensusWeb.AboutLive`](lib/consensus_web/live/about_live.ex)). One of the three standing pages the global footer links to (D-041), so it is reachable from the footer of every screen **except the `/join` tree**, where the footer is stripped to its two credit lines so nothing there can discard a guest's unsent ballot. Its `‹` follows the `?return_to=` the footer handed it and falls back to `/`. |
+| `/how-it-works` | The five-step walkthrough of a session, from design frame `00b` ([`ConsensusWeb.HowItWorksLive`](lib/consensus_web/live/how_it_works_live.ex)), ending in a **Start something** call to action that goes to `/groups/new` signed in and `/users/register` signed out. Deliberately does **not** say friends can add options once voting opens — the pool freezes then (D-037), and plan ruling 5 makes writing true copy here a requirement rather than a preference. |
+| `/privacy` | What this app stores and what it does not ([`ConsensusWeb.PrivacyLive`](lib/consensus_web/live/privacy_live.ex)): an email and username for organizers, a display name for participants (optional — a guest may vote anonymously), and **no screen, export or admin page that can report who picked what** — `Voting.tally/1` returns totals only and the context exposes no attribution function (D-035). Note the precise claim, because the page makes it precisely: this is a property of the code, not of the schema. `Consensus.Voting.Vote` does `belongs_to :participant` and a participant may carry a `display_name`, so one hand-written join in `iex` would answer the question; what does not exist is any code path, any screen or any operator tool that asks it. |
+| `/feedback` | The form the two faces in the global footer open ([`ConsensusWeb.FeedbackLive`](lib/consensus_web/live/feedback_live.ex)), design frame `00c`, pre-set by `?mood=happy` or `?mood=sad` and changeable on the page. Public — no account, from any screen that carries the footer, which is everything except the `/join` tree — and it writes: `Consensus.Feedback.submit/2` stores the message, the mood, an optional name and email, `user_id` whenever the sender is signed in (the form says so, because a signed-in sender cannot decline it), and the screen you were on **only** while the default-on box stays ticked (D-042). Sending replaces the form with a full-page thank-you rather than flashing over it, and `push_patch`es to `?sent=1` so a reload or a Back does not silently drop the sender onto an empty form, and it carries the same `?return_to=` as the standing pages, so sending from step 2 of the wizard returns you to step 2. |
 | `/admin`, `/admin/users` | Admin → Users ([`AdminLive.Users`](lib/consensus_web/live/admin_live/users.ex)). Lists every account; **Promote**, **Demote** and **Delete**. Refuses to demote the last admin (`{:error, :last_admin}`); both demotion and deletion disconnect that user's live sessions, and **deleting a non-admin now cascades to every activity group they organize** (see *Architecture* below). All three actions need **sudo mode** (a log-in within the last 20 minutes): out of it, the page shows a `#sudo-notice` banner and greys the buttons, and `Consensus.Accounts` refuses regardless of what the client sends. Renders the default-password banner. |
-| `/admin/dashboard` | Phoenix LiveDashboard. Mounted in **every** environment, admin-only — not left on `:dev_routes`. |
+| `/admin/feedback` | Admin → Feedback ([`AdminLive.Feedback`](lib/consensus_web/live/admin_live/feedback.ex)). The triage queue for everything `/feedback` collects, newest first, unread rows on yellow. **Mark read** is reversible from the same button, and each row carries a private admin note. Neither write is sudo-gated and neither notifies anyone — the screen says so (D-043). An unsaved admin note is never destroyed by another action on the page: only the row an event actually wrote is reseeded from the database. There is no delete on the queue; clearing a spam run is `sqlite3` by hand (D-042). In the same `scope "/admin"` and the same `live_session :require_admin` as Users, so it carries both guards. |
+| `/admin/dashboard` | Phoenix LiveDashboard. Mounted in **every** environment, admin-only — not left on `:dev_routes`. **It is the one route with no Consensus header or footer, and no link back into the app** — it is a third-party LiveView with its own `live_session` and its own layout, so `Layouts.app/1` never runs for it (D-041). Use the browser's back button to leave. |
 | `/dev/mailbox` | Swoosh mailbox preview. Development only, gated on `Application.compile_env(:consensus, :dev_routes)`. |
 | `/health` | Readiness probe for Fly's health checker ([`HealthController`](lib/consensus_web/controllers/health_controller.ex)). Outside the `:browser` pipeline — no session, CSRF or layout — and excluded from `force_ssl`. `200 ok` only when no migration is pending *and* the `users` table is readable; otherwise `503`. See *Deployment*. |
 
@@ -218,7 +223,7 @@ honestly as `:no_consensus` rather than crowning something the group struck out 
   registration, and the admin role. Notable functions: `get_user_by_login/1` (dispatches on the
   presence of `@` to email or username lookup), `get_user_by_login_and_password/2`,
   `create_user/2` (the seeding path — accepts `:is_admin` and `:confirmed_at`, which
-  `register_user/1` deliberately does not), and `get_user/1`, which returns `nil` for anything
+  `register_user/2` deliberately does not), and `get_user/1`, which returns `nil` for anything
   outside a valid 64-bit row id rather than handing exqlite an integer it raises on.
 
   Both of the destructive ones take the **actor's** scope as their first argument, re-read
@@ -297,13 +302,19 @@ Everything else is a LiveView. Phoenix 1.8 scopes are used
 throughout: `@current_scope` holds a [`Consensus.Accounts.Scope`](lib/consensus/accounts/scope.ex),
 never a bare `current_user`.
 
-**There is no global navigation bar.** `ConsensusWeb.Layouts.app/1` is the canvas, a centred
-column and the flash group — nothing else. Every screen draws its own header (the home screen's
-wordmark and avatar, the wizard's back button and progress bar, the option editor's close
-button), because the design gives each one different content and a shared bar would either
-duplicate an affordance or crowd a header that has no room to spare on a 390px phone. The
-account menu (`Layouts.account_menu/1`) is a `<details>` element rather than a JS dropdown, so
-it works before the LiveView socket connects. See D-032. Styling is a hand-rolled Tailwind v4
+**Every screen wears a global header and footer.** `ConsensusWeb.Layouts.app/1` is the canvas, a
+centred column, the flash group **and** `ConsensusWeb.Chrome.header/1` / `Chrome.footer/1` around
+the screen's content — a screen contributes only `back` (its one back affordance, or `back_patch`
+when back lands in the same LiveView), `context` (the header's right-hand `STEP 2 OF 3` /
+`LIVE SESSION` / `ADMIN` slot, for state and never for the page's own name), `variant` and
+`current_path`. The header is `sticky top-0`, because it is now the only way back on every screen;
+its `⋯` account menu is a `<details>` element rather than a JS dropdown, so it works before the
+LiveView socket connects. The footer carries the two feedback faces and links to `/about`,
+`/how-it-works` and `/privacy` — except on the `/join` tree, where it is stripped to its two credit
+lines and the wordmark goes inert, because a guest's ballot lives in socket assigns until it is
+sent and every link off that screen throws it away. See D-041, which supersedes D-032 — that entry's reasoning (each
+screen's header content genuinely differs) is still why the global header *coexists* with the
+wizard's progress bar rather than replacing it. Styling is a hand-rolled Tailwind v4
 `@theme` token system rather than daisyUI — see
 [.claude/skills/design-system/SKILL.md](.claude/skills/design-system/SKILL.md) and D-028; there
 is no dark theme.
@@ -558,7 +569,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 606 tests, 0 failures (~15-25s warm)
+mix test                        # 944 tests, 0 failures (~7s warm) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
@@ -741,7 +752,7 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 ├── config/                      # config, dev, test, prod, runtime
 ├── docs/
 │   ├── PRD.md                   # product north star (voting, ranking, results are not built)
-│   ├── decisions.md             # ADR-lite technical log, D-001 through D-033
+│   ├── decisions.md             # ADR-lite technical log, D-001 through D-046
 │   ├── open-questions.md
 │   ├── design/                  # DESIGN-SPEC.md (visual source of truth) + per-screen extracts
 │   ├── plans/                   # per-feature implementation plans, incl. creation-flow.md
@@ -755,13 +766,17 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │   │   ├── link_preview/        # cache.ex, fetcher.ex
 │   │   └── boot_check.ex        # DATABASE_PATH/volume preflight, run before Consensus.Repo
 │   └── consensus_web/
-│       ├── components/          # core_components.ex, layouts.ex (no navbar — see
-│       │                        #   Architecture), sticker.ex, layouts/root.html.heex
+│       ├── components/          # core_components.ex, layouts.ex (canvas + column + flash +
+│       │                        #   the global chrome — see Architecture), chrome.ex (the
+│       │                        #   global header/footer, D-041), sticker.ex,
+│       │                        #   results_components.ex, layouts/root.html.heex
 │       ├── controllers/         # user_session_controller.ex, health_controller.ex,
-│       │                        #   error_html/json
+│       │                        #   join_controller.ex, error_html/json
 │       ├── live/                # home_live.ex, admin_live/ (users.ex only — the home-page
 │       │                        #   editor was deleted), group_live/ (the creation wizard),
-│       │                        #   user_live/
+│       │                        #   join_live/ (the voting loop), user_live/,
+│       │                        #   about_live.ex / how_it_works_live.ex / privacy_live.ex /
+│       │                        #   feedback_live.ex (the footer's standing pages)
 │       ├── router.ex
 │       └── user_auth.ex         # plugs + on_mount hooks; all authorization lives here
 ├── priv/repo/
@@ -773,7 +788,7 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │                                #   migrate, plus their .bat pairs. migrate is generator
 │                                #   output and is NOT in the deploy path — migrations run
 │                                #   from the supervision tree; see Deployment.
-└── test/                        # 606 tests; mirrors lib/, plus support/ (ConnCase, DataCase,
+└── test/                        # mirrors lib/, plus support/ (ConnCase, DataCase,
                                  #   fixtures, link_preview_stub.ex), journey_test.exs (the one
                                  #   end-to-end acceptance test), and deploy_config_test.exs,
                                  #   which reads fly.toml as text

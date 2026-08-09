@@ -618,8 +618,10 @@ fly apps open --app <FLY_APP_NAME>
 ```
 
   You should get the Consensus splash screen at `https://<FLY_APP_NAME>.fly.dev/` — signed
-  out, so **Get started** and "Have a link? Open it →". There is no admin-editable message on
-  this page any more; see [docs/decisions.md](docs/decisions.md) D-027.
+  out, so the tangerine **Start something** and, under it, "Sent a link? Open that link —
+  voting needs no account." (both labels changed in D-047 §4; the header says **Log in**).
+  There is no admin-editable message on this page any more; see
+  [docs/decisions.md](docs/decisions.md) D-027.
 
 - [ ] **4.5 — Log in.** Go to `https://<FLY_APP_NAME>.fly.dev/users/log-in`. Use the
       **"Email or username"** field — it accepts either. Enter your `ADMIN_USERNAME`
@@ -797,7 +799,9 @@ Substitute your app name. Everything here should hold before you call this done.
       flow is what exercises real-time updates on a fresh deploy. Leave the group as a draft;
       the durability test below builds its own.)
 - [ ] `https://<FLY_APP_NAME>.fly.dev/admin/dashboard` → Phoenix LiveDashboard, admin-only in
-      every environment.
+      every environment. It renders **without** the app's header and footer and offers no link
+      back — it is a third-party LiveView with its own layout, so `Layouts.app/1` never runs for
+      it (D-041). Leave it with the browser's back button.
 - [ ] `https://<FLY_APP_NAME>.fly.dev/users/register` → create a throwaway account; you should
       be signed in immediately with "Account created successfully!". Keep its username and
       password — the promotion test below uses it.
@@ -829,9 +833,14 @@ open at once.
 `{:error, :sudo_required}` outside it. (That is a *different* window from the 10 minutes
 `/users/settings` uses in §4.6.) Out of sudo mode you get an info panel — `<div
 id="sudo-notice">`, *"For security, log in again to change roles or delete accounts."* — and
-all three buttons render `disabled`. Clicking anyway, or replaying the event from a stale tab,
-lands you back at `/users/log-in` with *"For security, log in again to change roles or delete
-accounts. You will come back to Admin → Users."* — the disabled attributes are a courtesy, the
+all three buttons render `disabled`. That notice carries a **Log in again** link, and it is
+the affordance to use, because with the buttons disabled it is the only one you can reach.
+Clicking a disabled button anyway, or replaying the event from a stale tab, lands you at the
+same place with *"For security, log in again to change roles or delete accounts. Signing in
+with your password brings you straight back to Admin → Users."* Both go to
+`/users/log-in?return_to=/admin/users`, and the **password** form is what completes the round
+trip — a magic link is opened in a mailbox, routinely on another device, so that half
+deliberately does not carry the destination. The disabled attributes are a courtesy; the
 context functions are the enforcement. If the steps below bounce you to the log-in form, that
 is this and not a failed deploy: log in again and resume.
 

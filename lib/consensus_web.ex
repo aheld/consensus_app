@@ -52,6 +52,13 @@ defmodule ConsensusWeb do
     quote do
       use Phoenix.LiveView
 
+      # Every LiveView in this app gets `@current_path` (D-041). Declared here rather
+      # than on each `live_session` in the router so a new route cannot ship without
+      # it: the global header reads it to avoid offering a menu entry for the page you
+      # are already on, and the global footer reads it to hang `?return_to=` off the
+      # standing-page links. See `ConsensusWeb.CurrentPath`.
+      on_mount ConsensusWeb.CurrentPath
+
       unquote(html_helpers())
     end
   end
@@ -87,6 +94,14 @@ defmodule ConsensusWeb do
       # Core UI components
       import ConsensusWeb.CoreComponents
       import ConsensusWeb.Sticker
+
+      # The global header and footer (D-041). Imported like the two above so every
+      # LiveView and template can reach them, and *also* aliased: `Chrome.header/1`
+      # and the unused `CoreComponents.header/1` share a name, so a bare `<.header>`
+      # would be an ambiguous call. Write `<Chrome.header ...>` — which is what
+      # `ConsensusWeb.Layouts.app/1` does, and the only place that needs it.
+      import ConsensusWeb.Chrome
+      alias ConsensusWeb.Chrome
 
       # Common modules used in templates
       alias Phoenix.LiveView.JS

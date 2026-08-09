@@ -35,6 +35,11 @@ consensus-*.tar
 npm-debug.log
 /assets/node_modules/
 
+# Python bytecode — docs/design/extract_screens.py leaves a __pycache__ beside itself
+# every time the design doc is re-imported.
+__pycache__/
+*.pyc
+
 # Database files
 *.db
 *.db-*

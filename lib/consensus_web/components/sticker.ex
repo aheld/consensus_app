@@ -164,7 +164,14 @@ defmodule ConsensusWeb.Sticker do
 
   defp chip_class(selected, disabled, tone, class) do
     [
-      "inline-flex items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3.5 py-2",
+      # `min-h-11` (44px) with `py-2` kept. Every chip in the app painted 39.5px tall —
+      # including the four deadline chips that are the very first input on the organizer's
+      # first screen, packed 2×2 with 8px gutters — which is under the 44px platform touch
+      # minimum on a phone-first app. The padding stays so the visual box is unchanged
+      # wherever the row already had room; `min-h` only grows the short ones. The ballot's
+      # own view toggle reached 44 this way and the shared primitive was simply not swept
+      # with it.
+      "inline-flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3.5 py-2",
       "text-[13px] transition-colors",
       cond do
         disabled -> "cursor-not-allowed border-dashed border-ink text-faint"
@@ -187,7 +194,7 @@ defmodule ConsensusWeb.Sticker do
   """
   attr :tone, :atom,
     default: :mint,
-    values: [:mint, :yellow, :violet, :mint_soft, :tangerine]
+    values: [:mint, :yellow, :violet, :mint_soft, :tangerine, :peach]
 
   attr :class, :any, default: nil
   attr :rest, :global
@@ -213,9 +220,19 @@ defmodule ConsensusWeb.Sticker do
   defp pill_tone_class(:yellow), do: "bg-yellow text-ink"
   defp pill_tone_class(:violet), do: "bg-violet text-white"
   defp pill_tone_class(:mint_soft), do: "bg-mint-soft text-ink"
-  # Added for the voting loop's `tally_bar/1` — the `05`/`05b` design frames draw
-  # `VETOED` filled tangerine-on-white, which none of the four existing tones cover.
+  # Added for the voting loop's `tally_bar/1`, because the `05`/`05b` design frames draw
+  # `VETOED` filled tangerine-on-white. **Nothing in `lib/` uses it any more** — the tally's
+  # own pill moved to `:peach` for the reason below, which is the same reason the ballot's
+  # did. Kept as a tone rather than deleted because the frames still specify it and the next
+  # screen that genuinely wants a tangerine-filled pill should not have to re-derive it; do
+  # not reach for it on a screen that already has a forward action.
   defp pill_tone_class(:tangerine), do: "bg-tangerine text-white"
+  # The `Vetoed` marker, on the ballot and now on both results screens. Tangerine appears
+  # exactly once per screen as the one forward action — on the deck's end-of-deck summary
+  # that is `Send my votes`, and on a completed `/groups/:id/results` it is
+  # `Start another session`. A tangerine `Vetoed` pill made two on each. Peach is what the
+  # grid's held veto already uses for the identical state one view away.
+  defp pill_tone_class(:peach), do: "bg-peach text-ink"
 
   @doc """
   The uppercase DM Mono section label (`SESSION TITLE`, `VOTES CLOSE`, `GROUP`, ...).
@@ -237,36 +254,32 @@ defmodule ConsensusWeb.Sticker do
   end
 
   @doc """
-  The wizard header: a circular back button, an N-segment progress bar, and a `current/total`
-  counter.
+  The wizard progress row: an N-segment bar and a `current/total` counter.
 
-  `back` is a path to navigate to (typically a `~p` route) and is omitted entirely — no empty
-  circle left behind — when `nil`. The segment row carries `role="progressbar"` with the
-  matching `aria-value*` attributes and an `aria-label`, since a row of coloured bars is
-  otherwise invisible to a screen reader.
+  **It no longer carries a back button** (D-041, plan ruling 1). It used to, and frames
+  `01` and `02` still draw one — but they now *also* draw the global header's own `‹`
+  directly above it, which is two controls that look like "back" and may go to different
+  places. The route this component's `back` attribute used to take is now
+  `ConsensusWeb.Chrome.header/1`'s `back`, passed through `Layouts.app/1`. Do not add a
+  chevron back here to match the comp.
+
+  The segment row carries `role="progressbar"` with the matching `aria-value*` attributes
+  and an `aria-label`, since a row of coloured bars is otherwise invisible to a screen
+  reader.
 
   ## Examples
 
-      <.step_progress total={3} current={1} back={~p"/"} />
-      <.step_progress total={3} current={2} back={nil} />
+      <.step_progress total={3} current={1} />
+      <.step_progress total={3} current={2} />
   """
   attr :total, :integer, required: true
   attr :current, :integer, required: true
-  attr :back, :string, default: nil, doc: "a path to navigate to; omitted when nil"
   attr :class, :any, default: nil
   attr :rest, :global
 
   def step_progress(assigns) do
     ~H"""
     <div class={["flex items-center gap-3", @class]} {@rest}>
-      <.link
-        :if={@back}
-        navigate={@back}
-        aria-label="Back"
-        class="grid size-[34px] shrink-0 place-items-center rounded-full border-2 border-ink font-semibold hover:bg-yellow"
-      >
-        <span aria-hidden="true">‹</span>
-      </.link>
       <div
         class="flex flex-1 gap-[5px]"
         role="progressbar"
@@ -347,7 +360,7 @@ defmodule ConsensusWeb.Sticker do
 
   Pass `bare` to drop the default 2px ink border, 16px radius and `shadow-sticker-3` —
   for a mini strip nested inside a card that already carries its own border and hard
-  shadow (the ballot's `1b-4` sticker grid, `docs/design/screens/1b-4-sticker-grid-kept-in-play.html`,
+  shadow (the ballot's `1c-1` sticker grid, `docs/design/screens/1c-1-sticker-grid-kept-in-play.html`,
   draws a flat `38px` strip with no shadow of its own). Supply whatever chrome the comp
   calls for through `class` instead of fighting the defaults — two same-property Tailwind
   utilities in one `class` list have no reliable winner, so the base classes have to be
@@ -369,6 +382,17 @@ defmodule ConsensusWeb.Sticker do
     default: false,
     doc: "omit the default border/radius/shadow — see moduledoc example for nested use"
 
+  attr :stripe, :string,
+    default: "stripes-violet",
+    doc: """
+    which of app.css's placeholder stripes to draw when there is no image. Violet is the
+    default and the standalone case (the option editor's single large photo). Callers that
+    render *many* frames at once pass something else — app.css's own comment for the five
+    variants says why: "a pool of five options with one repeated stripe reads as a single
+    grey block, and the eye stops separating the rows". Frame `1c-0` draws the swipe deck's
+    card mint; frame `1c-1` cycles the grid's thumbnails through peach/yellow/blue.
+    """
+
   attr :class, :any, default: nil
   attr :rest, :global
   slot :inner_block, doc: "overlay badges/buttons positioned over the frame"
@@ -380,7 +404,7 @@ defmodule ConsensusWeb.Sticker do
         "relative overflow-hidden",
         !@bare && "rounded-2xl border-2 border-ink shadow-sticker-3",
         @height,
-        is_nil(@src) && "stripes-violet",
+        is_nil(@src) && @stripe,
         @class
       ]}
       {@rest}
@@ -391,7 +415,7 @@ defmodule ConsensusWeb.Sticker do
         alt={@alt}
         loading="lazy"
         class="size-full object-cover"
-        onerror="this.style.display='none';this.parentElement.classList.add('stripes-violet')"
+        onerror={"this.style.display='none';this.parentElement.classList.add('#{@stripe}')"}
       />
       {render_slot(@inner_block)}
     </div>
@@ -473,6 +497,11 @@ defmodule ConsensusWeb.Sticker do
   """
   attr :participant_id, :integer, required: true, doc: "picks the deterministic fill colour"
   attr :initial, :string, required: true
+
+  attr :name, :string,
+    default: nil,
+    doc: "the participant's typed name, when there is one — see the moduledoc on why"
+
   attr :state, :atom, required: true, values: [:voted, :waiting]
   attr :label, :string, default: nil, doc: "overrides the default \"voted\"/\"waiting\" caption"
   attr :size, :integer, default: 40, doc: "px — 40 on 05/05b, 29 on 06's compact row"
@@ -484,6 +513,19 @@ defmodule ConsensusWeb.Sticker do
   def participant_avatar(assigns) do
     ~H"""
     <div class="flex flex-col items-center gap-1">
+      <%!-- **The circle carries the name when there is one, and is `aria-hidden` only when
+            there is not.** `/join/:slug` asks a guest for their name under a stated
+            purpose — "Just so <organizer> can see who has voted" — and the organizer's
+            results screen then rendered `aria-hidden="true"` around a single letter with
+            no `title` and no visually-hidden label, so the string the guest typed appeared
+            nowhere in the document at all. Two guests called Sam and Sarah were the same
+            avatar, and a screen-reader organizer got "1/1 voted, WHO'S VOTED, voted" and
+            no identity whatsoever. The frame draws initials and that stays — the name
+            reaches the accessibility tree and a hover tooltip instead of the layout.
+
+            An anonymous participant has no `name` and keeps the old treatment: `?` in an
+            `aria-hidden` circle is exactly as much as the app knows, and inventing
+            "Anonymous" as an accessible name would read as somebody's chosen handle. --%>
       <span
         class={[
           "grid shrink-0 place-items-center rounded-full border-2 font-bold",
@@ -491,9 +533,13 @@ defmodule ConsensusWeb.Sticker do
           @class
         ]}
         style={"width:#{@size}px;height:#{@size}px;font-size:#{round(@size * 0.325)}px"}
-        aria-hidden="true"
+        aria-hidden={if @name, do: nil, else: "true"}
+        title={@name}
         {@rest}
-      >{@initial}</span>
+      >
+        <span :if={@name} class="sr-only">{@name}</span>
+        <span aria-hidden="true">{@initial}</span>
+      </span>
       <span
         :if={@show_label}
         class={["font-mono text-[9.5px] font-medium", avatar_label_class(@state)]}
@@ -530,28 +576,38 @@ defmodule ConsensusWeb.Sticker do
   that one avatar's label as `"you"` instead of `"voted"`/`"waiting"` (`05b`'s own
   avatar, the guest's view of themselves).
 
-  `caption` is the small DM Mono line on the right of the label row. The two callers
-  say different things — `"TAP TO NUDGE"` on `05` (the organizer), `"ORGANIZER NUDGES"`
-  on `05b` (a participant) — and this component does not wire up a click for either;
-  pass `nil` (the default) to omit the line entirely.
+  `caption` is the small DM Mono line on the right of the label row. Both callers now
+  pass `"WHO'S VOTED"`. The frames draw `"TAP TO NUDGE"` on `05` and `"ORGANIZER NUDGES"`
+  on `05b`, and both shipped that way; neither is true. This component wires up no click
+  for either caller, and `grep -rn 'nudge' lib/` finds no nudge path anywhere in the app —
+  the organizer's own control is disabled and labelled `Soon`. A caption naming an action
+  nothing on the screen performs is confusion class 1, so both were replaced (D-045 for
+  the participant's half). Pass `nil` (the default) to omit the line entirely.
 
   ## Examples
 
       <.participant_avatar_row
         participants={Voting.participants(@group)}
-        caption="TAP TO NUDGE"
+        caption="WHO'S VOTED"
       />
 
       <.participant_avatar_row
         participants={Voting.participants(@group)}
         current_participant_id={@participant.id}
-        caption="ORGANIZER NUDGES"
+        caption="WHO'S VOTED"
       />
   """
   attr :participants, :list, required: true, doc: "Consensus.Voting.participants/1's shape"
   attr :current_participant_id, :integer, default: nil
   attr :caption, :string, default: nil
   attr :label, :string, default: nil, doc: "overrides the default \"N/M voted\" count"
+
+  attr :waiting_label, :string,
+    default: nil,
+    doc:
+      "overrides the per-avatar \"waiting\" caption — pass \"missed it\" on a finished session, " <>
+        "where there is nothing left to wait for"
+
   attr :avatar_size, :integer, default: 40
   attr :class, :any, default: nil
 
@@ -573,8 +629,9 @@ defmodule ConsensusWeb.Sticker do
           :for={p <- @participants}
           participant_id={p.id}
           initial={p.initial}
+          name={p.display_name}
           state={if(p.voted?, do: :voted, else: :waiting)}
-          label={if(p.id == @current_participant_id, do: "you")}
+          label={avatar_label(p, @current_participant_id, @waiting_label)}
           size={@avatar_size}
         />
       </div>
@@ -582,22 +639,48 @@ defmodule ConsensusWeb.Sticker do
     """
   end
 
+  # "you" beats everything — it is the viewer's own avatar and that is the more useful
+  # fact. Otherwise a caller-supplied `waiting_label` replaces the default "waiting" on the
+  # people who have not voted: on a `:completed` or `:cancelled` session "waiting" sits
+  # under a header reading **Voting closed**, promising something that cannot happen, while
+  # the footer two hundred pixels down correctly says there is no way to add a vote now.
+  # "voted" needs no override — it is equally true after the close.
+  defp avatar_label(%{id: id}, id, _waiting_label), do: "you"
+  defp avatar_label(%{voted?: true}, _current_id, _waiting_label), do: nil
+  defp avatar_label(_participant, _current_id, waiting_label), do: waiting_label
+
   @doc """
   One row of the running tally (frames `05`/`05b`): the activity's name, its approval
-  count (or the tangerine `VETOED` pill), and the 16px bar.
+  count (or the peach `Vetoed` pill), and the 16px bar.
 
   Built to take one row of `Consensus.Voting.tally/1`'s return shape —
   `%{activity:, approvals:, vetoed?:, leader?:, bar_percent:, ...}` — straight through,
   so a caller does `<.tally_bar :for={row <- @tally} row={row} />` with no reshaping.
-  The tangerine `★` renders whenever `row.leader?` is true; `tally/1` already
-  guarantees a vetoed row is never the leader, so this component does not re-check it.
+  The `★` renders whenever `row.leader?` is true; `tally/1` already guarantees a vetoed
+  row is never the leader, so this component does not re-check it. It is **violet**, not
+  tangerine: the shared rule is that tangerine appears exactly once per screen as the one
+  forward action, and once the tie fix started starring every row that shares the top
+  count, one tangerine glyph became N — measured on a two-way tie, four tangerine elements
+  on one screen against the forward action's one. Violet is the tally's own accent (it is
+  the bar fill directly below), so the star reads as part of the bar rather than as a
+  competing call to action.
+
+  **The `:completed` winner card's `★` badge is violet too now, and this paragraph used to
+  argue the opposite** ("there is exactly one of it, and it *is* that screen's headline").
+  The argument fails on the count: a completed `/groups/:id/results` with a vetoed option
+  painted three tangerine elements — the badge, this row's `Vetoed` pill, and
+  `#results-start-another`, which is the screen's actual forward action. The card is a
+  statement of outcome, not something to press; it already sits on a mint sticker under a
+  bold headline that says "We have a winner" in words. Violet keeps it the tally's accent,
+  matching the `★` on the winning row directly beneath it.
 
   A vetoed row strikes the name through, mutes it, swaps the approval count for the
-  `VETOED` pill (`pill/1`'s `:tangerine` tone), and replaces the violet fill with the
-  inert `.stripes-vetoed` pattern (`assets/css/app.css`) instead of drawing a 0%-width
-  bar — colour is never the only signal (CLAUDE.md's neighbour rule to invariant 11):
-  struck-through text, a pill, and a different bar texture all say "eliminated"
-  together.
+  `Vetoed` pill (`pill/1`'s `:peach` tone — the fill the ballot's own held veto already
+  uses for the identical state, and not a second tangerine on a screen that has a forward
+  action), and replaces the violet fill with the inert `.stripes-vetoed` pattern
+  (`assets/css/app.css`) instead of drawing a 0%-width bar — colour is never the only
+  signal (CLAUDE.md's neighbour rule to invariant 11): struck-through text, a pill, and a
+  different bar texture all say "eliminated" together.
 
   ## Examples
 
@@ -615,12 +698,12 @@ defmodule ConsensusWeb.Sticker do
           if(@row.vetoed?, do: "text-muted line-through", else: "text-ink")
         ]}>
           {@row.activity.name}
-          <span :if={@row.leader?} class="text-tangerine">★</span>
+          <span :if={@row.leader?} class="text-violet">★</span>
         </span>
         <span :if={!@row.vetoed?} class="shrink-0 font-mono text-[11px] text-ink-soft">
           {@row.approvals}
         </span>
-        <.pill :if={@row.vetoed?} tone={:tangerine} class="shrink-0">Vetoed</.pill>
+        <.pill :if={@row.vetoed?} tone={:peach} class="shrink-0">Vetoed</.pill>
       </div>
       <div class={[
         "h-4 overflow-hidden rounded-full border-2",
@@ -674,6 +757,188 @@ defmodule ConsensusWeb.Sticker do
         {@countdown_text}
       </div>
       <div class="text-[12px] opacity-85">until votes close</div>
+    </div>
+    """
+  end
+
+  ## -- the swipe deck (docs/plans/chrome-and-feedback.md P5, D-044) -------------------
+
+  @doc """
+  The swipe deck's card stack — frame `docs/design/screens/1c-0-swipe-deck-kept-in-play.html`,
+  transcribed in `docs/design/IMPORT-NOTES.md` §7.4/§7.5.
+
+  Three absolutely-positioned layers painted back to front. Only the top one has content
+  and a shadow; the two behind it are empty white rectangles peeking out at the bottom
+  (`top` 0 → 7 → 14, `left/right` 0 → 5 → 10) with alternating rotations (0°, −2°, +3.5°).
+
+  `behind` is how many *undecided* cards follow this one, capped at 2 by the component —
+  so the stack visibly thins as the voter works through the pool. That is decoration
+  supporting the real answer to "how much more of this is there?", which is the
+  `N / M` counter the caller renders above the stack (confusion #6 in
+  `docs/plans/chrome-and-feedback.md`); do not make it the only signal.
+
+  Everything interactive lives outside this component. The caller passes `id` and the
+  hook/`data-*` attributes through `rest` onto the top card, and renders the pass / veto
+  / approve buttons underneath it — a gesture is never the only way to decide a card.
+
+  The photo region is `photo_frame/1`, so a missing or 404ing `image_url` degrades to a
+  placeholder stripe (engineering invariant 14) — **`stripes-mint`, which is what the frame
+  draws**, passed through `photo_frame/1`'s `stripe` attr. It is not a second "missing
+  photo" pattern competing with the violet: the five stripe variants in app.css are one
+  system, cycled precisely so a screen full of placeholders does not read as a single grey
+  block, and this is the largest single region on the deck.
+
+  The frame's meta row (`Italian · $$$ · 4.5 ★ · 0.8 mi`) has no counterpart in
+  `Consensus.Activities.Activity` and cannot until Places/Yelp lands (Post-MVP). Per
+  IMPORT-NOTES §7.5 the row collapses; `detail` carries the description instead.
+
+  ## Examples
+
+      <.deck_stack
+        id={"deck-card-\#{activity.id}"}
+        name={activity.name}
+        detail={meta_line(activity)}
+        image_url={activity.image_url}
+        behind={remaining}
+        phx-hook="SwipeCard"
+        data-activity-id={activity.id}
+      >
+        <.pill tone={:mint}>Picked</.pill>
+      </.deck_stack>
+  """
+  attr :id, :string, required: true
+  attr :name, :string, required: true
+  attr :detail, :string, default: nil
+  attr :image_url, :string, default: nil
+
+  attr :behind, :integer,
+    default: 0,
+    doc: "undecided cards after this one; only 0, 1 and 2+ are distinguishable"
+
+  attr :photo_class, :any,
+    default: nil,
+    doc: """
+    extra classes for the photo region, which carries `aspect-[4/3]` and a `min-h-[72px]`
+    floor of its own. Two earlier shapes were wrong and are worth not re-deriving: a
+    `max-h-[62%]` default stopped the photo growing without giving the space to anything
+    else (measured at 420×900: a 485px card with a 75px body and **112px of blank white**
+    below the description), and capping the *card's* height instead left the ratio as an
+    outcome of the viewport — 1.08:1 at one cap, 1.26:1 at the next, against the frame's
+    1.326. The ratio belongs on the photo; see its own comment below.
+    """
+
+  attr :class, :any, default: nil
+  attr :rest, :global
+  slot :inner_block, doc: "a status line under the detail — what the voter already chose"
+
+  def deck_stack(assigns) do
+    ~H"""
+    <%!-- `absolute inset-0`, so the caller only has to give it a `relative` box with a
+          height. It used to have no content height of its own — every layer inside was
+          absolutely positioned, so as a plain `relative` div it collapsed to 0px and the
+          three cards rendered as ink hairlines, and `h-full` did not fix it either. It is
+          now a centring box instead: the card sizes itself from the photo's aspect ratio
+          and this box centres what is left over, which is what frame `1c-0`'s own
+          proportions ask for. Measured in the browser at 420×900: 0px, then 4px, then
+          right. --%>
+    <div class={["absolute inset-0 flex items-center", @class]}>
+      <%!-- The sizing box. The top card is in normal flow inside it, so it gives this box
+            its height, and the two `behind` layers position against that rather than
+            against the caller's slot — otherwise a card shorter than its slot would leave
+            its own stack floating below it. `max-h-full` is what keeps the whole thing
+            inside the slot when the viewport is too short for the ratio (see the photo
+            below).
+
+            **`flex flex-col` on this box is load-bearing, not tidiness.** `max-h-full`
+            here resolves (its parent is `absolute inset-0`, a definite height) but the
+            card's own `max-h-full` did *not*: a percentage `max-height` against a
+            content-height parent computes to `none`, so the cap never bound and the card
+            simply overflowed. Measured before this line changed, at 390×664 (iPhone 14 in
+            Safari): slot 231.5px, card 341.4px, 109.9px of card painted straight over the
+            PASS / VETO / PICK row, `document.elementFromPoint` returning the description
+            at all three button centres and `documentElement.scrollHeight === innerHeight`
+            so there was nothing to scroll to. Same at 375×667 and 360×640; fine at
+            420×900, which is the only viewport it had been checked at. As a flex column
+            this box is clamped to the slot and the card, an ordinary flex item with
+            `flex-shrink: 1`, shrinks into it — which is why the card also carries
+            `min-h-0` (a column flex item's default `min-height: auto` is its content
+            minimum and would have blocked exactly that shrink). --%>
+      <div class="relative flex max-h-full w-full flex-col">
+        <div
+          :if={@behind >= 2}
+          aria-hidden="true"
+          class="absolute inset-x-[10px] bottom-0 top-[14px] rotate-[3.5deg] rounded-[22px] border-2 border-ink bg-white"
+        />
+        <div
+          :if={@behind >= 1}
+          aria-hidden="true"
+          class="absolute inset-x-[5px] bottom-0 top-[7px] -rotate-2 rounded-[22px] border-2 border-ink bg-white"
+        />
+        <div
+          id={@id}
+          class="deck-card relative flex max-h-full min-h-0 flex-col overflow-hidden rounded-[22px] border-2 border-ink bg-white shadow-sticker-4"
+          {@rest}
+        >
+          <%!-- **The ratio lives here, on the photo, and not as a `max-h` on the card.**
+                Frame `1c-0` measures its photo at 260×196.1 — 1.326:1 — and both the frame
+                and this component let the photo be `flex:1` inside a bounded card, which
+                makes the ratio an *outcome* of the slot's height rather than a property of
+                the photo. On the frame's own 300×600 device that outcome happens to be
+                1.33; on a 420×900 review viewport ours came out at 1.08, then 1.26 after
+                the card was capped at 380px, and the number kept tracking the viewport
+                because the card cap is the wrong lever. `aspect-[4/3]` (1.333) states it
+                directly, and the caller's slot no longer needs a height cap at all: the
+                card sizes itself and the centring box above holds it in the middle.
+
+                `flex-1` is deliberately **gone** and `min-h-[72px]` deliberately stays. The
+                photo must not *grow* past its ratio, but it must still be allowed to
+                shrink: on a short phone the slot can be smaller than ratio + body, and
+                flex's default `shrink: 1` is what lets the photo give way there instead of
+                the card overflowing (measured at 360×640 before the floor existed:
+                `scrollHeight` 224 against `clientHeight` 216, the description 6px from the
+                ink border). The photo is the part that can afford to give way.
+
+                One thing this does not fix, on purpose: the photo's *share* of card
+                height. The frame is 64.7%; this lands near 78%. The arithmetic is closed —
+                at a 380px-wide photo the ratio fixes it at ~286px, and this card's body is
+                two clamped lines plus `py-3.5` ≈ 79px, so the share is 286/367. The
+                frame's 264px card carries a 105px body because it draws *three* lines
+                (name, a chip meta row, a description) where `meta_line/1` gives us one.
+                Matching the share as well would mean inventing card content, which is a
+                product decision, not a CSS one. --%>
+          <.photo_frame
+            src={@image_url}
+            alt={@name}
+            height="h-auto"
+            bare
+            stripe="stripes-mint"
+            class={["aspect-[4/3] min-h-[72px] border-b-2 border-ink", @photo_class]}
+          />
+          <%!-- `shrink-0` so the text is never the thing that gets squeezed, and the two
+                lines clamp rather than clip: `.deck-card` is `overflow: hidden`, so without
+                this a long name silently ate a whole line of the description with no
+                ellipsis and no scroll. Same rule invariant 11 applies to this field
+                elsewhere — the failure mode has to be an ellipsis, not a vanished line. --%>
+          <%!-- `relative z-[3] bg-white` keeps the swipe wash off the card's own words.
+                `.deck-card::after` (app.css) is `position:absolute; inset:0`, so at the
+                moment a release would commit the vote the 0.85 mint veil covered the body as
+                well as the photo: measured mid-drag past the threshold, the name's contrast
+                against its own background fell from 13.9:1 to roughly 1.4:1 — the one piece
+                of information saying *what* is being voted on, erased at the instant of the
+                vote. The wash is invented chrome (the frame draws none), so the fix is to
+                scope it to the photo region rather than to soften it. `z-[3]` clears the
+                `::before` stamp's `z-index: 2`, which sits inside the photo and never
+                overlaps this; the opaque fill is what actually blocks the veil, since a
+                transparent box above it would still show it through. --%>
+          <div class="relative z-[3] flex shrink-0 flex-col gap-[7px] bg-white px-4 py-3.5">
+            <p class="line-clamp-2 text-[21px] font-bold leading-[1.1] tracking-[-0.02em]">
+              {@name}
+            </p>
+            <p :if={@detail} class="line-clamp-2 text-[12px] leading-[1.4] text-muted">{@detail}</p>
+            {render_slot(@inner_block)}
+          </div>
+        </div>
+      </div>
     </div>
     """
   end

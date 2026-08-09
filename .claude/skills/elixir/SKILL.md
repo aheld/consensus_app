@@ -521,8 +521,8 @@ connection and its own transaction, rolled back at exit, instead of joining the 
 tests still cannot see each other's rows. It just no longer buys concurrent wall-clock time,
 because `max_cases: 1` removes that regardless of the tag.
 
-Verified 2026-08-08: `MIX_TEST_PARTITION=final mix precommit` → **438 tests, 0 failures**,
-"Finished in 2.7 seconds (0.9s async, 1.8s sync)". Re-run for a current count rather than
+Verified 2026-08-09: `MIX_TEST_PARTITION=p11 mix precommit` → **944 tests, 0 failures**,
+"Finished in 6.0 seconds (1.9s async, 4.1s sync)". Re-run for a current count rather than
 quoting that number — the count grows as the app is written.
 
 **Always pass `MIX_TEST_PARTITION` when anything else might be running the suite.** Two
@@ -632,7 +632,7 @@ fixation rather than close it. Whoever reads the inbox owns the account.
 **Callers must expect a `%User{hashed_password: nil}` back and say so to the person** —
 `UserSessionController`'s private `magic_link_info/2` matches on `%{hashed_password: nil}` and
 flashes *"the password that was set on this account has been removed"* instead of the usual
-"User confirmed successfully.", and `ConsensusWeb.UserLive.Confirmation` warns before the button is pressed
+"You're in — this address is confirmed.", and `ConsensusWeb.UserLive.Confirmation` warns before the button is pressed
 (its assign is `@clears_password?`, computed as `is_nil(user.confirmed_at) and not
 is_nil(user.hashed_password)` — no scope input). Nothing in this repo should say a magic link
 is refused, that a user has to "log in with their password first", or that being signed in
@@ -952,7 +952,7 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect the count of the day: 438 tests, 0 failures as of 2026-08-08. Re-run rather than
+Expect the count of the day: 944 tests, 0 failures as of 2026-08-09. Re-run rather than
 trusting that number — the count grows as the app is written — but a failure is a real
 signal, not background noise, provided you partitioned the database.
 

@@ -23,8 +23,14 @@ defmodule ConsensusWeb.AdminLive.UsersTest do
   # session merely went cold, so they are sent to re-authenticate and told where they
   # will land. `push_navigate/2` leaves the admin `live_session`, which the test client
   # sees as a redirect carrying the flash.
+  #
+  # The destination now carries `?return_to=/admin/users`, and that is the whole point of
+  # D-045: the flash promises a return trip and this is the parameter that delivers it.
+  # `UserLive.Login` renders it as a hidden `user[return_to]`, `UserAuth.store_return_to/2`
+  # validates it, and `log_in_user/3` redirects to it. Asserting the bare path here would
+  # let the promise silently become false again.
   defp assert_stale_session_bounce(lv) do
-    flash = assert_redirect(lv, ~p"/users/log-in")
+    flash = assert_redirect(lv, ~p"/users/log-in?#{[return_to: ~p"/admin/users"]}")
     assert flash["error"] =~ "log in again"
     assert flash["error"] =~ "Admin"
   end
@@ -427,6 +433,24 @@ defmodule ConsensusWeb.AdminLive.UsersTest do
         assert rendered =~ "disabled"
         assert rendered =~ "log in again to change roles or delete accounts"
       end
+    end
+
+    # **The notice's link is the only affordance a stale admin can reach**, which is why it
+    # has to carry the return trip and why no existing test could see that it did not: the
+    # test above proves every Promote/Demote/Delete renders `disabled`, so `require_sudo/2`
+    # — the one code path that *does* append `?return_to=/admin/users` — is unreachable from
+    # a fresh mount, and the tests that exercise it push the event by hand. Left as a bare
+    # `/users/log-in`, following this link stored no `user_return_to` (the pipeline answers
+    # 200 and never halts, so `maybe_store_return_to/1` never runs) and `signed_in_path/1`
+    # delivered a re-authenticated admin to Account settings — measured, and asserted as
+    # fixed by D-045 while it was not.
+    test "the notice's own link carries the return trip", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/admin/users")
+
+      assert has_element?(
+               lv,
+               ~s|#sudo-notice-log-in[href="/users/log-in?return_to=%2Fadmin%2Fusers"]|
+             )
     end
 
     test "a forged event is still refused when the buttons are disabled", %{

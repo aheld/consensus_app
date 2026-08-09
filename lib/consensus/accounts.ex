@@ -350,18 +350,26 @@ defmodule Consensus.Accounts do
   @doc """
   Registers a user with an email, a username and a password.
 
+  `opts` are `User.registration_changeset/3`'s. The only one any caller passes is
+  `require_password: false`, which the magic-link half of the sign-up form uses to
+  create a genuinely password-less account rather than one holding a random string —
+  see that changeset's docs and D-045.
+
   ## Examples
 
       iex> register_user(%{email: ..., username: ..., password: ...})
       {:ok, %User{}}
 
+      iex> register_user(%{email: ..., username: ...}, require_password: false)
+      {:ok, %User{hashed_password: nil}}
+
       iex> register_user(%{field: bad_value})
       {:error, %Ecto.Changeset{}}
 
   """
-  def register_user(attrs) do
+  def register_user(attrs, opts \\ []) do
     %User{}
-    |> User.registration_changeset(attrs)
+    |> User.registration_changeset(attrs, opts)
     |> Repo.insert()
   end
 
@@ -605,12 +613,27 @@ defmodule Consensus.Accounts do
       iex> deliver_user_update_email_instructions(user, current_email, &url(~p"/users/settings/confirm-email/#{&1}"))
       {:ok, %{to: ..., body: ...}}
 
+  **Any earlier unopened link for this account stops working the moment a new one is
+  sent.** The generator only inserted; the `delete_all` lived in `update_user_email/2`, on
+  the *success* path, so a token that was never opened stayed armed for
+  `@change_email_validity_in_days` (7). A typo'd address therefore held a working
+  seven-day token that moves the account's email onto a stranger's mailbox, and pressing
+  "Send it again" added a second live token beside the first rather than replacing it.
+  `ConsensusWeb.UserLive.Settings`' own recovery screen tells the reader that going back
+  and correcting the address leaves the sent link expiring unused; this is what makes that
+  sentence true. Superseding on send is also what a reader expects of "send it again", and
+  it costs nothing — the link is single-use in either case.
   """
   def deliver_user_update_email_instructions(%User{} = user, current_email, update_email_url_fun)
       when is_function(update_email_url_fun, 1) do
-    {encoded_token, user_token} = UserToken.build_email_token(user, "change:#{current_email}")
+    context = "change:#{current_email}"
+    {encoded_token, user_token} = UserToken.build_email_token(user, context)
 
-    Repo.insert!(user_token)
+    Repo.transact(fn ->
+      Repo.delete_all(from(UserToken, where: [user_id: ^user.id, context: ^context]))
+      {:ok, Repo.insert!(user_token)}
+    end)
+
     UserNotifier.deliver_update_email_instructions(user, update_email_url_fun.(encoded_token))
   end
 

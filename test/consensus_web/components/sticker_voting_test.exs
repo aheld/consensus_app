@@ -111,6 +111,42 @@ defmodule ConsensusWeb.StickerVotingTest do
       assert html =~ "waiting"
     end
 
+    # **`/join/:slug` asks a guest for their name under a stated purpose** — "Just so
+    # <organizer> can see who has voted" — and this row rendered `aria-hidden="true"`
+    # around a single letter with no `title` and no visually-hidden label, so the string
+    # the guest typed appeared **nowhere in the organizer's document**. Two guests called
+    # Sam and Sarah were the same avatar, and a screen-reader organizer got
+    # "1/1 voted, WHO'S VOTED, voted" and no identity at all. The frame draws initials and
+    # that is unchanged; the name reaches the accessibility tree and a hover tooltip.
+    test "a named participant's name is in the document, not only their initial" do
+      {group, _activities} = voting_group_fixture(user_scope_fixture())
+      _voter = participant_fixture(group, %{display_name: "Sam"})
+
+      html =
+        render_component(&Sticker.participant_avatar_row/1, %{
+          participants: Voting.participants(group)
+        })
+
+      assert html =~ "Sam"
+      assert html =~ ~s(title="Sam")
+    end
+
+    # An anonymous participant has no name, and `?` in an `aria-hidden` circle is exactly
+    # as much as the app knows. Inventing "Anonymous" as an accessible name would read as
+    # somebody's chosen handle.
+    test "an anonymous participant keeps the aria-hidden circle and gains no title" do
+      {group, _activities} = voting_group_fixture(user_scope_fixture())
+      _voter = participant_fixture(group, %{display_name: nil})
+
+      html =
+        render_component(&Sticker.participant_avatar_row/1, %{
+          participants: Voting.participants(group)
+        })
+
+      assert html =~ ~s(aria-hidden="true")
+      refute html =~ "title="
+    end
+
     test "caption is omitted entirely when nil" do
       {group, _activities} = voting_group_fixture(user_scope_fixture())
 
@@ -180,6 +216,42 @@ defmodule ConsensusWeb.StickerVotingTest do
       assert html =~ "1h 02m left"
       assert html =~ "until votes close"
       assert html =~ "aria-live=\"polite\""
+    end
+  end
+
+  # **The one class assertion in this file that stands in for a browser measurement, and
+  # it says so.** `.deck-card`'s `max-h-full` is a percentage `max-height`; against a
+  # content-height parent CSS resolves that to `none`, so the cap never bound and the card
+  # simply overflowed its slot. Measured before the fix at 390×664 (iPhone 14 in Safari):
+  # slot 231.5px, card 341.4px, 109.9px of card painted over the PASS / VETO / PICK row,
+  # `document.elementFromPoint` returning the card's description at all three button
+  # centres — 0 of 78.5 hittable pixel rows each — and `documentElement.scrollHeight ===
+  # innerHeight`, so there was nothing to scroll to. Same at 375×667 and 360×640; fine at
+  # 420×900, which is the only viewport it had been checked at. Since `SwipeCard` pushes
+  # only `approve`/`pass`, veto had **no** gesture at all on the most common iPhone size.
+  #
+  # After: 79/79/79 hittable rows at 360×640, 375×667, 390×664, 360×700 and 420×900, card
+  # 231.5 at 390×664 with zero overflow, and 420×900 unchanged (card 363.9, photo 1.333).
+  # An ExUnit test cannot measure any of that; what it can do is fail if either half of
+  # the two-part fix is deleted, which is what the sizes above depend on.
+  describe "deck_stack/1 — the sizer that bounds the card" do
+    test "the sizer is a flex column and the card can shrink inside it" do
+      html =
+        render_component(&Sticker.deck_stack/1, %{
+          id: "deck-card-1",
+          name: "Night + Market",
+          image_url: nil,
+          detail: "Thai, loud and fun",
+          behind: 2
+        })
+
+      # The sizer: `max-h-full` only resolves for the card if this box is a flex container
+      # with a definite height of its own.
+      assert html =~ ~r/class="relative flex max-h-full w-full flex-col"/
+
+      # The card: `min-h-0` clears a column flex item's default `min-height: auto`
+      # (its content minimum), which would otherwise block the shrink.
+      assert html =~ ~r/class="deck-card [^"]*max-h-full min-h-0[^"]*"/
     end
   end
 end

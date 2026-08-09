@@ -1,14 +1,16 @@
 ---
 name: design-system
-description: The "sticker" visual design system for the Consensus app — the 2px ink border, hard offset shadow, radius, press and mint-focus rules behind the @theme tokens in assets/css/app.css, the ConsensusWeb.Sticker primitives (sticker_card, chip, pill, eyebrow, step_progress, position_badge, photo_frame) and the restyled ConsensusWeb.CoreComponents (button, input, header, table, list, flash). Use this when building or editing any screen under lib/consensus_web/live or lib/consensus_web/components, choosing a colour/shadow/radius/font, adding a button/chip/pill/card/badge, matching an imported design frame under docs/design/screens/, or wondering why a `btn`/`input`/`card`/`alert`/`badge` class renders as nothing (daisyUI was removed, D-028).
+description: The "sticker" visual design system for the Consensus app — the 2px ink border, hard offset shadow, radius, press and mint-focus rules behind the @theme tokens in assets/css/app.css, the ConsensusWeb.Sticker primitives (sticker_card, chip, pill, eyebrow, step_progress, position_badge, photo_frame, deck_stack) and the restyled ConsensusWeb.CoreComponents (button, input, header, table, list, flash). Use this when building or editing any screen under lib/consensus_web/live or lib/consensus_web/components, choosing a colour/shadow/radius/font, adding a button/chip/pill/card/badge, matching an imported design frame under docs/design/screens/, or wondering why a `btn`/`input`/`card`/`alert`/`badge` class renders as nothing (daisyUI was removed, D-028).
 ---
 
 # The Consensus "sticker" design system
 
 One hand-drawn light theme: a 2px ink outline and a hard, unblurred offset shadow on every
-surface. No dark mode, no theme toggle (D-028) — don't add either back. No shared navbar: every
-screen draws its own header (D-032) — a new screen owes its own way back in, `Layouts.app/1`
-will not give it one. Source of truth is `docs/design/DESIGN-SPEC.md`, itself derived from the
+surface. No dark mode, no theme toggle (D-028) — don't add either back. **Every screen wears a global
+header and footer** (D-041, superseding D-032): `Layouts.app/1` renders `Chrome.header/1` and
+`Chrome.footer/1` itself, so a new screen gets its way back for free and contributes only
+`back`, `context` and `variant`. What a screen still draws for itself is the row *below* the
+header — a progress bar, an h1, a `Remove` — never a second back control. Source of truth is `docs/design/DESIGN-SPEC.md`, itself derived from the
 imported design doc at `docs/design/create-and-share.dc.html` and the per-screen extracts in
 `docs/design/screens/`. Tokens live in `assets/css/app.css`'s `@theme` block; the design-specific
 primitives live in `ConsensusWeb.Sticker`; the generic building blocks are
@@ -77,6 +79,7 @@ skill stops at "how do I make it look right."
 | `--color-peach` | `bg-peach` | `#FFC2A3` | the avatar fill (`Layouts.avatar/1`) |
 | `--color-ink-30` | `border-ink-30` | `rgba(23,33,28,.3)` | the de-emphasised "past"/muted card border (`sticker_card tone={:muted}`) |
 | `--color-ink-12` | `bg-ink-12` | `rgba(23,33,28,.12)` | unfilled step-progress segments |
+| `--color-faint-soft` | `text-faint-soft` | `#A9B7AE` | the chrome footer's `·` link separators (D-041) — a flat colour, not an ink alpha, because the footer sits on `--surface` |
 | `--font-sans` | `font-sans` | Instrument Sans | everything |
 | `--font-mono` | `font-mono` | DM Mono | time, counts, urls, ALL-CAPS section labels (`.eyebrow`) |
 
@@ -96,32 +99,51 @@ component** — `.chip`'s selected state uses `shadow-sticker-2`, not `shadow-ch
 |---|---|---|
 | `sticker_card/1` | `tone: :white\|:mint\|:violet_tint\|:yellow\|:canvas\|:muted` (default `:white`), `depth: 2\|3\|4` (default 3), `interactive: boolean` | any bordered card, tinted callout, or list row that isn't a `<.table>`/`<.list>` row. `:muted` renders no shadow — it's the finished/cancelled "past" card only. |
 | `chip/1` | `selected: boolean`, `disabled: boolean`, renders `<.link>` when `rest` has `navigate`/`href`/`patch`, else `<button type="button">` | a pill-shaped single choice — activity type, deadline time. `selected` changes fill **and** font-weight, never colour alone. Only one selected visual exists in code: ink border, violet fill, white bold text, `shadow-sticker-2`. |
-| `pill/1` | `tone: :mint\|:yellow\|:violet\|:mint_soft` (default `:mint`) | a tiny status badge — `VOTING`, `YOUR TURN`, an attribution name. Not clickable. |
+| `pill/1` | `tone: :mint\|:yellow\|:violet\|:mint_soft\|:peach\|:tangerine` (default `:mint`) | a tiny status badge — `VOTING`, `YOUR TURN`, an attribution name. Not clickable. `:peach` is the `Vetoed` marker on the ballot **and on both results screens** (D-049); `:tangerine` has no caller in `lib/` and must not be given one on a screen that already has a forward action. |
 | `eyebrow/1` | none besides `class`/`rest` | the uppercase DM Mono section label above a field group (`SESSION TITLE`, `GROUP`). Thin wrapper over the `.eyebrow` CSS class. |
-| `step_progress/1` | `total: integer`, `current: integer`, `back: string \| nil` | the wizard header — circular back button (omitted when `back` is `nil`) + N-segment bar + `current/total`. Already carries `role="progressbar"` and `aria-label` — don't re-add. |
+| `step_progress/1` | `total: integer`, `current: integer` | the wizard progress row — N-segment bar + `current/total`. **No back button and no `back` attribute since D-041** — the chevron moved into `Chrome.header/1`; pass the route to `Layouts.app/1`'s `back` instead. Already carries `role="progressbar"` and `aria-label` — don't re-add. |
 | `position_badge/1` | `n: integer` | the numbered rounded-square badge on a pool row. Fill cycles mint → yellow-soft → violet-soft; purely decorative, the number is the real content. |
-| `photo_frame/1` | `src: string \| nil`, `alt: string` (required), `height` (default `h-[150px]`), `inner_block` slot for overlay badges | any option/activity image. Falls back to the `.stripes-violet` diagonal placeholder on a nil `src` **or** a broken image (`onerror` swaps the class in). |
+| `photo_frame/1` | `src: string \| nil`, `alt: string` (required), `height` (default `h-[150px]`), `stripe` (default `"stripes-violet"`), `inner_block` slot for overlay badges | any option/activity image. Falls back to a diagonal placeholder on a nil `src` **or** a broken image (`onerror` swaps the class in). Pass `stripe` when you render *many* frames at once — app.css has five variants because a pool of options wearing one repeated stripe reads as a single grey block. **The band width is a variable, not baked in**: every `.stripes-*` reads `var(--stripe-pitch, …)` and the `.stripe-pitch-6` utility sets it for the 38px thumbnail (the ballot grid's size, and what `1c-1` draws). The frames scale the pitch with the element — 5px on `03 review`, 6px at 38px, 10px on the deck's full-bleed photo — so one band width everywhere makes two adjacent cards look unrelated (D-046). |
+| `deck_stack/1` | `id`, `name` (required), `detail`, `image_url`, `behind: integer` (0/1/2+), `photo_class`, `rest` (the caller's `phx-hook` / `data-*` land on the top card) | the swipe deck's card stack on `/join/:slug/vote?view=deck` (D-044). **Its root is `absolute inset-0`**, so the caller must give it a `relative` box *with a height* — and should cap that box (`max-h-*`), not the photo, or the card grows past the frame's ~1.15 ratio. Nothing interactive lives inside: the pass/veto/approve buttons are the caller's, under the card. |
 
 ### `ConsensusWeb.CoreComponents` (`lib/consensus_web/components/core_components.ex`)
 
 | Component | Key attrs | Reach for this when |
 |---|---|---|
 | `button/1` | `variant: "primary"\|"ink"\|nil` | `nil` (omitted) is the white secondary button (`shadow-sticker-2`, `press-2`, hovers yellow); `"primary"` is the one tangerine forward action (`shadow-sticker-4`, `press-4`); `"ink"` is the ink-filled style (Copy link) and has **no shadow and no press class at all** — an ink shadow on an ink fill wouldn't read, so rule 4 is deliberately skipped for this one variant. Renders `<.link>` when `rest` has `href`/`navigate`/`patch`, else `<button>`. Pass `type=` explicitly when you need form semantics. |
-| `input/1` | `type:` (validated list), `field:`, `label:`, `errors:` | any form field. Label renders as an `.eyebrow`; errors render as a tangerine line with an exclamation icon under the field. `type="hidden"` and `type="checkbox"` skip the mint shadow (checkbox uses its own `checked:bg-mint` treatment instead). |
-| `header/1` | `subtitle`/`actions` slots | a page's h1 + optional subtitle + right-aligned actions row. Not the wizard header — that's `step_progress/1`. |
-| `table/1` | `rows:`, `col`/`action` slots | tabular data (currently only the admin user list). Wrapped in `overflow-x-auto` so a wide row scrolls itself, not the page. Rows are individually bordered/shadowed (`shadow-sticker-2`), not one bordered table. |
+| `input/1` | `type:` (validated list), `field:`, `label:`, `errors:` | any form field. Label renders as an `.eyebrow`; errors render as a tangerine line with an exclamation icon under the field. `type="hidden"` and `type="checkbox"` skip the mint shadow (checkbox uses its own `checked:bg-mint` treatment instead). **The `textarea` clause is 16px and no field in this app may go below it** — iOS Safari zooms the page on focus under 16px and never zooms back, so this beats a frame that specifies 13.5px (CLAUDE.md invariant 18 / D-046). Adjust padding if a frame needs the same box height; never the type size. |
+| `header/1` | `subtitle`/`actions` slots | a page's h1 + optional subtitle + right-aligned actions row. **Unused, and shadowed:** `ConsensusWeb.Chrome.header/1` is imported under the same name, so a bare `<.header>` is an ambiguous call and will not compile. Call this one fully qualified if you ever want it. Not the wizard row — that's `step_progress/1`; not the global chrome — that's `Chrome.header/1`. |
+| `table/1` | `rows:`, `col`/`action` slots | tabular data. **No caller today** — the admin user list was its last one and moved to `sticker_card` rows. `Layouts.app`'s `:phone` column is 440px and that table measured 678px, so its `overflow-x-auto` box put Promote/Demote/Delete entirely off-screen with nothing but a scrollbar stub to say so. Reach for row cards at the phone width; this stays for a future `width={:wide}` screen. |
 | `list/1` | `item` slot with `title:` | a vertical key/value list — each item its own `shadow-sticker-2` row. |
-| `flash/1` | `kind: :info\|:error` | rendered through `Layouts.flash_group/1` only — never call it directly outside that. Mint for info, tangerine for error. |
+| `flash/1` | `kind: :info\|:error` | rendered through `Layouts.flash_group/1` only — never call it directly outside that. Mint for info, tangerine for error. **`sticky top-[40px] z-30`**, inside the app column just under the header — not a `fixed` overlay and **not `static`** either. Every hard-coded `top` on a `fixed` card collided with whatever the screen put first (`top-4` hid the header's `‹` and `⋯`; `top-[56px]` hid the `<h1>`), and `left-1/2` centred on the initial containing block rather than the viewport; then `static` scrolled the card off the top of the page on any screen taller than the viewport, so an action taken while scrolled produced feedback nobody saw. `40px` = the header's 48px minus `flash/1`'s own `mt-2`, and `z-30` sits under the header's `z-40`. Do not make it `fixed`, and do not make it `static`. |
 | `icon/1` | `name:` (`hero-*`), `class:` | any icon. Heroicons only — never a `Heroicons` module, never an inline `<svg>`. |
 
-### Shell (`ConsensusWeb.Layouts`, `lib/consensus_web/components/layouts.ex`)
+### Shell (`ConsensusWeb.Layouts` + `ConsensusWeb.Chrome`)
 
-Every screen opens with `<Layouts.app flash={@flash} current_scope={@current_scope}>` — it is
-canvas + centred column + flash group **only** (D-032); pass `width={:wide}` for the desktop
-console, `:phone` (max-width 440px) otherwise. `avatar/1` renders a peach circle with the user's
-initial (`size:` in px, default 34). `account_menu/1` is a `<details>`-based dropdown a screen
-renders itself when it wants one — it is not automatic, despite a stale comment in
-`root.html.heex` implying otherwise.
+Every screen opens with `<Layouts.app flash={@flash} current_scope={@current_scope} ...>`. It is
+canvas + centred column + flash group **plus the global chrome** (D-041): `Chrome.header/1`
+above the `inner_block` and `Chrome.footer/1` below it. Attrs:
+
+| Attr | Values | What it does |
+|---|---|---|
+| `width` | `:phone` (default, 440px) \| `:wide` | the column; `:wide` is the desktop organizer console |
+| `background` | a Tailwind class, default `"bg-surface"` | the colour behind the column |
+| `back` | a path \| `nil` (default) | **the screen's one back affordance.** `nil` omits the control — never a dead circle. A screen that draws a second one is a regression. |
+| `context` | a string \| `nil` | the header's right-hand DM Mono slot (`STEP 2 OF 3`, `LIVE SESSION`, `ADMIN`). `:app` only. |
+| `variant` | `:app` (default) \| `:public` \| `:marketing` | `:app` = context slot + `⋯` menu, for every screen this app owns, signed in or out. `:public` = the `/join` tree: a **yellow** `Create your own →` pill, no `‹`, no `⋯` (yellow at rest, tangerine only on hover — the ballot's "Send my votes" owns the screen's tangerine). `:marketing` = `/`, `/about`, `/privacy`, `/how-it-works`, `/feedback` **while signed out**: a plain `Log in` link, no `⋯` (it read `Sign in` until D-048 — one destination, one name). Those routes write `variant={if @current_scope, do: :app, else: :marketing}`. |
+
+`Chrome.footer/1` takes `variant` and `current_path` (both from `Layouts.app/1`) and is on every
+screen: the two 26px feedback faces (mint smile → `/feedback?mood=happy`, peach frown →
+`/feedback?mood=sad`), then `About us · How it works · Privacy`, then the two credit lines. The
+`·` separators use `--color-faint-soft` (`text-faint-soft`), added for exactly this. Two rows
+drop themselves rather than pointing at where you already are: on `:public` (the `/join` tree)
+everything but the credits goes, the standing link for the page being rendered goes, and on
+`/feedback` the whole face pair goes — that screen owns the mood with its own picker (D-041).
+
+`Layouts.avatar/1` renders a peach circle with the user's initial (`size:` in px, default 34) and
+is **not** in the header in this design — screens place it in their own body (`GroupLive.New`'s
+GROUP row). `Layouts.account_menu/1` is **deleted**; the header's `⋯` replaced it, keeping the
+same `<details>` implementation.
 
 ### Four worked examples
 
@@ -247,13 +269,13 @@ Start the app itself with the `consensus-dev` launch config (`mix phx.server`, p
 | Route | Reference file |
 |---|---|
 | `/` signed out | `docs/design/screens/1b-0-00a-intro-start-page.html` |
-| `/` signed in | `docs/design/screens/1b-1-00-home-start-page-1a.html` |
+| `/` signed in | `docs/design/screens/1b-2-00-home-start-page-1a.html` |
 | `/groups/new` | `docs/design/screens/1a-0-01-setup.html` |
 | `/groups/:id/options` | `docs/design/screens/1a-1-02-add-options-manual-mvp.html` |
 | `/groups/:id/options/:activity_id` | `docs/design/screens/1a-2-02b-edit-an-option-full-screen.html` |
 | `/groups/:id/review` | `docs/design/screens/1a-4-03-review-pool.html` |
 | `/groups/:id/share` | `docs/design/screens/1a-5-04-share.html` |
-| `/` at a wide viewport | `docs/design/screens/1b-2-desktop-organizer-console.html` (lowest priority — build after every phone screen) |
+| `/` at a wide viewport | `docs/design/screens/1b-4-made-with-in-philadelphia.html` — the 1280×790 desktop organizer console. **The filename is a red herring**: the extractor captions each frame from the last centred line inside it, and that frame's is its own footer. This row used to say the console frame had been "dropped in the 2026-08-08 re-import and has no replacement", which contradicted `docs/design/IMPORT-NOTES.md` §2.2, where it is one of eight frames that were **renumbered, not deleted** (`1b-2-desktop-organizer-console.html` → `1b-4-…`). Lowest priority, per `DESIGN-SPEC.md`. |
 
 Full route ↔ module ↔ frame mapping, including what's explicitly out of scope for this pass
 (the phase-2 discover screen, live results, the recipient's first view), is

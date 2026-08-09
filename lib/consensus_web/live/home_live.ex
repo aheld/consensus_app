@@ -3,7 +3,11 @@ defmodule ConsensusWeb.HomeLive do
   `/` — one route with two faces (see `docs/plans/creation-flow.md` decision 1).
 
   Signed out renders design frame `00a`, the public splash. Signed in renders frame `00`,
-  the organizer's home list, and reflows to the `1b-2` desktop console at `md:` and up.
+  the organizer's home list, and reflows to the desktop organizer console
+  (`1b-4-made-with-in-philadelphia.html` — the filename is the extractor's caption, not a
+  description; see `docs/design/IMPORT-NOTES.md` §2.2's "`1b-4` filename trap") at `md:` and
+  up. It was `1b-2` until the 2026-08-08 re-import renumbered the section, and `1b-2` now
+  names an entirely different frame: the phone home.
   `@current_scope` may be `nil` (see `ConsensusWeb.UserAuth`'s `:mount_current_scope` hook,
   wired for this route in the router's `:current_user` `live_session`), so every branch below
   keys off it rather than assuming a signed-in user.
@@ -28,6 +32,11 @@ defmodule ConsensusWeb.HomeLive do
 
     socket =
       socket
+      # Without this, `root.html.heex`'s `<.live_title default="Consensus" suffix=" ·
+      # Consensus">` collided with itself and the app's front door named itself
+      # "Consensus · Consensus" in the tab, the history entry and every bookmark of it.
+      # `HomeLive` was the only user-facing LiveView assigning no `:page_title`.
+      |> assign(:page_title, if(current_scope, do: "Your sessions", else: "Decide together"))
       |> assign(:active_groups, [])
       |> assign(:past_groups, [])
       |> assign(:now, DateTime.utc_now())
@@ -63,6 +72,19 @@ defmodule ConsensusWeb.HomeLive do
   def handle_info({:activities_changed, _activities}, socket),
     do: {:noreply, refresh_groups(socket)}
 
+  # `Consensus.Voting` broadcasts on the *same* `Activities.topic/1` this screen is
+  # subscribed to (see its moduledoc — deliberately one topic per group, not two), so an
+  # organizer sitting on `/` receives every guest join and every ballot cast on any of
+  # their live groups. Without these two clauses `handle_info/2` had no matching head and
+  # the organizer's home LiveView terminated with a `FunctionClauseError` the moment
+  # anyone voted. Pre-existing since the voting loop landed, and observed in the browser
+  # while verifying the chrome; the fix is the same cheap re-fetch every other clause
+  # does, because a ballot can complete a group and move it from active to past.
+  def handle_info({:participant_joined, _group_id}, socket),
+    do: {:noreply, refresh_groups(socket)}
+
+  def handle_info({:ballot_cast, _group_id}, socket), do: {:noreply, refresh_groups(socket)}
+
   # Cheap re-fetch rather than a targeted update: a broadcast on any subscribed group's
   # topic can move that group between the active and past lists (a deadline-triggered
   # completion), so both lists are reloaded together from the same scope.
@@ -77,11 +99,18 @@ defmodule ConsensusWeb.HomeLive do
   @impl true
   def render(assigns) do
     ~H"""
+    <%!-- `/` is the top of the app, so there is no `back`. Signed out it takes the
+          `:marketing` header (plan ruling 3) — a plain Log in link, because the
+          tangerine "Start something" below already is the forward action and a second
+          header pill would only compete with it. Signed in it is an ordinary `:app`
+          screen and needs the `⋯` menu that replaced `Layouts.account_menu/1`. --%>
     <Layouts.app
       flash={@flash}
+      current_path={@current_path}
       current_scope={@current_scope}
       width={if @current_scope, do: :wide, else: :phone}
       background={if @current_scope, do: "bg-surface", else: "bg-canvas"}
+      variant={if @current_scope, do: :app, else: :marketing}
     >
       <.splash :if={!@current_scope} />
       <.home
@@ -101,14 +130,17 @@ defmodule ConsensusWeb.HomeLive do
     ~H"""
     <div class="flex flex-1 flex-col gap-[26px] px-[26px] py-10">
       <div class="flex flex-col gap-3">
-        <span class="font-mono text-[11px] font-semibold uppercase tracking-[.1em] text-ink-soft">
-          Consensus
-        </span>
+        <%!-- The eyebrow wordmark that used to sit here is gone: the global header
+              carries the wordmark on every screen now (D-041), and repeating it 20px
+              below itself read as a duplicate rather than a brand. --%>
         <h1 class="text-pretty text-[40px] font-bold leading-[1.02] tracking-[-.035em]">
           Decide<br />together,<br />in minutes.
         </h1>
         <p class="max-w-[250px] text-[14.5px] leading-[1.45] text-ink-soft">
-          Stop the group chat spiral. Put the options up, let everyone rank, get an answer.
+          <%!-- "let everyone rank" in frame `00a` is the same false promise as step 3 below;
+                the ballot has no ranking control. IMPORT-NOTES.md §5.2 already carries the
+                copy-accuracy warning for it. --%>
+          Stop the group chat spiral. Put the options up, let everyone pick, get an answer.
         </p>
       </div>
 
@@ -140,11 +172,20 @@ defmodule ConsensusWeb.HomeLive do
           navigate={~p"/users/register"}
           class="block rounded-2xl border-2 border-ink bg-tangerine p-4 text-center text-base font-bold text-white shadow-sticker-4 press-4"
         >
-          Get started
+          <%!-- "Start something", the label `/how-it-works` and `/privacy` already give
+                this exact destination. Three pages one tap apart offered the same
+                `~p"/users/register"` under two names; the front door is where most readers
+                meet the action first, so it is the one that had to move. --%>
+          Start something
         </.link>
+        <%!-- The one line on this splash addressed to a *voter* used to link to
+              `/users/log-in` — the single thing product invariant 1 says a voter must
+              never be shown, and now the landing spot for anyone who wandered off a
+              share link. It says the true thing instead: the link they were sent is the
+              way in, and there is nothing to sign into. --%>
         <p class="text-center text-[12.5px] font-medium text-ink-soft">
-          Have a link?
-          <.link navigate={~p"/users/log-in"} class="text-ink underline">Open it →</.link>
+          Sent a link? Open that link — voting needs no account.
+          <.link navigate={~p"/how-it-works"} class="text-ink underline">How it works →</.link>
         </p>
       </div>
     </div>
@@ -153,13 +194,29 @@ defmodule ConsensusWeb.HomeLive do
 
   defp onboarding_steps do
     [
-      {1, "bg-yellow", "Add anything", "Type a name or paste a link."},
+      # Step 1 names the deadline, because `/how-it-works` step 1 does and because
+      # `/groups/new` — where `Start something` lands two taps later — asks for exactly these
+      # two things and nothing else. This card used to be "Add anything / Type a name or
+      # paste a link", so the app's front door and its own walkthrough gave a reader two
+      # different first steps for one product, and neither mentioned the deadline that
+      # step 3 then leans on. Three cards against five steps is fine — a splash is a
+      # shorter telling — as long as no card contradicts a step.
+      {1, "bg-yellow", "Name it, set a deadline", "Then add options: type or paste a link."},
       {2, "bg-violet-soft", "Share one link", "No app, no account to vote."},
-      {3, "bg-peach", "Everyone ranks", "Anonymous. One winner, no debate."}
+      # Not "Everyone ranks". Nobody ranks anything: `Consensus.Voting.Vote` is a set of
+      # `:approve` rows plus at most one `:veto`, with deliberately no rank or weight column
+      # (D-034), and `/how-it-works` already says "Tap every option you'd be happy with".
+      # The splash promised a control the ballot does not have, one tap before the ballot.
+      # Not a bare "Anonymous.", which is the unqualified version of a claim D-049 had to
+      # correct in five other places: who has voted is readable by anyone with the link,
+      # and only the picks are secret. Three words is enough room to say the half that is
+      # true rather than the word that covers both.
+      {3, "bg-peach", "Everyone taps what works",
+       "Nobody sees who picked what. The deadline picks the winner."}
     ]
   end
 
-  ## Design frame 00 — signed-in home (phone) / 1b-2 — desktop console reflow
+  ## Design frame 00 — signed-in home (phone) / 1b-4 — desktop console reflow
 
   attr :current_scope, :map, required: true
   attr :active_groups, :list, required: true
@@ -170,13 +227,9 @@ defmodule ConsensusWeb.HomeLive do
     ~H"""
     <div class="mx-auto flex w-full max-w-[440px] flex-1 flex-col md:max-w-none md:flex-row">
       <aside class="hidden shrink-0 flex-col gap-6 border-r-2 border-ink bg-canvas p-5 md:flex md:w-[210px]">
-        <div class="flex items-center gap-2">
-          <span
-            class="size-[26px] rounded-[50%_50%_50%_12%] border-2 border-ink bg-tangerine"
-            aria-hidden="true"
-          />
-          <span class="text-[17px] font-bold tracking-[-.03em]">Consensus</span>
-        </div>
+        <%!-- The console's own wordmark block is gone for the same reason the splash's
+              eyebrow is: the global header sits directly above this sidebar and already
+              carries it. --%>
         <.link
           navigate={~p"/groups/new"}
           class="flex items-center justify-between rounded-2xl border-2 border-ink bg-tangerine p-3.5 text-white shadow-sticker-4 press-4"
@@ -187,11 +240,11 @@ defmodule ConsensusWeb.HomeLive do
       </aside>
 
       <div class="flex flex-1 flex-col">
+        <%!-- Was a wordmark plus `Layouts.account_menu/1`. Both moved into the global
+              header (D-041), so what is left is the page's own h1 — and it says what
+              this screen actually is rather than repeating the brand a third time. --%>
         <header class="flex items-center px-5 pb-4 pt-3.5 md:px-6 md:pt-6">
-          <h1 class="text-[27px] font-bold leading-none tracking-[-.025em] md:hidden">Consensus</h1>
-          <div class="ml-auto">
-            <Layouts.account_menu current_scope={@current_scope} />
-          </div>
+          <h1 class="text-[27px] font-bold leading-none tracking-[-.025em]">Your sessions</h1>
         </header>
 
         <div class="px-5 pb-4 md:hidden">

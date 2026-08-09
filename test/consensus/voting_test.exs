@@ -544,6 +544,38 @@ defmodule Consensus.VotingTest do
       refute Enum.any?(tally, & &1.winner?)
       assert :no_consensus = Voting.outcome(tally)
     end
+
+    # The case that used to fall through to `:no_votes` — with real ballots cast. A voter
+    # may spend their veto and approve nothing, and `cast_ballot/3` takes that ballot; the
+    # results screen then rendered "Voting closed before anyone cast a ballot." above a
+    # `1/1 voted` avatar row and a struck-through option wearing a `VETOED` pill, i.e. the
+    # screen contradicting itself twice in the reader's own line of sight.
+    test "reports :vetoes_only when ballots were cast but nothing survived with an approval" do
+      scope = user_scope_fixture()
+      {group, [a, _b, _c]} = voting_group_fixture(scope)
+
+      participant = participant_fixture(group)
+      {:ok, _} = Voting.cast_ballot(participant, [], a.id)
+
+      {:ok, completed} = Activities.complete_group(scope, group)
+      tally = Voting.tally(completed)
+
+      refute Enum.all?(tally, & &1.vetoed?)
+      assert Enum.any?(tally, & &1.vetoed?)
+      assert :vetoes_only = Voting.outcome(tally)
+
+      # And it is still distinguishable from the thing it used to be confused with.
+      assert Consensus.Repo.get!(Consensus.Voting.Participant, participant.id).voted_at
+    end
+
+    # A ballot with no approvals *and* no veto is refused outright, which is what makes
+    # `:no_votes` mean exactly "nobody voted" now that `:vetoes_only` has been split out.
+    test "an empty ballot is refused, so :no_votes cannot mean 'voted for nothing'" do
+      scope = user_scope_fixture()
+      {group, _activities} = voting_group_fixture(scope)
+
+      assert {:error, :empty_ballot} = Voting.cast_ballot(participant_fixture(group), [], nil)
+    end
   end
 
   describe "tally/1" do

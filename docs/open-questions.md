@@ -118,6 +118,16 @@ Worth knowing before trusting a green run from somewhere else:
 Separately, `aria-live="polite"` on `<p id="home-message">` was verified as an attribute in the DOM,
 not by listening to a screen reader.
 
+- **`Consensus.Feedback.submit/2`'s `{:error, {:database_busy, _}}` branch is executed by no test**,
+  at either the context or the LiveView level (D-042). The rescue's tuple shape is copied verbatim
+  from `Consensus.Voting.create_participant/2`, which *is* exercised, but neither the branch nor the
+  on-screen copy it produces — "Couldn't save that just now — press Send feedback again. Everything
+  you typed is still here." — has ever run. The interesting part is the claim inside that copy: it
+  asserts the form still holds the typed text, and nothing checks it. Listed here so it is not later
+  rediscovered as an undiscovered gap. The cheap close is a stub at the LiveView boundary; the
+  expensive one is a second `Repo` instance the way
+  [test/consensus/voting_concurrency_test.exs](../test/consensus/voting_concurrency_test.exs) does it.
+
 ### F-6. Found by the final review round and deliberately not fixed
 
 The last round of adversarial review ended by owner decision with these open. Each is real, each was
@@ -157,6 +167,85 @@ reproduced, none blocks anything. Listed roughly by value.
   explained in CLAUDE.md but has no `decisions.md` entry; and D-024 quotes the navbar `<ul>` class
   string without its trailing `px-1`.
 
+### F-7. Left open by the consolidation sweep (D-046)
+
+Each was reproduced, each has a known shape, none blocks anything.
+
+- **`GroupLive.Options`' pool list carries `min-h-0 flex-1 overflow-y-auto` on a column that is not
+  height-bounded, so it does not scroll.** Same latent defect D-046 §1 fixed on the ballot: without
+  a bounded ancestor those three classes are inert and the page scrolls instead. (If it is ever
+  converted, note that D-047 §1 added two more requirements the ballot learned the hard way: the
+  track needs a `min-h-[…]` floor, not `min-h-0`, and the clamp itself is gated on viewport height.) It is left alone
+  deliberately rather than converted — `02 add options` is a form with a growing list under it, and
+  turning it into a fixed-height column with a nested scroller changes how the whole wizard behaves
+  on a phone. The mechanism exists (`Layouts.app/1`'s `fill_viewport`); the design call does not.
+- **A per-mount send budget is not a rate limit.** D-046 §3 gives `/users/log-in` and
+  `/users/settings` one shared `@max_sends` each, spent in a single private function, and that closes
+  the one-tap flood. A reload resets it, and nothing at the endpoint bounds how many magic links one
+  address can be sent per hour across sockets. Closing that properly needs a store (the rate limit
+  itself, plus the counter's key) and a decision about what a refusal renders — which must not become
+  address-dependent, or it is the enumeration oracle D-045 §1 exists to prevent.
+- ~~**A genuine tie at completion still crowns one option silently.**~~ **The *silently* half is
+  closed by D-048; the product question is still open.** `Voting.tally/1` is untouched, so `winner?`
+  still goes to whichever tied option the organizer happened to place higher on `03 review` — but
+  the screen no longer asserts an unqualified win over a dead heat: every tied survivor keeps its
+  star, the legend reads `TIED AT THE TOP`, the card says "Tied at the top" over a note naming the
+  count and the rule that settled it, the row beneath is captioned "Also tied" rather than
+  "Runner-up", and the paste-to-chat summary carries the qualification into the group chat. What is
+  still open is the product question — **does a tie have a winner, a runoff, or an explicit "no
+  consensus"?** — and it belongs with Q-8's veto floor. Nothing in D-048 answers it or forecloses
+  any of the three.
+- **The one primary button matches none of the three frames that draw it** — it renders at the
+  app-wide 60px / 16px radius / `700 16px` / `shadow-sticker-4` against `00c`'s 48 / 15 / `700
+  14.5px`, `1c-1`'s `Send my votes` at 51 / 15 / `700 15px`, and `00b`'s CTA at `700 15.5px`.
+  Fixing it means changing the shared `<.button variant="primary">` — the frames disagree with each
+  other, so there is no single number to move it to, and a per-screen override buys frame fidelity
+  at the cost of the thing a design system is for. D-047 widened the *record* rather than the fix:
+  `docs/design/DESIGN-SPEC.md` now states the deviation once for all three instances instead of
+  naming `00c` and leaving the other two silent.
+- **The deck card's photo occupies ~78% of the card against frame `1c-0`'s 64.7%.** The aspect ratio
+  is now stated on the photo itself and is right to within half a percent (D-047 §6, after two
+  attempts that capped the card instead and left the ratio tracking the viewport). The *share*
+  cannot be matched from this end: at a 380px-wide photo the ratio fixes it at ~286px and this
+  card's body is two clamped lines ≈ 79px, where the frame's 264px card carries a 105px body because
+  it draws three lines (name, a chip meta row, a description) where `meta_line/1` gives us one.
+  Matching the share as well means inventing card content, which is a product decision.
+- **`/feedback` at the bottom of its scroll shows ~180px of empty surface** between the last field
+  and the pinned bar — the reserved bar height, made visible once there is nothing left to scroll.
+  The alternative is the nested-scroller shape (`fill_viewport` plus an `overflow-y-auto` body),
+  which trades the gap for a scroll region inside a phone page. Left as reserve, per the shape
+  D-046 §4 records.
+
+### F-8. Left open by the second and third consolidation passes (D-047, D-048)
+
+- **The footer's two mood faces and its three standing links are still under 44×44.** The faces are
+  39×37 (measured with an `elementFromPoint` sweep — 38 was the arithmetic; D-041 and D-047 §5 are
+  corrected in place) and the links 44×26, and both are capped by a neighbour rather than by taste: 11px more
+  height on a face takes `Privacy` to 23px, under WCAG 2.5.8 AA's 24px floor, because a positioned
+  pseudo-element beats a static sibling whatever the DOM order says. The two axes that were free
+  (the gutter between the faces, the width of each link) were taken in D-047 §5. Reaching 44 in the
+  remaining axis costs either a neighbour under the AA floor or ~18px more of an already over-budget
+  footer; the honest fix is a taller footer — concretely, more vertical gap between its three rows,
+  which is what would give the faces room to grow without stealing it from the standing links. That
+  is a design call nobody has made, and D-048 declined to make it: the footer already measures
+  120.25px against the frame's 97px, so it would spend ~20px of every screen in the app to close a
+  7px gap on two controls that already clear the 24px AA floor.
+- **The ballot's grid track is 31.9% of a 360×640 viewport against frame `1c-1`'s 50.3%.** Both
+  numbers are measured, not estimated: `getBoundingClientRect().height` 204.1 of 640 here, 302.2 of
+  600 on the frame. D-047 §6 reclaimed what it could — the veto explainer is dropped once the veto
+  is spent — and the consolidation pass took the two remaining free things: the `VIEW` eyebrow over
+  the toggle (a label for a control whose own buttons read `Grid` and `Swipe`) and four words out
+  of the veto sentence. **Neither moved the track by a pixel**, and that is the useful finding: of
+  the 138.3px between the header and the track, 66 is the view-switch row of which 54 is the
+  toggle's two 44px buttons, and the veto sentence still wraps to two lines at 360px. The block
+  below is the status region (91.4px) and the 60px submit, both of which earlier review rounds
+  required. Getting to 50% means giving up a touch target or deleting one of those blocks — a
+  design call nobody has made, not a tightening nobody has tried.
+- **`Voting.outcome/1`'s `:vetoes_only` covers two sub-cases with one sentence.** "Nobody approved
+  anything" and "the only approvals landed on options that were then vetoed" are told apart by
+  nothing on screen. The sentence is true of both and the distinction has never been asked for; if
+  it is, the tally already carries the approvals to compute it.
+
 ### F-5. Deferred by explicit decision, listed so they are not rediscovered as bugs
 
 - **The admin sudo window is computed once, at mount.** A long-open `/admin/users` renders enabled
@@ -173,7 +262,7 @@ reproduced, none blocks anything. Listed roughly by value.
 
 ## Blocking — decide before finishing the voting engine
 
-The domain layer (`Consensus.Voting`, D-034 through D-037) is built; the `/join` web layer is not.
+The domain layer (`Consensus.Voting`, D-034 through D-037) is built, and so is the `/join` web layer — entry, ballot (grid and deck, D-044) and results.
 Some of what follows is therefore now half-answered, and says so in place.
 
 ### Q-4. Guest identity — the token is settled, the transport is not
@@ -193,11 +282,19 @@ row (`get_participant_by_token/1`). "One vote per voter" is enforced by `partici
 and a conditional `UPDATE` (D-036), and "one veto per voter" by the ballot being submitted whole,
 once. `localStorage` is not used anywhere.
 
-**Still open:** the transport. The token has to reach the browser somehow, and the plan puts it in
-the Phoenix session via `JoinController.enter/2` — but that controller, and the whole `/join` tree,
-is not built yet, so nothing has been decided about cookie attributes, what happens in an iMessage
-webview that drops the cookie, or whether a returning voter with no cookie may re-claim their row
-at all. Decide that with the web layer, not before.
+~~**Still open:** the transport … that controller, and the whole `/join` tree, is not built
+yet.~~ **The transport is built too.** `ConsensusWeb.JoinController.enter/2` writes the token into
+the Phoenix session under `"participant_token:<group_id>"`, and `UserAuth.renew_session/2`
+deliberately preserves keys with that prefix so signing in mid-ballot does not mint a second
+participant row and count one person twice (D-045).
+
+What is genuinely still open is narrower than the paragraph above claimed: **what happens to a
+returning voter whose cookie is gone** — an iMessage or WhatsApp webview with its own storage, a
+cleared session, a different device. Today they are simply a new participant with a new token: they
+can join again and vote again, which is the integrity hole point 2 names, in a milder form (it costs
+a fresh browser context rather than a `localStorage.clear()`). Whether a voter with no cookie may
+re-claim a row at all — and on what evidence — is undecided, and nothing should invent an answer
+without deciding it here first.
 
 ### Q-5. Do booking deep-links actually exist?
 

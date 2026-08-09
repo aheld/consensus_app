@@ -1,0 +1,20 @@
+<Layouts.app flash={%{}} background="bg-canvas" variant={:marketing}>
+  <div class="flex flex-1 flex-col gap-5 px-6 pb-8 pt-6">
+    <.eyebrow>404</.eyebrow>
+    <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em]">
+      There's nothing at this address.
+    </h1>
+    <p class="text-[14.5px] leading-[1.45] text-ink-soft">
+      If you were handed a link to vote on something, it may have been re-typed or cut
+      short — ask whoever sent it to paste it again. Voting links look like
+      <span class="font-mono text-[13px] text-ink">/join/</span>
+      followed by a short code.
+    </p>
+
+    <div class="mt-auto flex flex-col gap-3 pt-4">
+      <.button variant="primary" navigate={~p"/"}>
+        Go to Consensus <span aria-hidden="true">→</span>
+      </.button>
+    </div>
+  </div>
+</Layouts.app>

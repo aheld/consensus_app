@@ -28,14 +28,28 @@ body{{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-s
 TAIL = "\n</body></html>\n"
 
 
+def section_ids(lines):
+    """Every `dv-opt` option id in the document, in source order (1a, 1b, 1c, 2a, 4a…)."""
+    return re.findall(r'class="dv-opt" id="([^"]+)"', "\n".join(lines))
+
+
 def section(lines, sec_id):
+    """The lines of one `dv-opt` block.
+
+    Bounded by the *next* `dv-opt` as well as by div depth: sibling options sit at the
+    same depth inside one `.dv-opts` row, and depth alone runs straight past them.
+    """
     start = next(i for i, l in enumerate(lines) if f'class="dv-opt" id="{sec_id}"' in l)
+    nxt = next(
+        (i for i, l in enumerate(lines) if i > start and 'class="dv-opt" id="' in l),
+        len(lines),
+    )
     depth = 0
-    for i in range(start, len(lines)):
+    for i in range(start, nxt):
         depth += lines[i].count("<div") - lines[i].count("</div")
         if i > start and depth <= 0:
             return lines[start : i + 1]
-    return lines[start:]
+    return lines[start:nxt]
 
 
 STARTS = (
@@ -45,7 +59,13 @@ STARTS = (
 
 
 def screens(block):
-    """Yield (caption, html) for each column-0 screen block inside a section."""
+    """Yield (caption, html) for each column-0 screen block inside a section.
+
+    Some options (the feedback entry points in `4x`, the app mark in `2x`) are a single
+    annotated specimen rather than a row of captioned phone frames and match none of
+    STARTS. Those fall through to the whole-section fallback below, which is why this
+    returns `[]` rather than raising for them.
+    """
     out = []
     i = 0
     while i < len(block):
@@ -74,8 +94,16 @@ def main():
     src = open(SRC, encoding="utf-8").read().split("\n")
     os.makedirs(OUT, exist_ok=True)
     index = []
-    for sec in ("1a", "1b"):
-        for n, (cap, html) in enumerate(screens(section(src, sec))):
+    for sec in section_ids(src):
+        block = section(src, sec)
+        found = screens(block)
+        if not found:
+            # A single annotated specimen (feedback entry points, app mark) — emit the
+            # whole option block, captioned from its own `dv-olabel`.
+            label = re.search(r'class="dv-olabel">.*?</a>(.*?)</div>', "\n".join(block))
+            cap = re.sub(r"<[^>]+>", "", label.group(1)).strip() if label else sec
+            found = [(cap, "\n".join(block))]
+        for n, (cap, html) in enumerate(found):
             name = f"{sec}-{n}-{slug(cap)}.html"
             with open(os.path.join(OUT, name), "w", encoding="utf-8") as f:
                 f.write(HEAD.format(title=f"{sec} · {cap}") + html + TAIL)

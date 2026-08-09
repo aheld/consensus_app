@@ -428,9 +428,12 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       assert has_element?(view, "#activities-#{a.id}")
       assert has_element?(view, "#activities-#{b.id}")
 
-      # And the same on the Cancel path, which returns by a plain patch.
+      # And the same on the close-to-parent path. That used to be a "Cancel" button in
+      # the editor's action bar; it is the global header's `‹` now (plan ruling 1), and
+      # it is still a plain patch — `back_patch`, not `back` — so the socket, the stream
+      # and any in-flight link-preview task survive the trip out.
       view |> element(~s(a[href$="/options/#{a.id}"])) |> render_click()
-      view |> element("a", "Cancel") |> render_click()
+      view |> element("#chrome-back") |> render_click()
 
       cancelled = render(view)
       assert cancelled =~ "Osteria Mozza"
@@ -634,6 +637,44 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
                live(conn, ~p"/groups/#{group}/options/#{activity.id}")
 
       assert to == ~p"/groups/#{group}/review"
+    end
+  end
+
+  # D-045. `back_patch` and every control in the global footer re-run `handle_params/3`,
+  # which rebuilds `@edit_form` from the *stored* activity — so a name or description
+  # typed here and not saved is discarded silently. Only the `:edit_activity` branch needs
+  # this; the index's "add an option" field commits on submit.
+  describe "the unsaved-draft guard on the option editor" do
+    setup %{scope: scope} do
+      group = group_fixture(scope)
+      activity = activity_fixture(group, %{name: "Kismet", description: "Mediterranean."})
+      %{group: group, activity: activity}
+    end
+
+    test "is disarmed on an untouched editor", %{conn: conn, group: group, activity: activity} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options/#{activity.id}")
+
+      refute has_element?(lv, "#chrome-back[data-confirm]")
+      refute has_element?(lv, "footer a[data-confirm]")
+    end
+
+    test "arms once the description is edited", %{conn: conn, group: group, activity: activity} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options/#{activity.id}")
+
+      lv
+      |> form("#edit-option-form",
+        activity: %{"name" => "Kismet", "description" => "Mediterranean on Hollywood."}
+      )
+      |> render_change()
+
+      assert has_element?(lv, "#chrome-back[data-confirm]")
+      assert has_element?(lv, "footer a[data-confirm]")
+    end
+
+    test "the index screen is never armed", %{conn: conn, group: group} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      refute has_element?(lv, "footer a[data-confirm]")
     end
   end
 end
