@@ -185,18 +185,7 @@ frame is the one who is wrong.
    with the same "Send my votes" action the grid has, plus a way back into the deck to change a card.
    `/about` and `/privacy` are short, honest, real pages.
 
-8. **The `/join` tree gets the footer's credits and nothing else, and an inert wordmark.** Added
-   after P1's first critic round. Frame `4a` puts the feedback pair and the three standing links
-   on every frame, and on the ballot that is five `navigate`s under "Send my votes". `@approved`
-   and `@veto_id` live only in socket assigns until `Voting.cast_ballot/3` runs, and a guest has
-   no account and no history of the group, so each of those links silently discards the ballot and
-   strands them — the only route back is the original share link in whatever chat app they came
-   from. That is the acceptance bar above failing on the exact screen the "guest drop-off under
-   5%" metric is measured on. Same reasoning as ruling 2's `⋯`: the guest header and footer carry
-   only what a guest can use. The `Create your own →` pill stays as the one labelled door out.
-   Everywhere else the footer is the full frame, and each of its links carries `?return_to=` so a
-   standing page comes back where it was tapped.
-
+8. ~~**The `/join` tree gets the footer's credits and nothing else, and an inert wordmark.**~~ **Superseded 2026-08-09 — the footer is the same on the `/join` tree as everywhere else,** which is what the brief asked for. The risk this ruling was written against is real: a guest's ballot lives only in socket assigns until `Voting.cast_ballot/3` runs, so every footer link is a way to discard it silently. It is closed by `footer_confirm` — `JoinLive.Ballot` passes it beside `pill_confirm`, so every control prompts once a pick exists and none prompts before — rather than by removing the controls. The inert wordmark stands. See D-041 as amended.
 9. **The header's context slot is state, never the page's name.** Also from P1's critic round. The
    slot is the frame's `LIVE SESSION`: `STEP 2 OF 3`, `ADMIN`, `SHARE`. Where the screen's own
    `<.eyebrow>` or `<h1>` already says the word, the slot stays empty — `PRIVACY` above `Privacy`

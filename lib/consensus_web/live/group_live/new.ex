@@ -324,8 +324,17 @@ defmodule ConsensusWeb.GroupLive.New do
             <p :if={deadline_error_message(@form)} class="text-sm font-semibold text-tangerine">
               {deadline_error_message(@form)}
             </p>
+            <%!-- The `Custom…` chip is dashed and `disabled`, and its `title="Coming soon"`
+                  cannot fire on touch — so on the device this app is built for it read as a
+                  button that simply does nothing when tapped. The sibling `Bars`/`Movies`
+                  chips on `02 add options` are drawn the same way and *captioned*
+                  ("Restaurants first. More types as we grow."); this row's caption was about
+                  the deadline instead, so the dead chip had no explanation anywhere. Naming
+                  it here is the same obligation invariant 1 of the plan's confusion list puts
+                  on anything inert: it has to read as inert, not merely be it. --%>
             <p class="text-[11.5px] leading-[1.4] text-muted">
-              Hard deadline. Voting locks itself and picks the winner.
+              Hard deadline. Voting locks itself and picks the winner. Pick-your-own times are
+              coming; for now it's one of these three.
             </p>
           </div>
 
