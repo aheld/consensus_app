@@ -226,4 +226,33 @@ defmodule ConsensusWeb.HowItWorksLiveTest do
       assert about |> element("main a[href*='how-it-works']") |> render() =~ "return_to=%2Fabout"
     end
   end
+
+  describe "the multiple-voting caveat" do
+    test "names the gap, the trade, and a way to answer", %{conn: conn} do
+      {:ok, _lv, html} = live(conn, ~p"/how-it-works")
+
+      # The gap itself, in the terms a reader would hit it in.
+      assert html =~ "private window"
+
+      # The trade, not just the flaw. A limitation stated with no reasoning reads as an
+      # apology; the point of this section is that the alternative costs something.
+      assert html =~ "phone number"
+
+      # And somewhere for an opinion to actually land. Sad-mood, because a reader who
+      # disagrees with this call is reporting a problem, and `return_to` so the feedback
+      # form's Cancel comes back here rather than dropping them on `/`.
+      assert html =~ ~s(id="honest-limit-feedback")
+      assert html =~ "/feedback?mood=sad&amp;return_to=%2Fhow-it-works"
+    end
+
+    test "does not spend the screen's one tangerine", %{conn: conn} do
+      {:ok, _lv, html} = live(conn, ~p"/how-it-works")
+
+      # The caveat is a violet-tint card with an underlined link. `#how-it-works-cta` is
+      # the forward action and owns the colour; a warning-coloured caveat would read as an
+      # error the reader has to clear before proceeding.
+      assert html =~ ~s(id="honest-limit")
+      refute html =~ ~s(id="honest-limit-feedback" variant="primary")
+    end
+  end
 end

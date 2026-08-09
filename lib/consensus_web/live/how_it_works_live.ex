@@ -126,6 +126,34 @@ defmodule ConsensusWeb.HowItWorksLive do
       "moment voting opens."
   ]
 
+  # Stated on the page rather than left for someone to discover, because it is discoverable
+  # in about ten seconds and finding it yourself in a product that never mentioned it reads
+  # as a bug being hidden. The mechanism is exact: a guest's identity is the
+  # `participant_token:<group_id>` session cookie `ConsensusWeb.JoinAuth` writes, so a fresh
+  # private window is a fresh voter. A *signed-in* voter cannot do it —
+  # `unique_index(:participants, [:group_id, :user_id], where: "user_id IS NOT NULL")` in
+  # `20260808210450_create_voting_tables.exs` allows one participant row per account per
+  # group — and that asymmetry is worth saying, because it is the only lever the product
+  # currently has and a reader may reasonably want it.
+  #
+  # The ask at the end is real: the alternative on the table (one unique link per voter)
+  # is not a free upgrade, it is a trade of the thing this app is built around — no phone
+  # numbers, no address book, one link the organizer pastes once — and which side of that
+  # trade people want is not something we can decide from here. It routes to `/feedback`,
+  # which is where an answer can actually land.
+  @honesty %{
+    heading: "You could vote twice, and we know",
+    body:
+      "Voting takes no account, which means nothing stops somebody opening a private " <>
+        "window and voting again. If you are signed in you get one vote per session, but " <>
+        "a guest is just a browser.",
+    trade:
+      "We could give every voter their own link instead. That means collecting everyone's " <>
+        "phone number, or the organizer sending the message one person at a time — and for " <>
+        "deciding where five friends eat, that felt worse than the problem.",
+    ask: "Think we called that wrong? Tell us."
+  }
+
   @impl true
   def mount(params, _session, socket) do
     {:ok,
@@ -133,6 +161,7 @@ defmodule ConsensusWeb.HowItWorksLive do
      |> assign(:page_title, "How it works")
      |> assign(:steps, @steps)
      |> assign(:good_to_know, @good_to_know)
+     |> assign(:honesty, @honesty)
      |> assign(:return_to, safe_back(params))}
   end
 
@@ -209,6 +238,29 @@ defmodule ConsensusWeb.HowItWorksLive do
           <p :for={line <- @good_to_know} class="flex gap-[9px] text-[12.5px] leading-[1.4]">
             <span class="font-bold text-violet" aria-hidden="true">·</span>
             <span>{line}</span>
+          </p>
+        </.sticker_card>
+
+        <%!-- Violet-tint rather than white: this is a caveat, not another fact in the list,
+              and the design already uses `--violet-tint` for the one card on `03 review`
+              that explains a rule rather than stating one. Not tangerine — the screen's one
+              forward action is "Start something" below, and a warning colour would read as
+              an error the reader has to fix. The `Tell us` link is a plain underlined link
+              for the same reason: a second filled button here would compete with the CTA. --%>
+        <.sticker_card tone={:violet_tint} class="flex flex-col gap-2 p-3.5" id="honest-limit">
+          <.eyebrow>The honest bit</.eyebrow>
+          <p class="text-[13.5px] font-bold leading-snug">{@honesty.heading}</p>
+          <p class="text-[12.5px] leading-[1.45] text-ink-soft">{@honesty.body}</p>
+          <p class="text-[12.5px] leading-[1.45] text-ink-soft">{@honesty.trade}</p>
+          <p class="text-[12.5px] leading-[1.45]">
+            {@honesty.ask}
+            <.link
+              id="honest-limit-feedback"
+              navigate={~p"/feedback?#{[mood: "sad", return_to: ~p"/how-it-works"]}"}
+              class="-my-1 inline-flex min-h-[26px] items-center font-semibold text-violet underline decoration-2 underline-offset-2 transition-colors hover:text-tangerine active:text-tangerine"
+            >
+              Send us a note
+            </.link>
           </p>
         </.sticker_card>
 
