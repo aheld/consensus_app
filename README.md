@@ -489,8 +489,13 @@ that names the fix. So a deploy without the secret still boots and still works �
 nothing:
 
 ```bash
-fly secrets set RESEND_API_KEY=re_... MAIL_FROM=hello@your-verified-domain.com
+fly secrets set RESEND_API_KEY=re_...
 ```
+
+Only the key is a secret. **`MAIL_FROM` lives in `fly.toml`'s `[env]` block**, next to
+`PHX_HOST` — it is in the header of every email you send, so there is nothing to hide, and
+keeping it in the repo makes it diffable and reviewable. Fly secrets are write-only and each
+`set` restarts the machine; neither is a property you want for ordinary config.
 
 Two things bite here. **`MAIL_FROM` must be on a domain you have verified in the Resend
 dashboard**, or every send is rejected by the provider; unset, it falls back to Resend's
@@ -535,7 +540,7 @@ Every environment variable the application actually reads:
 | `PORT` | `config/runtime.exs`, all envs | `4000` | No. Must equal `internal_port` in `fly.toml` (`8080` there). |
 | `POOL_SIZE` | `config/runtime.exs`, `:prod` only | `1` | No, and **do not raise it without a measurement** (D-038). SQLite allows one write transaction across the whole file, so extra slots buy no write concurrency — they only add contenders for a lock that was never shareable, and they slow reads too. A 15-voter deadline burst measured p95 25,762 ms at `5` (with ballots lost outright) against 10.6 ms at `1`. |
 | `RESEND_API_KEY` | `config/runtime.exs`, `:prod` only | unset | For real email, yes. Unset ⇒ `Swoosh.Adapters.Logger` and a boot warning; nothing is delivered but the app runs (D-039). |
-| `MAIL_FROM` / `MAIL_FROM_NAME` | `config/runtime.exs`, `:prod` only | `onboarding@resend.dev` / `Consensus` | Only with `RESEND_API_KEY`. The address must be on a domain **verified in Resend**; the default only delivers to the Resend account owner. |
+| `MAIL_FROM` / `MAIL_FROM_NAME` | `config/runtime.exs`, `:prod` only — set in `fly.toml` `[env]`, **not** as a secret | `onboarding@resend.dev` / `Consensus` | Only with `RESEND_API_KEY`. The address must be on a domain **verified in Resend**; the default only delivers to the Resend account owner. |
 | `DNS_CLUSTER_QUERY` | `config/runtime.exs`, `:prod` only | unset → `:ignore` | No. Irrelevant on a single machine. |
 | `ADMIN_USERNAME` | [`lib/consensus/seeds.ex`](lib/consensus/seeds.ex) | `aheld` | No. Read only on a boot where the database holds **no administrator** (`Accounts.count_admins() == 0`) — normally the first boot. Ignored once any admin exists. |
 | `ADMIN_EMAIL` | `lib/consensus/seeds.ex` | `aheld@example.com` | No. Same gate as `ADMIN_USERNAME`, and read on the same boot or not at all. |

@@ -1081,6 +1081,7 @@ The hardcoded `contact@example.com` sender had to go regardless: Resend rejects 
 **Consequences:**
 - `RESEND_API_KEY` must be set with `fly secrets set` before magic-link login works in production. Until then the boot warning fires on every deploy and behaviour is exactly D-014's.
 - `MAIL_FROM` must be an address on a domain verified in Resend, or delivery fails per-send. Unset means `onboarding@resend.dev`, which only delivers to the Resend account owner's own address.
+- The two settings live in **different places on purpose**: `RESEND_API_KEY` is a Fly secret, `MAIL_FROM` is a plain `[env]` entry in `fly.toml` (set to `consensus@marketfinder.us`). A sender address is in the header of every message we send, so it is config rather than a secret, and `fly.toml` keeps it diffable and reviewable — Fly secrets are write-only and restart the machine on every `set`, neither of which is wanted for ordinary config.
 - `.env.example` is now a real file documenting all of these; `.env` stays gitignored.
 - CLAUDE.md's "Known gap, not an invariant" paragraph, README and TODO all had to change: they said production could not deliver mail at all, which stops being true the moment the secret is set.
 - Invariant 9 is untouched and still binding. `UserNotifier.deliver/3` keeps its `catch`, and a Resend outage must remain a logged `{:error, reason}` rather than a failed request.

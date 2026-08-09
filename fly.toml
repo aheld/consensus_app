@@ -28,6 +28,12 @@ kill_timeout = '30s'
   # Must live inside the [mounts] destination below, or the database is silently
   # recreated (empty) on every deploy.
   DATABASE_PATH = '/data/consensus.db'
+  # The address Consensus sends transactional mail as (D-039). Config, not a secret —
+  # it is in the header of every email we send. Its *domain* must be verified in the
+  # Resend dashboard or every send is rejected at the provider; that failure is quiet,
+  # because invariant 9 logs a mailer error rather than raising. The matching secret is
+  # RESEND_API_KEY, which is NOT here: `fly secrets set RESEND_API_KEY=re_...`.
+  MAIL_FROM = 'consensus@marketfinder.us'
 
 # NOTE: there is deliberately no [deploy] release_command.
 #
