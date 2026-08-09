@@ -134,10 +134,16 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
     ├── PRD.md, decisions.md, open-questions.md
     ├── technical-roadmap-v1-draft.md, prd-technical-extracts.md
     ├── design/                   # DESIGN-SPEC.md (the visual source of truth) + screens/
+    ├── build-board.html          # how the voting loop was built: the acceptance script that
+    │                             #   defined "done", per-workstream critic verdicts, and a
+    │                             #   dated log. Standalone, no build step — `open` it.
+    ├── sqlite-capacity-review.md # measured SQLite ceiling, the migration trigger, and the
+    │                             #   costing of moving off it (D-038)
     └── plans/                    # per-feature implementation plans, incl. creation-flow.md
+                                  #   and voting-loop.md
 ```
 
-**Note:** the application is tracked in git — it was committed in full at `8825433` ("Add the Consensus application: auth, admin area, editable home page, Fly release"), not left untracked. Run `git ls-files` if you want the exact list rather than trusting this tree. As of this writing the creation-flow feature above (D-027 through D-033) sits as **uncommitted** changes on top of that commit — modifications to already-tracked files (`router.ex`, `application.ex`, `seeds.ex`, `home_live.ex`, `layouts.ex`, `core_components.ex`, the config files, `app.css`, `app.js`, ...) plus new, still-untracked files (`activities.ex` and its context module, `link_preview.ex` and its submodules, `deadlines.ex`, `sticker.ex`, `group_live/`, the two new migrations, `docs/design/`, `docs/plans/creation-flow.md`, and their tests). Run `git status --short` before assuming any particular file is or is not committed — that state changes the moment someone runs `git add -A && git commit`.
+**Note:** the application is tracked in git. The foundation landed at `8825433`, the organizer's creation flow at `5fd4cc6`/`13cfd5b` (tagged `v0.2.0`), and the voting loop plus its deployment at `0478d7b`…`d976656` (tagged `v0.3.0`). Everything described in this file is committed and pushed to `origin/main`. Run `git status --short` before assuming otherwise — that state changes the moment anyone edits a file.
 
 ## Engineering invariants
 

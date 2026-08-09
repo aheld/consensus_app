@@ -1,0 +1,337 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<!--
+  Consensus — MVP build board.
+
+  A snapshot of how the voting loop (D-034..D-040) was built: the acceptance script
+  that defined "done", the workstreams, what each critic found, and a dated activity
+  log. Self-contained — no build step, no network. Open it directly:
+
+      open docs/build-board.html
+
+  It is a record, not a live dashboard: the state is the literal BOARD object at the
+  bottom of this file. Edit that object to update it.
+-->
+<title>Consensus MVP — build board</title>
+
+<style>
+:root{
+  --ink:#17211C; --ink-soft:#3B4A42; --muted:#5E6D64; --faint:#8A968E;
+  --ground:#DDF0E2; --surface:#F7FBF8; --raised:#FFFFFF;
+  --tangerine:#FF6A2B; --violet:#6B46F0; --mint:#B9EFC9; --yellow:#FFD84D;
+  --tint-violet:#EFEAFD; --tint-mint:#E4F7EA; --tint-yellow:#FFF4D6; --tint-tangerine:#FFE9DF;
+  --hard:#17211C; --rule:rgba(23,33,28,.18); --track:rgba(23,33,28,.12);
+  --on-violet:#FFFFFF; --on-tangerine:#FFFFFF; --on-mint:#17211C; --on-yellow:#17211C;
+  --sans:ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;
+  --mono:ui-monospace,SFMono-Regular,Menlo,"DM Mono",monospace;
+}
+@media (prefers-color-scheme: dark){
+  :root{
+    --ink:#CFE2D5; --ink-soft:#A9C1B1; --muted:#8CA694; --faint:#6C8474;
+    --ground:#0F1512; --surface:#171F1A; --raised:#1D2721;
+    --tangerine:#FF7C42; --violet:#9078F7; --mint:#6FCB8E; --yellow:#E3BE3E;
+    --tint-violet:#221D3A; --tint-mint:#152A1E; --tint-yellow:#2A2413; --tint-tangerine:#301A11;
+    --hard:#050806; --rule:rgba(207,226,213,.20); --track:rgba(207,226,213,.14);
+    --on-violet:#FFFFFF; --on-tangerine:#0F1512; --on-mint:#0F1512; --on-yellow:#0F1512;
+  }
+}
+:root[data-theme="dark"]{
+  --ink:#CFE2D5; --ink-soft:#A9C1B1; --muted:#8CA694; --faint:#6C8474;
+  --ground:#0F1512; --surface:#171F1A; --raised:#1D2721;
+  --tangerine:#FF7C42; --violet:#9078F7; --mint:#6FCB8E; --yellow:#E3BE3E;
+  --tint-violet:#221D3A; --tint-mint:#152A1E; --tint-yellow:#2A2413; --tint-tangerine:#301A11;
+  --hard:#050806; --rule:rgba(207,226,213,.20); --track:rgba(207,226,213,.14);
+  --on-violet:#FFFFFF; --on-tangerine:#0F1512; --on-mint:#0F1512; --on-yellow:#0F1512;
+}
+:root[data-theme="light"]{
+  --ink:#17211C; --ink-soft:#3B4A42; --muted:#5E6D64; --faint:#8A968E;
+  --ground:#DDF0E2; --surface:#F7FBF8; --raised:#FFFFFF;
+  --tangerine:#FF6A2B; --violet:#6B46F0; --mint:#B9EFC9; --yellow:#FFD84D;
+  --tint-violet:#EFEAFD; --tint-mint:#E4F7EA; --tint-yellow:#FFF4D6; --tint-tangerine:#FFE9DF;
+  --hard:#17211C; --rule:rgba(23,33,28,.18); --track:rgba(23,33,28,.12);
+  --on-violet:#FFFFFF; --on-tangerine:#FFFFFF; --on-mint:#17211C; --on-yellow:#17211C;
+}
+
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--ground); color:var(--ink);
+  font-family:var(--sans); font-size:15px; line-height:1.5;
+  -webkit-font-smoothing:antialiased;
+}
+.wrap{max-width:1080px; margin:0 auto; padding:32px 20px 72px; display:flex; flex-direction:column; gap:28px}
+
+/* ---- masthead ---- */
+.mast{display:flex; flex-direction:column; gap:14px}
+.eyebrow{
+  font-family:var(--mono); font-size:11px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+}
+h1{
+  margin:0; font-size:clamp(30px,5vw,42px); line-height:1.02;
+  letter-spacing:-.032em; font-weight:700; text-wrap:balance;
+}
+.sub{margin:0; max-width:60ch; color:var(--ink-soft); font-size:15px}
+
+.meterrow{display:flex; align-items:center; gap:14px; flex-wrap:wrap}
+.meter{
+  flex:1 1 260px; height:16px; border:2px solid var(--ink); border-radius:99px;
+  background:var(--raised); overflow:hidden; box-shadow:2px 2px 0 var(--hard);
+  display:flex;
+}
+.meter > i{flex:none; height:100%; background:var(--violet); border-right:2px solid var(--ink)}
+.meter > i:last-child{border-right:0}
+.meterlabel{font-family:var(--mono); font-size:12px; font-weight:600; color:var(--ink-soft); font-variant-numeric:tabular-nums}
+
+/* ---- generic sticker card ---- */
+.card{
+  background:var(--raised); border:2px solid var(--ink); border-radius:18px;
+  box-shadow:3px 3px 0 var(--hard); padding:16px 18px;
+  display:flex; flex-direction:column; gap:12px;
+}
+section > h2{
+  margin:0 0 12px; font-family:var(--mono); font-size:11px; font-weight:600;
+  letter-spacing:.14em; text-transform:uppercase; color:var(--muted);
+}
+
+/* ---- state chips ---- */
+.chip{
+  display:inline-flex; align-items:center; gap:6px; flex:none;
+  border:2px solid var(--ink); border-radius:99px; padding:2px 10px;
+  font-family:var(--mono); font-size:10.5px; font-weight:600;
+  letter-spacing:.08em; text-transform:uppercase; white-space:nowrap;
+}
+.chip.done{background:var(--mint); color:var(--on-mint)}
+.chip.live{background:var(--violet); color:var(--on-violet)}
+.chip.queued{background:var(--yellow); color:var(--on-yellow)}
+.chip.blocked{background:var(--tangerine); color:var(--on-tangerine)}
+.chip.idle{background:transparent; color:var(--muted); border-style:dashed}
+.dot{width:7px; height:7px; border-radius:50%; background:currentColor; flex:none}
+.chip.live .dot{animation:pulse 1.4s ease-in-out infinite}
+@keyframes pulse{0%,100%{opacity:1}50%{opacity:.25}}
+@media (prefers-reduced-motion:reduce){.chip.live .dot{animation:none}}
+
+/* ---- acceptance script ---- */
+ol.script{list-style:none; margin:0; padding:0; display:flex; flex-direction:column; gap:0}
+ol.script li{
+  display:grid; grid-template-columns:30px 1fr auto; align-items:center; gap:12px;
+  padding:11px 2px; border-bottom:1px solid var(--rule);
+}
+ol.script li:last-child{border-bottom:0}
+.step{
+  width:26px; height:26px; border:2px solid var(--ink); border-radius:9px;
+  display:grid; place-items:center; font-family:var(--mono); font-size:11px; font-weight:600;
+  background:var(--raised); color:var(--ink); flex:none;
+}
+li[data-state="done"] .step{background:var(--mint); color:var(--on-mint)}
+li[data-state="live"] .step{background:var(--violet); color:var(--on-violet)}
+li[data-state="blocked"] .step{background:var(--tangerine); color:var(--on-tangerine)}
+.steptext{font-size:14px; line-height:1.35}
+li[data-state="done"] .steptext{color:var(--ink-soft)}
+li[data-state="idle"] .steptext{color:var(--muted)}
+.verdict{font-family:var(--mono); font-size:10.5px; font-weight:600; letter-spacing:.08em; text-transform:uppercase; color:var(--muted); white-space:nowrap}
+li[data-state="done"] .verdict{color:var(--ink)}
+
+/* ---- workstream grid ---- */
+.grid{display:grid; grid-template-columns:repeat(auto-fill,minmax(300px,1fr)); gap:14px}
+.piece{
+  background:var(--raised); border:2px solid var(--ink); border-radius:16px;
+  box-shadow:3px 3px 0 var(--hard); padding:14px 15px;
+  display:flex; flex-direction:column; gap:9px;
+}
+.piece[data-state="live"]{background:var(--tint-violet)}
+.piece[data-state="done"]{background:var(--tint-mint)}
+.piece[data-state="blocked"]{background:var(--tint-tangerine)}
+.piece[data-state="idle"]{border-color:var(--rule); box-shadow:none; background:transparent}
+.piece[data-state="idle"] .ptitle{color:var(--ink-soft)}
+.phead{display:flex; align-items:flex-start; justify-content:space-between; gap:10px}
+.ptitle{margin:0; font-size:15.5px; font-weight:700; letter-spacing:-.01em; line-height:1.2}
+.pnote{margin:0; font-size:13px; color:var(--ink-soft); line-height:1.45}
+.pgap{
+  margin:0; font-size:12.5px; line-height:1.45; color:var(--ink-soft);
+  border-top:1px dashed var(--rule); padding-top:9px;
+}
+.pgap b{
+  font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.1em;
+  text-transform:uppercase; color:var(--muted); display:block; margin-bottom:3px;
+}
+.crits{display:flex; gap:6px; flex-wrap:wrap}
+.crit{
+  font-family:var(--mono); font-size:10px; font-weight:600; letter-spacing:.06em;
+  border:1.5px solid var(--rule); border-radius:99px; padding:2px 8px; color:var(--muted);
+}
+.crit[data-v="pass"]{border-color:var(--ink); color:var(--ink); background:var(--tint-mint)}
+.crit[data-v="fail"]{border-color:var(--ink); color:var(--ink); background:var(--tint-tangerine)}
+
+/* ---- log ---- */
+.log{display:flex; flex-direction:column; gap:0}
+.entry{
+  display:grid; grid-template-columns:64px 1fr; gap:14px; align-items:baseline;
+  padding:9px 2px; border-bottom:1px solid var(--rule);
+}
+.entry:last-child{border-bottom:0}
+.time{font-family:var(--mono); font-size:11.5px; color:var(--muted); font-variant-numeric:tabular-nums}
+.what{font-size:13.5px; line-height:1.45; color:var(--ink-soft)}
+.what b{color:var(--ink); font-weight:600}
+
+footer{
+  font-family:var(--mono); font-size:11px; color:var(--muted);
+  letter-spacing:.06em; text-transform:uppercase; text-align:center;
+  border-top:2px solid var(--ink); padding-top:16px;
+}
+</style>
+
+</head>
+<body>
+<div class="wrap">
+
+  <header class="mast">
+    <div class="eyebrow">Consensus · MVP build board</div>
+    <h1>Closing the loop: create → share → vote → live result</h1>
+    <p class="sub">
+      Everything after the share link — the recipient's join screen, the ballot, the live
+      tally, and the lock on a cast vote. Each piece got a builder and a separate harsh
+      critic with fresh context, looping until the two-session acceptance script ran clean.
+    </p>
+    <div class="meterrow">
+      <div class="meter" id="meter" role="img" aria-label="Overall build progress"></div>
+      <span class="meterlabel" id="meterlabel"></span>
+    </div>
+  </header>
+
+  <section>
+    <h2>The acceptance script — two live browser sessions</h2>
+    <div class="card">
+      <ol class="script" id="script"></ol>
+    </div>
+  </section>
+
+  <section>
+    <h2>Workstreams</h2>
+    <div class="grid" id="grid"></div>
+  </section>
+
+  <section>
+    <h2>Activity</h2>
+    <div class="card">
+      <div class="log" id="log"></div>
+    </div>
+  </section>
+
+  <footer id="foot"></footer>
+</div>
+
+<script>
+// ---- the whole board's state. Editing this object is how the page is updated. ----
+const BOARD = {
+  updated: "8 Aug, 21:35 — shipped. v0.3.0 live at dinner.isourthing.com, 607 tests green.",
+  script: [
+    { t: "Organizer signs in and creates a pool", v: "pass", s: "done" },
+    { t: "Edits an activity mid-flow; back/forward keeps state", v: "pass — after fix", s: "done" },
+    { t: "Pastes a URL — preview image, name, description fill in", v: "pass", s: "done" },
+    { t: "Publishes and copies the share link", v: "pass", s: "done" },
+    { t: "Guest opens the link cold, enters a name, votes", v: "pass", s: "done" },
+    { t: "Vote lands live in the organizer's open session", v: "pass", s: "done" },
+    { t: "Guest's ballot is locked — return trip redirects to results", v: "pass", s: "done" },
+  ],
+  pieces: [
+    { n: "Voting domain", s: "done",
+      note: "Consensus.Voting: participants + votes, cast_ballot/3 atomic and locked, tally + outcome with veto elimination.",
+      crits: [["concurrency","fail"],["invariants","pass"],["anonymity","fail"]],
+      gap: "Fixed: validation moved outside the write lock, jittered retry added, DBConnection.ConnectionError now rescued. Ballot loss under a 4–8 voter burst went from ~48% to zero." },
+    { n: "Join screen — frame 06", s: "done",
+      note: "GET /join/:slug. Real form POST to a controller, because a LiveView cannot write the session cookie a guest's identity needs.",
+      crits: [["design","pass"],["functional","pass"]],
+      gap: "Blob radii verified against the comp in the live DOM — the builder's doubt that Tailwind arbitrary values would compile was unfounded." },
+    { n: "Ballot — sticker grid", s: "done",
+      note: "Approval voting, one veto, locked once cast. Verified in a real browser.",
+      crits: [["design","fail"],["functional","pass"]],
+      gap: "Fixed: a 140-char description ran past the card border. `truncate` on a bare inline span never clips, and the grid item needed min-w-0." },
+    { n: "Live results — frames 05 / 05b", s: "done",
+      note: "Violet countdown, voted avatars, running tally, VETOED rows, leader star. Organizer and participant variants.",
+      crits: [["design","pass"],["functional","pass"]],
+      gap: "Confirmed live: organizer's untouched tab went 0/0 → 1/1 with the tally filled in, no reload." },
+    { n: "Wire-up", s: "done",
+      note: "/join/:slug is a real verified route; publish reaches the share sheet and the live tally.",
+      crits: [], gap: "" },
+    { n: "E2E + docs", s: "done",
+      note: "D-034 through D-040 recorded, docs propagated across CLAUDE.md, README, TODO and open-questions.",
+      crits: [], gap: "Still to write: the scripted two-session ExUnit case and scripts/e2e-voting-loop.md. The loop was verified by hand, so nothing in CI would catch a regression in it." },
+    { n: "Deployment", s: "done",
+      note: "v0.3.0 live at dinner.isourthing.com (D-040). Volume restored to consensus_data at /data, snapshot retention 30d, LiveView connected over a real WebSocket.",
+      crits: [["ci","pass"],["health","pass"],["websocket","pass"]],
+      gap: "Backups are the largest remaining risk: 24h RPO and a restore runbook that has still never been executed." },
+  ],
+  log: [
+    ["21:35", "<b>Shipped.</b> v0.3.0 tagged and pushed; CI green through both Docker boot tests; deployed to Fly. LiveView confirmed connected over a real WebSocket in production."],
+    ["21:30", "Caught the new volume using Fly's default <b>5-day</b> snapshot retention instead of the 30 fly.toml specifies — <code>snapshot_retention</code> only applies at creation. Corrected."],
+    ["21:22", "Reconciled infrastructure with the repo: destroyed the accidental <code>name</code> volume, recreated <b>consensus_data</b> at <code>/data</code> — the path the Dockerfile actually prepares."],
+    ["21:18", "<b>D-040:</b> production serves from <code>dinner.isourthing.com</code>, not <code>&lt;app&gt;.fly.dev</code>. PHX_HOST decides whether every LiveView socket connects or silently 403s."],
+    ["21:05", "<b>Loop verified in two live browser sessions.</b> Guest <b>Sam</b> voted; the organizer's untouched tab updated live; the return trip to the ballot redirected to results."],
+    ["20:58", "Fixed a ballot overflow: a long description ran past the card border. Verified by geometry, not by eye — <code>scrollWidth 233 &gt; clientWidth 150</code>, clipped."],
+    ["20:44", "Fixed the pool vanishing after an edit. The editor's render tree has no stream container, so patching back re-created it empty. Regression test <b>fails without the fix</b>."],
+    ["20:25", "Reverted a <code>fly launch</code> that clobbered <b>fly.toml</b> and the deploy workflow — it had dropped <code>--ha=false</code>, the single-machine rule the whole SQLite design rests on."],
+    ["20:10", "<b>SQLite review:</b> <code>pool_size: 5</code> measured 25.7s p95 under a 15-voter burst; <code>pool_size: 1</code> gives 10.6ms. Queued as a fix."],
+    ["19:40", "<b>Web layer building</b> — routes + JoinController + shared Sticker primitives, then three screens in parallel."],
+    ["19:38", "Full suite independently verified: <b>504 passed, 0 failures</b>. Creation flow survived the domain edits."],
+    ["19:34", "<b>D-034…D-037 recorded.</b> Unconditional anonymity (D-035) replaced the dead toggle on the review screen with a stated rule."],
+    ["19:30", "Fixer built <b>voting_concurrency_test.exs</b> — the only test in the suite that casts two ballots at the same instant."],
+    ["17:49", "Critics: ballot loss measured at <b>23 of 48 refused</b> with four simultaneous voters; unrescued crash at six."],
+    ["17:12", "Voting domain built — migration, participant + vote schemas, context, tests."],
+    ["16:55", "Re-extracted the design frames. The <b>ballot comp had never been extracted</b>; index.html linked to files that did not exist."],
+  ],
+};
+
+const W = { done: 1, live: 0.5, blocked: 0.35, queued: 0.15, idle: 0 };
+
+function render(b){
+  // meter — one segment per piece, so the bar itself shows the shape of the work
+  const meter = document.getElementById("meter");
+  meter.innerHTML = "";
+  let done = 0;
+  b.pieces.forEach(p => {
+    const seg = document.createElement("i");
+    seg.style.width = (100 / b.pieces.length) + "%";
+    seg.style.background =
+      p.s === "done" ? "var(--mint)" :
+      p.s === "live" ? "var(--violet)" :
+      p.s === "blocked" ? "var(--tangerine)" :
+      p.s === "queued" ? "var(--yellow)" : "var(--track)";
+    meter.appendChild(seg);
+    done += W[p.s] ?? 0;
+  });
+  document.getElementById("meterlabel").textContent =
+    Math.round(done / b.pieces.length * 100) + "% · " +
+    b.pieces.filter(p => p.s === "done").length + "/" + b.pieces.length + " pieces landed";
+
+  document.getElementById("script").innerHTML = b.script.map((x, i) => `
+    <li data-state="${x.s}">
+      <span class="step">${x.s === "done" ? "✓" : i + 1}</span>
+      <span class="steptext">${x.t}</span>
+      <span class="verdict">${x.v || (x.s === "idle" ? "not run" : "")}</span>
+    </li>`).join("");
+
+  document.getElementById("grid").innerHTML = b.pieces.map(p => `
+    <article class="piece" data-state="${p.s}">
+      <div class="phead">
+        <h3 class="ptitle">${p.n}</h3>
+        <span class="chip ${p.s}">${p.s === "live" ? '<span class="dot"></span>' : ""}${p.s}</span>
+      </div>
+      <p class="pnote">${p.note}</p>
+      ${p.crits.length ? `<div class="crits">${p.crits.map(c =>
+        `<span class="crit" data-v="${c[1]}">${c[0]} · ${c[1]}</span>`).join("")}</div>` : ""}
+      ${p.gap ? `<p class="pgap"><b>Biggest remaining gap</b>${p.gap}</p>` : ""}
+    </article>`).join("");
+
+  document.getElementById("log").innerHTML = b.log.length
+    ? b.log.map(e => `<div class="entry"><span class="time">${e[0]}</span><span class="what">${e[1]}</span></div>`).join("")
+    : `<div class="entry"><span class="time">—</span><span class="what">Waiting on the first agent to report.</span></div>`;
+
+  document.getElementById("foot").textContent = "Last updated " + b.updated;
+}
+render(BOARD);
+</script>
+</body>
+</html>
