@@ -753,21 +753,47 @@ defmodule ConsensusWeb.ChromeTest do
              }) =~ "data-confirm"
     end
 
-    test "on :public it is the two credit lines and nothing else" do
-      # Five `navigate`s under "Send my votes" on a screen whose ballot lives only in
-      # socket assigns, for a guest with no account and no route back. See the moduledoc
-      # of `ConsensusWeb.Chrome`.
+    test "on :public it is the same footer as everywhere else" do
+      # It used to be the two credit lines and nothing else, on the reasoning that five
+      # `navigate`s under "Send my votes" are five ways to discard a ballot that lives only
+      # in socket assigns. That risk is real and is now closed by `confirm` (the test below)
+      # rather than by deleting the controls: a guest who is stuck mid-ballot is exactly the
+      # person with something to report, and the vote screen is the last one that should
+      # hide the report button.
       html = footer(%{variant: :public})
 
-      refute html =~ ~s(id="feedback-happy")
-      refute html =~ ~s(id="feedback-sad")
-      refute html =~ "How's this going?"
-      refute html =~ ~s(href="/about")
-      refute html =~ ~s(href="/how-it-works")
-      refute html =~ ~s(href="/privacy")
-
+      assert html =~ ~s(id="feedback-happy")
+      assert html =~ ~s(id="feedback-sad")
+      assert html =~ "How's this going?"
+      assert html =~ ~s(href="/about")
+      assert html =~ ~s(href="/how-it-works")
+      assert html =~ ~s(href="/privacy")
       assert html =~ "marketfinder.us"
       assert html =~ "Philadelphia"
+    end
+
+    test "on :public every control takes the caller's confirm" do
+      # The guard that makes the full footer safe on a ballot. Without it this footer is
+      # five silent ways to lose an unsent vote — which is why the controls were removed in
+      # the first place, and why restoring them without this assertion would be a
+      # regression wearing the shape of a fix.
+      html = footer(%{variant: :public, confirm: "Leave without sending?"})
+
+      for id <- [~s(id="feedback-happy"), ~s(id="feedback-sad")] do
+        assert html =~ id
+      end
+
+      links =
+        Regex.scan(~r/<a\b[^>]*>/, html)
+        |> List.flatten()
+        |> Enum.reject(&(&1 =~ ~s(target="_blank")))
+
+      assert length(links) >= 5
+
+      for link <- links do
+        assert link =~ ~s(data-confirm="Leave without sending?"),
+               "a footer control on :public navigates without confirming: #{link}"
+      end
     end
   end
 
@@ -992,7 +1018,7 @@ defmodule ConsensusWeb.ChromeTest do
       end
     end
 
-    test "the whole /join tree is :public — no ⋯, no footer links, an inert wordmark", %{
+    test "the whole /join tree is :public — no ⋯, an inert wordmark, the same footer", %{
       conn: conn
     } do
       {group, _activities} = voting_group_fixture(user_scope_fixture())
@@ -1031,12 +1057,29 @@ defmodule ConsensusWeb.ChromeTest do
         refute html =~ ~s(id="chrome-menu"),
                "#{path} offers a guest an account menu — product invariant 1"
 
-        refute html =~ ~s(id="feedback-happy"),
-               "#{path} offers a guest a link that discards their ballot"
+        # The footer is the same everywhere, including here. What keeps that safe on the
+        # ballot is `footer_confirm`, asserted separately below — not the controls' absence.
+        assert html =~ ~s(id="feedback-happy"),
+               "#{path} lost the feedback pair the rest of the app carries"
 
-        refute html =~ ~s(href="/how-it-works"), "#{path} still carries the standing links"
+        # `href="/how-it-works` without the closing quote on purpose: the footer appends
+        # `?return_to=<the path it was tapped on>`, so an exact-href match passes on the
+        # screens that happen not to carry one and fails on the screens that do.
+        assert html =~ ~s(href="/how-it-works), "#{path} lost the standing links"
         assert html =~ ~s(<span id="chrome-wordmark"), "#{path}'s wordmark is still a link"
       end
+
+      # The ballot is the one screen in the tree holding state that a navigation destroys,
+      # so it is the one that must arm the guard — and only once there is something to lose.
+      refute ballot =~ "data-confirm",
+             "the ballot prompts before anything is selected"
+
+      armed =
+        joined
+        |> get(~p"/join/#{group.slug}/vote")
+        |> html_response(200)
+
+      assert armed =~ ~s(id="feedback-happy")
     end
   end
 end

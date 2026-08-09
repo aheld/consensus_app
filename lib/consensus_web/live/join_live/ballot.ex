@@ -844,7 +844,14 @@ defmodule ConsensusWeb.JoinLive.Ballot do
     ~H"""
     <%!-- `:public`, and no `back`: the entry screen bounces a joined participant
           straight here, so a back control would be a redirect loop. `min-h-dvh` became
-          `flex-1` for the reason `JoinLive.Entry` records. --%>
+          `flex-1` for the reason `JoinLive.Entry` records.
+
+          `footer_confirm` beside `pill_confirm`: the footer now carries its full set on the
+          `/join` tree (D-041 as amended), so its five links are five more ways off a screen
+          whose ballot lives only in socket assigns until `Voting.cast_ballot/3` runs. Same
+          prompt as the pill and the same trigger — nothing selected, no prompt. Guarding
+          them is what makes the full footer safe here; removing them was the older, blunter
+          answer to the same risk. --%>
     <Layouts.app
       flash={@flash}
       current_path={@current_path}
@@ -852,6 +859,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
       background="bg-canvas"
       variant={:public}
       pill_confirm={leave_confirm(@approved, @veto_id)}
+      footer_confirm={leave_confirm(@approved, @veto_id)}
       fill_viewport={fill_viewport?(@view, @group, @deck_index)}
     >
       <%!-- `fill_viewport` belongs to the two states that hold a *list* under the submit

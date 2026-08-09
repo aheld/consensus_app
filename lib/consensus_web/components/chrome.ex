@@ -11,8 +11,9 @@ defmodule ConsensusWeb.Chrome do
   (`STEP 2 OF 3`, `LIVE SESSION`, `ADMIN`) — and only *that*: a context string that
   repeats what the screen's own eyebrow already says is the same word twice in the same
   treatment, so where the body names the screen, the slot stays empty. The footer carries
-  the feedback pair, the three standing links, and the two credit lines — except on
-  `:public`, where it is the credits alone.
+  the feedback pair, the three standing links, and the two credit lines, and it is the same
+  on every variant — including `:public`. Only `/feedback` drops anything (its own mood
+  pair, which the form itself carries).
 
   ## Three variants
 
@@ -626,10 +627,13 @@ defmodule ConsensusWeb.Chrome do
   is given, so a tap from step 2 of the wizard comes back to step 2 rather than dumping
   the organizer at `/`.
 
-  **On `:public` the pair and the standing links are not rendered at all** — only the two
-  credit lines are. See the moduledoc: on the `/join` tree these five links are five ways
-  to silently discard an unsent ballot, on the one screen the product's own drop-off
-  metric is measured on, for a guest who has no account and no route back.
+  **On `:public` the footer is identical to everywhere else.** It shipped as the credits
+  alone, on the reasoning that these five links are five ways to silently discard an unsent
+  ballot — on the one screen the product's own drop-off metric is measured on, for a guest
+  with no account and no route back. That risk is real; deleting the controls was the wrong
+  answer to it. `JoinLive.Ballot` passes `footer_confirm` beside its existing `pill_confirm`,
+  so every control here prompts once the guest has selected anything and none prompts before.
+  A guest stuck mid-ballot is exactly who needs the report button. See D-041 as amended.
 
   **On `/feedback` the pair is not rendered either**, for the narrower version of the same
   reason — see `show_mood_pair?/2`.
@@ -771,8 +775,11 @@ defmodule ConsensusWeb.Chrome do
             178px. Horizontal boxes in a flex row cannot overlap however small the gutter is,
             so none of that extra width bought any touch safety: the 26px `min-h` is the whole
             touch target. `gap-x-2` and no `px-1`. --%>
+      <%!-- No `:public` gate. The three standing links render on the `/join` tree too — the
+            brief's "the same footer" — and what makes that safe on a screen holding an
+            unsent ballot is `@confirm`, which every control below carries, not their
+            absence. See `show_mood_pair?/2` for the same reversal. --%>
       <nav
-        :if={@variant != :public}
         aria-label="About this app"
         class="flex flex-wrap items-center justify-center gap-x-1 gap-y-2 text-[10.5px] font-semibold"
       >
@@ -895,8 +902,14 @@ defmodule ConsensusWeb.Chrome do
   # textarea came back empty with no confirm and no undo. `FeedbackLive`'s own moduledoc
   # asks for exactly this fix and names `chrome.ex` as where it belongs.
   #
-  # `:public` drops the pair for the wider version of the same rule (the moduledoc).
-  defp show_mood_pair?(:public, _current_path), do: false
+  # `:public` used to drop the pair too, on the reasoning that a guest's ballot lives in
+  # socket assigns until `Voting.cast_ballot/3` runs, so every extra link under "Send my
+  # votes" is another way to discard it. That reasoning was sound about the *risk* and wrong
+  # about the *remedy*: the brief asked for the same footer on the vote screens, and the
+  # risk is closed by `confirm` — which `JoinLive.Ballot` already passes for the pill and now
+  # passes for the whole footer — rather than by removing the controls. A guest who is stuck
+  # mid-ballot is exactly the person with something to report, and the screen that reaches
+  # the "guest drop-off under 5%" metric is the last one that should hide the report button.
   defp show_mood_pair?(_variant, current_path), do: not on_path?(current_path, "/feedback")
 
   # The three standing links, minus whichever one points at the page being rendered.
