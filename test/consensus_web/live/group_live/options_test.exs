@@ -238,6 +238,29 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       view |> form("#add-option-form", add_option: %{query: url}) |> render_submit()
     end
 
+    test "a typed option stops saying 'no details yet' once details are added by hand",
+         %{conn: conn, scope: scope} do
+      # The typed clause returned "no details yet" unconditionally, so a row the
+      # organizer had just given a description to in 02b went on claiming it had none.
+      group = group_fixture(scope)
+      activity = activity_fixture(group, %{name: "Kismet"})
+
+      {:ok, _view, html} = live(conn, ~p"/groups/#{group}/options")
+      assert html =~ "typed by you · no details yet"
+
+      {:ok, editor, _} = live(conn, ~p"/groups/#{group}/options/#{activity.id}")
+
+      editor
+      |> form("#edit-option-form",
+        activity: %{name: "Kismet", description: "Mediterranean on Hollywood."}
+      )
+      |> render_submit()
+
+      {:ok, _view, reloaded} = live(conn, ~p"/groups/#{group}/options")
+      assert reloaded =~ "typed by you · description added"
+      refute reloaded =~ "no details yet"
+    end
+
     test "reports photo-only when the fetch found an image but no description",
          %{conn: conn, scope: scope} do
       html = """
@@ -370,6 +393,49 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       assert render(view) =~ "Handmade tacos on Sunset."
       assert render(view) =~ "https://#{@link_host}/guisados"
       assert render(view) =~ "PULLED FROM LINK"
+    end
+
+    test "the whole pool is still on screen after coming back from the editor",
+         %{conn: conn, scope: scope} do
+      # Regression: the `:edit_activity` branch of render/1 does not contain the
+      # `phx-update="stream"` container, so patching into the editor destroys it and
+      # patching back re-creates it empty. Only the rows in the stream's pending insert
+      # set came back — after a save that is the single edited row — so the pool showed
+      # one option while the footer still counted three. Caught in a browser, never by a
+      # test, because every earlier case navigated straight to one URL.
+      group = group_fixture(scope)
+      a = activity_fixture(group, %{name: "Osteria Mozza"})
+      b = activity_fixture(group, %{name: "Kismet"})
+      c = activity_fixture(group, %{name: "Sushi Enya"})
+
+      {:ok, view, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      # Into the editor, change something, and back out via Save.
+      view |> element(~s(a[href$="/options/#{c.id}"])) |> render_click()
+      assert render(view) =~ "Edit option"
+
+      view
+      |> form("#edit-option-form", activity: %{name: "Sushi Enya (late)", description: ""})
+      |> render_submit()
+
+      html = render(view)
+
+      for name <- ["Osteria Mozza", "Kismet", "Sushi Enya (late)"] do
+        assert html =~ name,
+               "#{name} vanished from the pool after returning from the editor"
+      end
+
+      assert has_element?(view, "#activities-#{a.id}")
+      assert has_element?(view, "#activities-#{b.id}")
+
+      # And the same on the Cancel path, which returns by a plain patch.
+      view |> element(~s(a[href$="/options/#{a.id}"])) |> render_click()
+      view |> element("a", "Cancel") |> render_click()
+
+      cancelled = render(view)
+      assert cancelled =~ "Osteria Mozza"
+      assert cancelled =~ "Kismet"
+      assert cancelled =~ "Sushi Enya (late)"
     end
 
     test "the description counter moves live as you type", %{conn: conn, scope: scope} do
@@ -539,6 +605,35 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
 
       assert to == ~p"/groups/#{group}/options"
       assert flash["error"] =~ "Could not find that option"
+    end
+  end
+
+  # D-037: the pool freezes when the vote opens, because `votes.activity_id` cascades
+  # and a delete here would destroy ballots that have already been cast. Every write on
+  # this screen is refused by `Consensus.Activities` regardless; the redirect is what
+  # stops an organizer tapping controls that would all be refused.
+  describe "a group that is no longer a draft" do
+    test "bounces to review instead of opening the editor", %{conn: conn, scope: scope} do
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+      {:ok, _activity} = Activities.add_activity(scope, group, %{name: "Guisados"})
+      {:ok, group} = Activities.publish_group(scope, group)
+
+      assert {:error, {:live_redirect, %{to: to, flash: flash}}} =
+               live(conn, ~p"/groups/#{group}/options")
+
+      assert to == ~p"/groups/#{group}/review"
+      assert flash["info"] =~ "the pool is locked"
+    end
+
+    test "bounces from the per-option editor too", %{conn: conn, scope: scope} do
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+      {:ok, activity} = Activities.add_activity(scope, group, %{name: "Guisados"})
+      {:ok, group} = Activities.publish_group(scope, group)
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               live(conn, ~p"/groups/#{group}/options/#{activity.id}")
+
+      assert to == ~p"/groups/#{group}/review"
     end
   end
 end

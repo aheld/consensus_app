@@ -50,8 +50,14 @@ if config_env() == :prod do
 
   config :consensus, Consensus.Repo,
     database: database_path,
-    # SQLite serialises writes: extra pool slots only ever help concurrent readers.
-    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "5"),
+    # ONE connection by default, deliberately — D-038 supersedes D-013's claim that extra
+    # pool slots "only ever help concurrent readers". They do not: SQLite permits one write
+    # transaction across the whole file, so the slots race a lock that was never shareable,
+    # and SQLite's busy handler is documented to be unfair about which waiter wins. Measured
+    # on a 15-voter deadline burst at production's own settings — pool 5 → p95 25,762ms with
+    # ballots lost to a 5s busy timeout; pool 1 → p95 10.6ms, zero refusals, and the read
+    # tail improved too (5,431ms → 15.6ms). Raise POOL_SIZE only with a measurement in hand.
+    pool_size: String.to_integer(System.get_env("POOL_SIZE") || "1"),
     # Both are ecto_sqlite3 defaults; stated explicitly because they are load-bearing
     # on a single Fly machine. WAL lets readers run while a write is in flight, and
     # the busy timeout makes a contended write wait instead of returning
@@ -64,7 +70,14 @@ if config_env() == :prod do
     # do its job, so two simultaneous organizer writes queue instead of one 500ing. D-033.
     default_transaction_mode: :immediate,
     journal_mode: :wal,
-    busy_timeout: 5_000
+    busy_timeout: 5_000,
+    # Pinned rather than inherited — `:normal` is already the ecto_sqlite3/exqlite default,
+    # so this changes nothing today. It makes the durability trade explicit: under WAL,
+    # `:normal` fsyncs at checkpoint rather than at every commit, so a BEAM crash or a
+    # `fly deploy` cannot lose a committed ballot, but a host power loss or kernel panic
+    # can lose the tail of the WAL. Accepted for a single-machine app whose real durability
+    # exposure is the volume snapshot's 24h RPO, not fsync timing. D-038.
+    synchronous: :normal
 
   # The secret key base is used to sign/encrypt cookies and other secrets.
   # A default value is used in config/dev.exs and config/test.exs but you
@@ -127,11 +140,12 @@ if config_env() == :prod do
 
   # ## Configuring the mailer
   #
-  # This app deliberately ships without a production mail provider, and works without
-  # one: registration takes a password and signs the new account in immediately, so
-  # nobody is ever blocked waiting for an email.
+  # The provider is Resend (D-039), selected just below — but only when `RESEND_API_KEY`
+  # exists. This default is what runs until it does, and the app is designed to work in
+  # that state: registration takes a password and signs the new account in immediately,
+  # so nobody is ever blocked waiting for an email.
   #
-  # It still needs an adapter that *works*, though. The generated default is
+  # The fallback still needs an adapter that *works*, though. The generated default is
   # `Swoosh.Adapters.Local` (config/config.exs), which pushes to a GenServer that
   # config/prod.exs deliberately does not start (`config :swoosh, local: false`) —
   # so in a release every delivery exits with
@@ -145,19 +159,53 @@ if config_env() == :prod do
   # let any mailer failure escape into a web request.
   config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Logger, level: :info
 
-  # To send real email, configure a provider below — these lines come after the default
-  # above, so they win. Example for Mailgun:
+  # Resend is the provider (D-039). It is configured **only when `RESEND_API_KEY` is
+  # present**, and the `Swoosh.Adapters.Logger` default above stays in force when it is
+  # not. That conditional is deliberate, not defensive noise:
   #
-  #     config :consensus, Consensus.Mailer,
-  #       adapter: Swoosh.Adapters.Mailgun,
-  #       api_key: System.get_env("MAILGUN_API_KEY"),
-  #       domain: System.get_env("MAILGUN_DOMAIN")
+  #   * The app must stay deployable before the secret exists. `SECRET_KEY_BASE` raises
+  #     at boot because nothing works without it; mail is the opposite — invariant 9 says
+  #     delivery is best-effort and must never fail a request, so a missing mail key must
+  #     never cost you a boot. Raising here would make the first deploy of this change
+  #     fail on a machine that has no secret set yet.
+  #   * A silent fallback is worse than a loud one. If the key is absent, the log line
+  #     below is the only thing that will tell you why a magic link never arrived, so it
+  #     is a `warning` and it names the fix.
   #
-  # Most non-SMTP adapters require an API client. Swoosh supports Req, Hackney,
-  # and Finch out-of-the-box. This configuration is typically done at
-  # compile-time in your config/prod.exs:
-  #
-  #     config :swoosh, :api_client, Swoosh.ApiClient.Req
-  #
+  # `Swoosh.ApiClient.Req` is already set in config/prod.exs, and `req` is a real
+  # dependency — the Resend adapter needs an API client and will not work without one.
+  case System.get_env("RESEND_API_KEY") do
+    key when is_binary(key) and key != "" ->
+      config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Resend, api_key: key
+
+    _ ->
+      # The empty stacktrace keeps this to the message itself — a config warning that
+      # prints a stack of `:elixir.eval_external_handler/3` frames reads like a crash.
+      IO.warn(
+        """
+        RESEND_API_KEY is not set, so no mail will actually be delivered.
+
+        Consensus.Mailer is falling back to Swoosh.Adapters.Logger: deliveries "succeed"
+        and log their recipient, but nothing reaches an inbox. Magic-link login and the
+        confirm-your-email-change flow therefore reach nobody. Registration is unaffected —
+        it takes a password and signs the account in immediately.
+
+            fly secrets set RESEND_API_KEY=re_...
+        """,
+        []
+      )
+  end
+
+  # Resend refuses a `From` whose domain is not verified in its dashboard, so the sender
+  # tracks the deployment rather than being baked into the source. Falls back to Resend's
+  # `onboarding@resend.dev`, the one address any account may send from unverified — see
+  # `Consensus.Accounts.UserNotifier.sender/0`.
+  if from = System.get_env("MAIL_FROM") do
+    config :consensus, :mail_from, {System.get_env("MAIL_FROM_NAME") || "Consensus", from}
+  end
+
+  # To use a different provider instead, configure it here — these lines come after the
+  # default above, so they win. Most non-SMTP adapters require an API client; Swoosh
+  # supports Req, Hackney and Finch out of the box, configured in config/prod.exs.
   # See https://swoosh.hexdocs.pm/Swoosh.html#module-installation for details.
 end

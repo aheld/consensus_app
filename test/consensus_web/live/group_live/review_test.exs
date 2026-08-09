@@ -109,16 +109,17 @@ defmodule ConsensusWeb.GroupLive.ReviewTest do
   end
 
   describe "anonymous voting" do
-    test "the toggle persists to the group", %{conn: conn, scope: scope} do
-      group = group_fixture(scope, %{anonymous: true})
+    # D-035: MVP voting is unconditionally anonymous, so this card states the rule
+    # instead of offering a switch. A toggle here promised attribution that
+    # `Consensus.Voting.tally/1` is structurally incapable of producing.
+    test "is stated as a rule, not offered as a toggle", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
       {:ok, lv, html} = live(conn, ~p"/groups/#{group}/review")
 
-      assert html =~ ~s|aria-checked="true"|
-
-      html = lv |> element(~s|button[role="switch"]|) |> render_click()
-
-      assert html =~ ~s|aria-checked="false"|
-      refute Activities.get_group!(scope, group.id).anonymous
+      assert html =~ "Anonymous voting"
+      assert html =~ "ALWAYS ON"
+      refute html =~ ~s|phx-click="toggle_anonymous"|
+      assert lv |> element(~s|button[role="switch"]|) |> has_element?() == false
     end
   end
 

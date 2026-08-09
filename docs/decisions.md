@@ -325,15 +325,16 @@ In test, the same timeout turns real contention between `async: true` tests into
 
 **Consequences:**
 - `config/test.exs` deliberately does **not** set `journal_mode` — it runs on `Ecto.Adapters.SQL.Sandbox`, where each test is wrapped in a rolled-back transaction and the journal mode is not the thing under test.
-- `POOL_SIZE` (default `5`) buys concurrent *readers* only; extra pool slots cannot parallelise writes. `runtime.exs` says so in a comment.
+- ~~`POOL_SIZE` (default `5`) buys concurrent *readers* only; extra pool slots cannot parallelise writes. `runtime.exs` says so in a comment.~~ **History — wrong as written, superseded by D-038.** Extra pool slots are not neutral: they manufacture contention for a lock that was never shareable, and they degrade *reads* as well. Measured on a 15-voter deadline burst — `pool_size: 5` produced a p95 of 25,762ms and lost ballots to the busy timeout, against 10.6ms at `pool_size: 1`; the read tail moved 5,431ms → 15.6ms. The default is now **`1`**. The claim that writes cannot be parallelised was correct; the inference that spare slots therefore cost nothing was not.
 - Neither setting removes the single-writer constraint — that is a property of D-003 and D-012. They only decide whether contention waits or fails.
+- `synchronous` was left unset here and is pinned to `:normal` by D-038 — the value it already had by default, now stated rather than inherited.
 
 ---
 
 ## D-014 — The production mailer is `Swoosh.Adapters.Logger`, and delivery can never fail a request
 
 - **Date:** 2026-08-08
-- **Status:** settled
+- **Status:** **partly superseded by D-039.** The *adapter* half is history: production now uses `Swoosh.Adapters.Resend` whenever `RESEND_API_KEY` is set, and falls back to `Swoosh.Adapters.Logger` only when it is not. The *never-fail-a-request* half is unchanged and still binding — it is CLAUDE.md invariant 9.
 - **Decision:** `config/runtime.exs` pins `config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Logger, level: :info` for `config_env() == :prod`, ahead of the commented provider examples so a real provider still wins. `Consensus.Accounts.UserNotifier.deliver/3` wraps `Mailer.deliver/1` in a `catch`, so both an `{:error, _}` tuple and a process **exit** become a logged `{:error, reason}`. `ConsensusWeb.UserLive.Registration` no longer asserts `{:ok, _} = ` on the confirmation email.
 
 **Why:** the generated configuration ships a live landmine that D-004 walks straight into. `config/config.exs` names `Swoosh.Adapters.Local` as the adapter, and `config/prod.exs` sets `config :swoosh, local: false` — which is what stops Swoosh's application from starting `Swoosh.Adapters.Local.Storage.Manager`. In a release, the two together mean every delivery calls a GenServer that does not exist:
@@ -820,6 +821,7 @@ Removing it also removed the theme toggle, and that is a feature not a loss: a d
 **Consequences:**
 - Drafts appear on the home screen under `ACTIVE` with a `DRAFT` pill. That is deliberate — a half-finished session the organizer forgot about is exactly what the home list should surface.
 - `activities.position` contiguity is an application invariant maintained by `delete_activity/2` and `reorder_activities/3`, **not** a database constraint: SQLite checks immediately with no deferred mode, so a unique index on `(group_id, position)` would collide mid-renumber inside the transaction.
+- **Amended by D-037:** `:draft → :voting` freezes the activity pool as well as ending the wizard. All four pool writes — `add_activity/3`, `update_activity/3`, `delete_activity/2`, `reorder_activities/3` — refuse with `{:error, :pool_locked}` outside `:draft`, because `votes.activity_id` cascades and editing a pool that has been voted on destroys ballots. So the two functions named above maintain contiguity only while the group is a draft; afterwards there is nothing to renumber.
 - Reading is no longer side-effect-free. `list_*` and `get_*` may write a status transition. Any future read path that must not write has to skip `maybe_complete_group/1` explicitly.
 
 ---
@@ -918,8 +920,179 @@ Measured at 430 tests: ~50 failures a run at the default `max_cases: 20`, still 
 
 ---
 
+## D-034 — A ballot validates outside the write lock, retries when it loses it, and never raises at a voter
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Voting.cast_ballot/3` does **every** pure and read-only check — id casting, ballot shape, participant re-read, group status, deadline, veto permission, "is this activity even in this group" — *before* `Repo.transact/1` opens. Inside the transaction there are exactly three statements: a primary-key re-read of the group, the conditional `UPDATE participants SET voted_at = ? WHERE id = ? AND voted_at IS NULL`, and one `Repo.insert_all/3` for every vote row. Both voter-facing entry points (`cast_ballot/3` and `create_participant/2`) `rescue` **`Exqlite.Error` and `DBConnection.ConnectionError`** into `{:error, {:database_busy, message}}`, and `cast_ballot/3` wraps itself in a bounded, jittered retry (`@busy_retries 2`, `@busy_retry_pause_ms 25..150`) before giving up. `ensure_all_in_group/2` bounds the client's id list by the group's own activity count before building an `IN (?, ?, …)`, and `outcome/1` reports `:no_consensus` when every option has been vetoed rather than leaving a completed group with no winner and no leader.
+
+**Why:** this is the first **public, unauthenticated, deliberately burst-shaped** write in the app. Five friends tapping "send my votes" as the deadline chip turns red is the core use case, not an edge, and SQLite permits one write transaction across the whole file (D-033).
+
+Measured on a real pool at production's settings (`pool_size: 5`, `default_transaction_mode: :immediate`, `busy_timeout: 5_000`, WAL), with the validation queries *inside* the transaction: 23 of 48 ballots refused at four simultaneous voters, 54 of 96 at eight — every one of them a `{:error, {:database_busy, …}}` raised on `BEGIN IMMEDIATE`, i.e. the voter's browser hung for the full five-second busy timeout and then lost the ballot. Past six voters, connections queued behind the stalled writers began exceeding the pool checkout timeout and raising `DBConnection.ConnectionError`, which the `Exqlite.Error`-only rescue did not cover — so a guest got a crashed LiveView instead of a message. `create_participant/2` had no rescue at all, which turned the `/join/:slug` front door into a 500 for a guest who had not yet seen the pool, because a controller has no error tuple to render.
+
+The retry exists because the callers arrive together *by construction*: SQLite's busy handler backs off unfairly under several writers, so a loser can burn its whole timeout while others slip past. Jitter matters for the same reason — an unjittered retry rebuilds the same pile-up one interval later. Retrying the whole function is safe because a raise can only happen before the transaction commits, and `Repo.transact/1` rolls back anything in between; in the one ambiguous case (a raise at `COMMIT`), the retry's conditional `UPDATE` finds `voted_at` already set and answers `{:error, :already_voted}` — wrong but harmless, since the ballot did land.
+
+The id-list bound is a separate, smaller bug with the same rescue as its symptom: `cast_ballot(participant, [valid_id | Enum.to_list(1_000_000..1_040_000)])` blew SQLite's variable limit and was reported as `{:error, {:database_busy, "too many SQL variables"}}` — telling a voter to try again later about input that can never succeed. A ballot can never legitimately name more options than the group has, so the bound is free and exact.
+
+**Alternatives rejected:**
+- *Keep the reads inside the transaction "for consistency".* They guard against nothing the conditional `UPDATE` does not already guard against, and they were the single largest contributor to lock-hold time (reads + `update_all` alone: 28 of 60 refused at five voters).
+- *One `Repo.insert` per mark.* A round trip per approval, all of it with the write lock held.
+- *Retry forever.* An unbounded retry under a deadline burst is a queue with no exit; two attempts plus the original is enough for a five-to-eight-voter burst and bounded for the LiveView calling it.
+- *Rescue `RuntimeError` or `_` broadly.* `{:error, {:database_busy, …}}` is grepped for in production logs; mislabelling an unrelated failure as a busy database is how that stops meaning anything.
+
+**Consequences:**
+- `{:error, {:database_busy, message}}` is now a documented return of `create_participant/2` as well as `cast_ballot/3`. Callers must render it; `JoinController` in particular has to re-render its own screen rather than let it escape.
+- `Consensus.Accounts.set_admin/3` and `delete_user/2` still carry the *narrow* `Exqlite.Error`-only rescue. They are organizer/admin-rate writes, not burst-shaped, so they were left alone deliberately — widening them is a reasonable follow-up, not a fix this decision requires.
+- The retry sleeps in the caller's process. A LiveView casting a ballot can therefore block for up to ~3× the busy timeout plus jitter before answering. That is accepted: the alternative is losing the ballot.
+- `outcome/1` exists because `tally/1` alone cannot distinguish "everybody vetoed everything" from "nobody has voted yet" — both are a list with no `leader?` and no `winner?`. There is deliberately **no** fallback to the least-vetoed option: "everyone gets one veto, vetoed places drop out" is the rule the organizer showed the group.
+- [test/consensus/voting_concurrency_test.exs](../test/consensus/voting_concurrency_test.exs) is the regression guard, and it is the only case in the suite that executes two ballots at the same instant — see its moduledoc for what it does and does not discriminate.
+
+---
+
+## D-035 — MVP voting is unconditionally anonymous; the review screen states the rule instead of offering a switch
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Voting` is **structurally** anonymous in every mode: `tally/1` returns totals only, `participants/1` returns name/initial and *whether* someone voted, the PubSub message is `{:ballot_cast, group_id}` and carries nothing about the ballot, and there is no public function anywhere in the context that maps a participant to the options they approved. `Consensus.Activities.Group.anonymous` stays in the schema (default `true`) but nothing reads it. `ConsensusWeb.GroupLive.Review` no longer renders a toggle for it — the card states the rule ("Nobody sees who picked what — totals only", `ALWAYS ON`) the way the veto card states its rule.
+
+**Why:** the toggle was a promise the backend did not keep. It persisted, it round-tripped, an organizer could switch it off — and switching it off changed nothing anywhere, because the engine has no attribution to reveal. A user-visible setting that silently does nothing is worse than no setting: the organizer who turns it off has told their friends their names will show.
+
+Making it *work* would mean building per-participant attribution, and that is outside the contract this feature was built to. [docs/plans/voting-loop.md](plans/voting-loop.md) specifies anonymity as an absolute — "`tally/1` must not return per-participant choices at all — not 'returns them and the template hides them'" — and specifies no behaviour whatsoever for a non-anonymous mode. Under PRD scope discipline that makes attribution a new feature, not a missing branch.
+
+Structural anonymity is also the stronger property. A context that cannot produce the names cannot leak them through a template someone forgot to guard, and that is worth keeping even once a non-anonymous mode is built: attribution should arrive as its own explicitly-named function that refuses for an anonymous group, never as an extra key on `tally/1`.
+
+**Alternatives rejected:**
+- *Leave the toggle and document the no-op.* Documentation does not reach the organizer looking at the switch.
+- *Delete the `anonymous` column too.* Scope discipline explicitly allows a Post-MVP feature to inform the shape of an MVP data model, and the column is where a real mode would land. Dropping and re-adding it is churn.
+- *Wire a speculative `attributions/1` with no caller.* Unused API with no screen to shape it, in a feature whose web layer is not built yet.
+
+**Consequences:**
+- Design frame `03` draws a switch; we draw a statement. That is a deliberate deviation from the mockup, recorded here rather than left for a fidelity review to "fix" back in.
+- PRD product invariant 6 ("anonymous voting is a first-class mode") is satisfied in the direction that matters — it is the *only* mode — and is not yet satisfied in the sense of offering a contrasting one. Re-opening that is a new decision.
+- Pinned by "anonymity does not depend on group.anonymous" in [test/consensus/voting_test.exs](../test/consensus/voting_test.exs), which sets `anonymous: false` and asserts the returned shapes are unchanged and carry no names. If someone later wires attribution, they have to come to that describe block and say so.
+
+---
+
+## D-036 — A cast ballot is locked; there is no "change my ranking"
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `participants.voted_at` is the lock. Once it is set, `Consensus.Voting.cast_ballot/3` refuses with `{:error, :already_voted}` and there is no update path — no `recast_ballot/3`, no delete-and-resubmit. The lock is taken by a conditional `UPDATE ... WHERE voted_at IS NULL` inside the ballot's transaction, so two tabs double-submitting produce exactly one ballot and one refusal. Design frame `05b` draws a **"Change my ranking"** button; we do not build it, and that footer slot renders the locked confirmation instead.
+
+**Why:** a vote that can be changed after the fact is a vote that has to be re-tallied, re-broadcast and re-explained, and it opens the obvious abuse — watch the live tally, then move your approval to whatever is winning. The whole product runs on a hard deadline (PRD product invariant 3) precisely so that the state at close is the state everyone agreed to.
+
+It is also what makes the write cheap. An immutable ballot needs one conditional `UPDATE` and one `insert_all`; a mutable one needs a delete-and-reinsert inside the same lock every time, on the single-writer database this app runs on (D-033, D-034).
+
+**Alternatives rejected:**
+- *Allow a change until the deadline.* Defensible product-wise, and it turns the tally into a moving target that a participant can chase. Revisit only with a real design for it.
+- *Enforce the lock in the LiveView only.* A `disabled` attribute is a client-side hint; the event can be pushed anyway. Same reasoning as the sudo-mode UI in D-021.
+
+**Consequences:**
+- Re-entering `/join/:slug/vote` once `voted_at` is set must redirect to results. The lock is a route-level fact, not a greyed-out button.
+- A voter who mis-taps has no recovery. Accepted for MVP; the ballot screen therefore has to make the selected state unmistakable before submit.
+- `votes` rows are effectively append-only, which is what lets D-037 be a pure refusal rather than a repair.
+
+---
+
+## D-037 — The activity pool freezes when the vote opens
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Activities.add_activity/3`, `update_activity/3`, `delete_activity/2` and `reorder_activities/3` all refuse with `{:error, :pool_locked}` unless the group is still a `:draft`. (`add_activity/3` previously returned `{:error, :group_not_open}` and allowed `:voting`; that atom is gone.) `ConsensusWeb.GroupLive.Options` bounces a non-draft group to `03 review`, and `ConsensusWeb.GroupLive.Review` — which `HomeLive` still sends a `:voting` group to — drops its drag handle, ↑/↓ pair, `Sortable` hook and `×` once the group leaves `:draft`.
+
+**Why:** `votes.activity_id` references `activities` with `ON DELETE CASCADE`. Deleting an option people had already voted on silently destroyed their vote rows while `participants.voted_at` stayed set — and the ballot is locked (D-036), so they could not recast. Verified end to end before the fix: publish, have a guest approve two options, call `Activities.delete_activity/2` (exactly what the `×` on `03` does), and the guest's ballot drops from two votes to one with `{:error, :already_voted}` on any retry. Their submission is permanently short one choice and nothing anywhere says so.
+
+Reordering is the same bug more quietly: `Voting.tally/1` breaks ties by `activity.position`, so renumbering a pool mid-vote retroactively changes who is winning. Renaming an option changes what people agreed to. None of the three has a repair — the vote rows are append-only by D-036 — so the only correct move is refusal.
+
+The refusal lives in the context because that is the only place it can be enforced. `GroupLive.Options`' route had no status guard and `GroupLive.Review` renders for `:voting` groups on purpose, so both screens were reachable, and a `phx-click` can be pushed at any socket the organizer can mount. Hiding the controls is the courtesy; `Consensus.Activities` is the enforcement. Same split as the sudo-mode UI in D-021.
+
+**Alternatives rejected:**
+- *`ON DELETE RESTRICT` on `votes.activity_id`.* Turns the bug into an `Ecto.ConstraintError` at a random call site, and breaks the organizer-deletion cascade that `delete_user/2` depends on.
+- *Allow edits and re-tally.* There is nothing to re-tally: the votes are already gone by the time anyone notices.
+- *Allow `update_activity/3` (a description tweak is harmless).* A rename is not harmless, and one changeset covers both. A single rule that is easy to state beats a per-field carve-out nobody will remember.
+- *Guard only in the LiveViews.* Leaves the destructive path open to a pushed event and to any future caller.
+
+**Consequences:**
+- An organizer cannot fix a typo after publishing. That is the cost, and it is smaller than destroying a friend's ballot; the wizard's `03 review` step exists precisely so the pool gets a last look before it freezes.
+- `ConsensusWeb.JourneyTest` now proves the pasted-link image survived by reading `03 review` rather than the per-option editor, and additionally asserts the editor redirects. The editor is unreachable for a published group by design.
+- D-029's activity-lifecycle picture gains a second frozen boundary: `:draft → :voting` freezes the pool, not just the group's own fields.
+
+---
+
+## D-038 — SQLite runs on one connection, and the durability setting is pinned rather than inherited
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `Consensus.Repo` uses **`pool_size: 1`** in `config/dev.exs` and as the production default in `config/runtime.exs` (`POOL_SIZE` still overrides it). `synchronous: :normal` is now written out in both files. `config/test.exs` is deliberately untouched — it runs `Ecto.Adapters.SQL.Sandbox`, a different pool implementation whose size governs sandbox checkouts, not write contention. Guarded by [test/consensus/repo_config_test.exs](../test/consensus/repo_config_test.exs).
+
+**Why:** SQLite permits exactly one write transaction across the whole database file. Extra pool slots therefore cannot buy write concurrency — there is none to buy. What they do buy is *contenders*: five connections racing a lock that was never shareable, arbitrated by a busy handler SQLite's own documentation says makes no fairness guarantee about which waiter wins. A loser can burn its entire five-second timeout while later arrivals slip past it.
+
+Measured on the realistic worst case — **fifteen voters submitting inside a deadline burst**, at production's own settings (`default_transaction_mode: :immediate`, `busy_timeout: 5_000`, WAL), five repetitions pooled:
+
+| `pool_size` | arrival window | p50 | p95 | max |
+|---|---|---|---|---|
+| 5 (previous) | 10 s | 3.2 ms | 35 ms | 207 ms |
+| 5 (previous) | 2 s | 32 ms | **25,762 ms** | **38,888 ms** |
+| 1 | 2 s | 3.6 ms | **10.6 ms** | 127 ms |
+
+At `pool_size: 1`, sixty-four simultaneous ballots ran at p50 74 ms / max 129 ms with **zero** refusals — no ceiling this product will find at its stated scale of dozens of users. The knee for the old config was roughly **two genuinely concurrent writers**.
+
+Phase timing localised 100% of the delay to `BEGIN IMMEDIATE`; every pre-transaction read stayed sub-millisecond. So D-034's work — hoisting validation out of the transaction — was correct and is not what was left broken. Setting `synchronous: :off` changed nothing, which is the evidence that this is lock contention rather than disk: the numbers should therefore reproduce on Fly, where absolute latencies will be higher than these (Mac, local SSD) but the shape will not change.
+
+Extra slots degraded **reads** too — a 5,431 ms read tail at `pool_size: 5` against 15.6 ms at 1 — which is what makes D-013's "buys concurrent readers only" wrong rather than merely incomplete. That line is struck through in place.
+
+`synchronous: :normal` is pinned at its existing default value, so it changes no behaviour today. The point is that the durability trade should be a decision somebody made: under WAL, `:normal` fsyncs at checkpoint rather than at every commit, so a BEAM crash or a `fly deploy` cannot lose a committed ballot, but a host power loss or kernel panic can lose the tail of the WAL. That is accepted, because this deployment's real durability exposure is the volume snapshot's 24-hour RPO (D-019), not fsync timing.
+
+**Alternatives rejected:**
+- *Leave it at 5 and raise `busy_timeout`.* Makes the stall longer, not rarer. The voter still waits.
+- *Leave it at 5 and add more retries.* D-034 already retries; the retries were what kept the loss at 45% rather than higher. Retrying into a contended lock is a queue with no exit.
+- *`synchronous: :off`.* Measurably no faster here — contention, not disk — and it trades real durability for nothing.
+- *Change `config/test.exs` to match.* It uses a different pool implementation. Matching the number would be cargo-culting a value whose meaning differs, and risks breaking 595 passing tests for no production benefit.
+
+**Consequences:**
+- Every database operation in the app now serialises through one connection. This is fine *because* of D-034 and D-013: the write transaction is three statements, and reads are sub-millisecond. It would not be fine if a slow query were ever added — a single long read now blocks everything, where before it blocked one slot of five.
+- `POOL_SIZE` remains an escape hatch. Raise it only with a measurement, and amend this entry when you do.
+- The monitorable trigger for outgrowing SQLite is **any** occurrence of `[voting] ballot refused after` in production logs — that string means a ballot was lost — plus a capacity trigger of >50 participants submitting inside one 5-second window, or ballot p95 over 1 second. Full analysis and the migration costing are in [docs/sqlite-capacity-review.md](sqlite-capacity-review.md).
+- The review that produced these numbers also found that backups, not concurrency, are this deployment's larger risk: 24 h RPO, a restore runbook never executed (D-019), and `TODO.md` §7 recommending an `fly sftp get` of the `.db` **without its `-wal` sidecar**. That is not fixed here and remains open.
+
+---
+
+## D-039 — Resend is the mail provider, configured only when its key is present
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `config/runtime.exs` configures `Swoosh.Adapters.Resend` for `config_env() == :prod` **when `RESEND_API_KEY` is set and non-empty**, and leaves D-014's `Swoosh.Adapters.Logger` in force when it is not, warning loudly at boot. `config/prod.exs` already supplies the required `Swoosh.ApiClient.Req`. The `From` address moved out of the source into `MAIL_FROM` / `MAIL_FROM_NAME`, read by `Consensus.Accounts.UserNotifier.sender/0`.
+
+**Why:** the app had a mail *adapter* but no mail *provider*, so magic-link login and the confirm-your-email-change flow reached nobody in production. Resend was chosen by the repo owner; it needs one API key and an HTTP client this app already depends on.
+
+The configuration is **conditional on purpose**, and the conditional is the substantive part of this decision:
+
+- **The app must stay deployable before the secret exists.** `SECRET_KEY_BASE` raises at boot because nothing works without it. Mail is the opposite — invariant 9 says delivery is best-effort and must never fail a request — so a missing mail key must never cost a boot. Raising would make the first deploy of this very change fail on a machine whose secret is not set yet, which is exactly the machine that has it.
+- **A silent fallback would be worse than a loud one.** When the key is absent the boot warning is the only thing that will ever explain why a magic link did not arrive, so it names the symptom, the blast radius, and the fix (`fly secrets set RESEND_API_KEY=...`).
+
+The hardcoded `contact@example.com` sender had to go regardless: Resend rejects a `From` whose domain is not verified in its dashboard, and `example.com` can never be verified by anyone. The fallback is Resend's `onboarding@resend.dev`, the one address any account may send from unverified, so a first deploy delivers to the account owner rather than erroring.
+
+**Alternatives rejected:**
+- *Raise when `RESEND_API_KEY` is missing.* Turns a degraded-but-working deployment into no deployment, for a subsystem the app is explicitly designed to run without.
+- *Hardcode the adapter unconditionally.* Every dev/CI boot without the key would then attempt real HTTP to Resend and fail per-send instead of once at boot.
+- *Keep the sender in source and verify `example.com`.* Not possible; nobody controls it.
+- *Put the key in `config/prod.exs`.* Compile-time, and it would bake a secret into the release image.
+
+**Consequences:**
+- `RESEND_API_KEY` must be set with `fly secrets set` before magic-link login works in production. Until then the boot warning fires on every deploy and behaviour is exactly D-014's.
+- `MAIL_FROM` must be an address on a domain verified in Resend, or delivery fails per-send. Unset means `onboarding@resend.dev`, which only delivers to the Resend account owner's own address.
+- `.env.example` is now a real file documenting all of these; `.env` stays gitignored.
+- CLAUDE.md's "Known gap, not an invariant" paragraph, README and TODO all had to change: they said production could not deliver mail at all, which stops being true the moment the secret is set.
+- Invariant 9 is untouched and still binding. `UserNotifier.deliver/3` keeps its `catch`, and a Resend outage must remain a logged `{:error, reason}` rather than a failed request.
+
+---
+
 ## Still open
 
-D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md). Nothing above touches the voting engine: guest identity (Q-4), booking deep-links (Q-5), the Places/Yelp provider and its caching terms (Q-6), winner delivery (Q-7), veto semantics (Q-8), and the `participants` / `votes` / `sessions` schema (Q-9 through Q-12) are all still undecided. So is the non-blocking set (Q-13 through Q-16).
+D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).
+
+**The voting engine is no longer untouched.** D-034 through D-037, plus the `participants` / `votes` migration and `Consensus.Voting`, settle the schema questions (Q-9, Q-10, Q-11 — the two candidate vote schemas, the missing `participants` table, and whether `users` exists) and most of veto semantics (Q-8): one veto per participant, instant elimination, no withdrawal because the ballot is locked (D-036), anonymous like every other mark (D-035), and `outcome/1` reporting `:no_consensus` rather than crowning something the group struck out (D-034). Q-8's remaining bullet is the **veto floor** — nothing stops vetoes eliminating every option, and whether that should be blocked at ≤2 survivors is still open. Q-4 (guest identity) is answered on the storage side — a 32-byte server-minted `participants.token`, never castable — and open on the transport side, because the cookie/session half of it belongs to the `/join` web layer, which is not built.
+
+Still undecided: the veto floor (Q-8), booking deep-links (Q-5), the Places/Yelp provider and its caching terms (Q-6), winner delivery (Q-7), the remaining sessions/options field ambiguities (Q-12), and the whole non-blocking set (Q-13 through Q-16).
 
 One smaller item is deliberately deferred rather than open: this app ships with **no production mail *provider***, only the Logger adapter that D-014 pins in its place — registration takes a password and signs the new account in immediately (D-004), so nobody is ever blocked waiting on an email. The cost is that magic-link log-in and the confirm-your-email-change flow reach nobody in production until a provider is configured in `config/runtime.exs`. Choosing that provider is the open part; shipping without one was the decision.

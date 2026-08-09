@@ -52,10 +52,7 @@ defmodule ConsensusWeb.GroupLive.Share do
     assign(socket, :tz_offset, offset)
   end
 
-  # TODO: there is no "/join/:slug" route yet — the recipient's screen (design frame `06`)
-  # is out of scope for this pass (see docs/plans/creation-flow.md). Once
-  # ConsensusWeb.Router defines it, replace this with `~p"/join/#{group.slug}"`.
-  defp join_url(group), do: ConsensusWeb.Endpoint.url() <> "/join/" <> group.slug
+  defp join_url(group), do: ConsensusWeb.Endpoint.url() <> ~p"/join/#{group.slug}"
 
   defp spots_line(group, activity_count, now, tz_offset) do
     "#{activity_count} #{pluralize(activity_count, "spot")} · #{closes_phrase(group, now, tz_offset)}"
@@ -219,6 +216,13 @@ defmodule ConsensusWeb.GroupLive.Share do
               </span>
             </button>
           </div>
+
+          <.link
+            navigate={~p"/groups/#{@group.id}/results"}
+            class="text-center text-[12.5px] font-semibold text-violet underline decoration-2 underline-offset-2 hover:text-tangerine"
+          >
+            See live results →
+          </.link>
         </div>
       </div>
     </Layouts.app>

@@ -203,4 +203,54 @@ defmodule Consensus.Accounts.UserNotifierTest do
       refute log =~ "SECRET-TOKEN"
     end
   end
+
+  describe "the From address" do
+    # It used to be hardcoded `contact@example.com`, which no real provider would ever
+    # deliver: Resend rejects a From whose domain is not verified in its dashboard, and
+    # example.com can never be verified by anyone. D-039 made it configurable, with
+    # Resend's own unverified-sender address as the fallback.
+    setup do
+      original = Application.get_env(:consensus, :mail_from)
+      on_exit(fn -> restore_mail_from(original) end)
+      :ok
+    end
+
+    defp restore_mail_from(nil), do: Application.delete_env(:consensus, :mail_from)
+    defp restore_mail_from(value), do: Application.put_env(:consensus, :mail_from, value)
+
+    test "falls back to Resend's unverified sender, never to example.com" do
+      Application.delete_env(:consensus, :mail_from)
+
+      assert {"Consensus", "onboarding@resend.dev"} = UserNotifier.sender()
+      refute UserNotifier.sender() |> elem(1) =~ "example.com"
+    end
+
+    test "honours a configured {name, address} tuple" do
+      Application.put_env(:consensus, :mail_from, {"Dinner Club", "hello@dinner.club"})
+
+      assert {"Dinner Club", "hello@dinner.club"} = UserNotifier.sender()
+    end
+
+    test "accepts a bare address string and keeps the default display name" do
+      Application.put_env(:consensus, :mail_from, "hello@dinner.club")
+
+      assert {"Consensus", "hello@dinner.club"} = UserNotifier.sender()
+    end
+
+    test "a malformed value falls back rather than sending something unusable" do
+      Application.put_env(:consensus, :mail_from, :nonsense)
+
+      assert {"Consensus", "onboarding@resend.dev"} = UserNotifier.sender()
+    end
+
+    test "the sender actually reaches the delivered message", %{user: user} do
+      Application.put_env(:consensus, :mail_from, {"Dinner Club", "hello@dinner.club"})
+      use_adapter(Swoosh.Adapters.Test)
+
+      assert {:ok, email} =
+               UserNotifier.deliver_login_instructions(user, "https://example.com/tok")
+
+      assert email.from == {"Dinner Club", "hello@dinner.club"}
+    end
+  end
 end

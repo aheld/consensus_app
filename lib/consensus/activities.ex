@@ -18,6 +18,24 @@ defmodule Consensus.Activities do
   Changes are broadcast over `Phoenix.PubSub` on the `"activity_group:<id>"` topic
   (`subscribe_group/1`), so LiveViews showing a group update without a refresh (see
   CLAUDE.md product invariant 4).
+
+  ## The pool is frozen the moment the vote opens
+
+  `add_activity/3`, `update_activity/3`, `delete_activity/2` and `reorder_activities/3`
+  all refuse with `{:error, :pool_locked}` unless the group is still a `:draft`. This is
+  a **data-integrity** rule, not a UX preference, and it became load-bearing the moment
+  `Consensus.Voting` shipped: `votes.activity_id` references `activities` with
+  `ON DELETE CASCADE`, so deleting an option that people have already voted on silently
+  destroys their vote rows while their `participants.voted_at` stays set — the ballot is
+  locked (D-036), so they cannot recast, and their submission is permanently short one
+  choice. Reordering is the same bug more quietly: `tally/1` breaks ties by
+  `activity.position`, so renumbering mid-vote retroactively changes who is winning.
+  Renaming an option people approved changes what they agreed to.
+
+  The refusal lives here rather than in the LiveViews because here is the only place it
+  can be enforced — `ConsensusWeb.GroupLive.Options` and `.Review` hide their editing
+  controls once a group leaves `:draft`, but a `phx-click` can be pushed at any socket
+  the organizer can mount. See D-037.
   """
 
   import Ecto.Query, warn: false
@@ -44,7 +62,15 @@ defmodule Consensus.Activities do
     Phoenix.PubSub.subscribe(Consensus.PubSub, topic(group_id))
   end
 
-  defp topic(group_id), do: @topic_prefix <> to_string(group_id)
+  @doc """
+  The PubSub topic one group's updates travel on.
+
+  Public so that a sibling context broadcasting about the *same* group can reuse the
+  string rather than re-deriving it — `Consensus.Voting` sends `{:ballot_cast, group_id}`
+  here, which is what lets a results screen hold a single subscription and still see
+  both organizer edits and incoming ballots.
+  """
+  def topic(group_id), do: @topic_prefix <> to_string(group_id)
 
   defp broadcast(group_id, message) do
     Phoenix.PubSub.broadcast(Consensus.PubSub, topic(group_id), message)
@@ -247,17 +273,16 @@ defmodule Consensus.Activities do
   @doc """
   Appends an activity to a group's pool, at `max(position) + 1`.
 
-  Refuses with `{:error, :group_not_open}` when the group is not `:draft` or
-  `:voting` — a completed or cancelled group's pool is frozen. `:added_by_id` is set
-  from the scope; `attrs` cannot override it. Broadcasts `{:activity_added, activity}`
-  on success.
+  Refuses with `{:error, :pool_locked}` unless the group is still a `:draft` — see
+  "The pool is frozen the moment the vote opens" in the moduledoc. `:added_by_id` is
+  set from the scope; `attrs` cannot override it. Broadcasts
+  `{:activity_added, activity}` on success.
   """
   def add_activity(
         %Scope{user: %User{id: user_id}},
-        %Group{organizer_id: user_id, status: status} = group,
+        %Group{organizer_id: user_id, status: :draft} = group,
         attrs
-      )
-      when status in [:draft, :voting] do
+      ) do
     %Activity{group_id: group.id, added_by_id: user_id}
     |> Activity.changeset(attrs)
     |> Ecto.Changeset.put_change(:position, next_position(group.id))
@@ -273,7 +298,7 @@ defmodule Consensus.Activities do
   end
 
   def add_activity(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, _attrs) do
-    {:error, :group_not_open}
+    {:error, :pool_locked}
   end
 
   @doc """
@@ -284,11 +309,14 @@ defmodule Consensus.Activities do
   a pure function-head pattern match the way it is for group-level writes above; it is
   instead re-read from the database via `authorize_activity/2`, the same "don't trust
   the struct in hand, re-read from storage" idiom `Consensus.Accounts.set_admin/3` uses
-  for its actor. Returns `{:error, :unauthorized}` for someone else's group.
-  Broadcasts `{:activity_updated, activity}` on success.
+  for its actor. Returns `{:error, :unauthorized}` for someone else's group, and
+  `{:error, :pool_locked}` once that group has left `:draft` — see "The pool is frozen
+  the moment the vote opens" in the moduledoc. Broadcasts
+  `{:activity_updated, activity}` on success.
   """
   def update_activity(%Scope{} = scope, %Activity{} = activity, attrs) do
-    with {:ok, group} <- authorize_activity(scope, activity) do
+    with {:ok, group} <- authorize_activity(scope, activity),
+         :ok <- ensure_pool_editable(group) do
       activity
       |> Activity.changeset(attrs)
       |> Repo.update()
@@ -308,9 +336,14 @@ defmodule Consensus.Activities do
   contiguous, in one transaction. Broadcasts `{:activities_changed, activities}` (the
   group's remaining activities, in order) on success. See `update_activity/3` for why
   ownership is a DB re-read here rather than a function-head match.
+
+  Refuses with `{:error, :pool_locked}` once the group has left `:draft`. This is the
+  single most important place that guard sits: `votes.activity_id` cascades, so a delete
+  here would take already-cast votes with it. See the moduledoc and D-037.
   """
   def delete_activity(%Scope{} = scope, %Activity{} = activity) do
-    with {:ok, group} <- authorize_activity(scope, activity) do
+    with {:ok, group} <- authorize_activity(scope, activity),
+         :ok <- ensure_pool_editable(group) do
       Repo.transact(fn ->
         with {:ok, deleted} <- Repo.delete(activity) do
           remaining = renumber(group.id)
@@ -345,10 +378,14 @@ defmodule Consensus.Activities do
   once — any other list (missing an id, containing a foreign one, or repeating one) is
   refused with `{:error, :invalid_ids}` and nothing is written. Broadcasts
   `{:activities_changed, activities}` (in the new order) on success.
+
+  Refuses with `{:error, :pool_locked}` once the group has left `:draft`: `tally/1`
+  breaks ties by `activity.position`, so renumbering a pool people have already voted on
+  retroactively changes who is winning. See the moduledoc and D-037.
   """
   def reorder_activities(
         %Scope{user: %User{id: user_id}},
-        %Group{organizer_id: user_id} = group,
+        %Group{organizer_id: user_id, status: :draft} = group,
         ordered_ids
       )
       when is_list(ordered_ids) do
@@ -376,10 +413,21 @@ defmodule Consensus.Activities do
     end
   end
 
+  def reorder_activities(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, ids)
+      when is_list(ids) do
+    {:error, :pool_locked}
+  end
+
   defp valid_reorder?(ordered_ids, current_ids) do
     length(ordered_ids) == length(current_ids) and
       MapSet.new(ordered_ids) == MapSet.new(current_ids)
   end
+
+  # The pool is editable only while the group is a draft. See "The pool is frozen the
+  # moment the vote opens" in the moduledoc for why this is an integrity rule rather
+  # than a workflow preference.
+  defp ensure_pool_editable(%Group{status: :draft}), do: :ok
+  defp ensure_pool_editable(%Group{}), do: {:error, :pool_locked}
 
   defp authorize_activity(%Scope{user: %User{id: user_id}}, %Activity{group_id: group_id}) do
     case Repo.get(Group, group_id) do

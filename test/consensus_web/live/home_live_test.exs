@@ -55,7 +55,7 @@ defmodule ConsensusWeb.HomeLiveTest do
              |> has_element?()
     end
 
-    test "a voting group links to review and shows the VOTING pill", %{
+    test "a voting group links to live results and shows the VOTING pill", %{
       conn: conn,
       scope: scope
     } do
@@ -66,7 +66,7 @@ defmodule ConsensusWeb.HomeLiveTest do
       {:ok, lv, _html} = live(conn, ~p"/")
 
       assert lv
-             |> element(~s|a[href="#{~p"/groups/#{group.id}/review"}"]|, "Dinner Friday?")
+             |> element(~s|a[href="#{~p"/groups/#{group.id}/results"}"]|, "Dinner Friday?")
              |> has_element?()
 
       assert lv |> element("span", "VOTING") |> has_element?()

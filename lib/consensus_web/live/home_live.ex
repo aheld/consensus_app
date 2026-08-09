@@ -284,18 +284,17 @@ defmodule ConsensusWeb.HomeLive do
     do: "border-ink-30 bg-white/60 px-3.5 py-3 transition-colors hover:border-ink"
 
   # A `:draft` goes back into the wizard — `/options` if it already has a pool, `/edit`
-  # (step 1) if it doesn't — a `:voting` group goes to the review/live screen, and a
-  # finished group (`:completed`/`:cancelled`) goes there too: there is no dedicated past-
-  # group screen yet (results are Post-MVP, see DESIGN-SPEC.md), and `/review` is the
-  # closest thing to a read of the group that already exists.
+  # (step 1) if it doesn't. A `:voting` group, and a finished one (`:completed`/
+  # `:cancelled`), go to the live results screen — the one place the tally, the winner
+  # and the booking CTA actually render (see docs/plans/voting-loop.md's acceptance bar).
   defp group_href(%Group{status: :draft, activities: []} = group),
     do: ~p"/groups/#{group.id}/edit"
 
   defp group_href(%Group{status: :draft} = group), do: ~p"/groups/#{group.id}/options"
-  defp group_href(%Group{status: :voting} = group), do: ~p"/groups/#{group.id}/review"
+  defp group_href(%Group{status: :voting} = group), do: ~p"/groups/#{group.id}/results"
 
   defp group_href(%Group{status: status} = group) when status in [:completed, :cancelled],
-    do: ~p"/groups/#{group.id}/review"
+    do: ~p"/groups/#{group.id}/results"
 
   defp status_tone(:voting), do: :mint
   defp status_tone(:draft), do: :yellow

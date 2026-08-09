@@ -9,6 +9,13 @@ defmodule ConsensusWeb.GroupLive.Options do
   modal, so it is reached by `push_patch`/`<.link patch=...>` — the URL changes and the
   back button works — never by toggling a modal assign.
 
+  The screen exists only for a `:draft` group. Once the organizer publishes, the pool is
+  frozen (D-037 — `votes.activity_id` cascades, so a delete here would destroy ballots
+  that have already been cast), so `mount/3` bounces a `:voting`, `:completed` or
+  `:cancelled` group to `03 review`. The refusal itself lives in `Consensus.Activities`;
+  this redirect is the courtesy that keeps an organizer from tapping controls that would
+  all be refused.
+
   Every write goes through `Consensus.Activities` with `@current_scope`, which is how
   ownership is enforced: `@group` comes from `Activities.get_group!/2` (scoped to the
   organizer, raises `Ecto.NoResultsError` for anyone else's group or a bad id), and an
@@ -47,17 +54,32 @@ defmodule ConsensusWeb.GroupLive.Options do
   def mount(%{"id" => id}, _session, socket) do
     group = Activities.get_group!(socket.assigns.current_scope, parse_id(id))
 
-    {:ok,
-     socket
-     |> assign(:group, group)
-     |> assign(:add_form, fresh_add_form())
-     |> assign(:add_reset, 0)
-     |> assign(:fetching, MapSet.new())
-     |> assign(:editing_activity, nil)
-     |> assign(:edit_form, nil)
-     |> assign(:image_form, nil)
-     |> assign(:replacing_image, false)
-     |> stream(:activities, group.activities)}
+    if group.status == :draft do
+      {:ok, mount_editor(socket, group)}
+    else
+      # The pool is frozen once the vote opens (D-037): every write on this screen would
+      # be refused by `Consensus.Activities` anyway, and a screen full of controls that
+      # silently do nothing is worse than not being here. Same shape as
+      # `ConsensusWeb.GroupLive.Share` bouncing a `:draft` back to review — the lock is a
+      # route-level fact, not a disabled button.
+      {:ok,
+       socket
+       |> put_flash(:info, "Voting has started — the pool is locked.")
+       |> push_navigate(to: ~p"/groups/#{group}/review")}
+    end
+  end
+
+  defp mount_editor(socket, group) do
+    socket
+    |> assign(:group, group)
+    |> assign(:add_form, fresh_add_form())
+    |> assign(:add_reset, 0)
+    |> assign(:fetching, MapSet.new())
+    |> assign(:editing_activity, nil)
+    |> assign(:edit_form, nil)
+    |> assign(:image_form, nil)
+    |> assign(:replacing_image, false)
+    |> stream(:activities, group.activities)
   end
 
   @impl true
@@ -65,6 +87,13 @@ defmodule ConsensusWeb.GroupLive.Options do
     {:noreply, apply_action(socket, socket.assigns.live_action, params)}
   end
 
+  # The `:edit_activity` branch of `render/1` is a different tree that does not contain
+  # the `phx-update="stream"` container at all, so patching to the editor *destroys* that
+  # container in the DOM and patching back re-creates it empty. LiveView only sends the
+  # items in the stream's pending insert set, which after a save is just the one row that
+  # was `stream_insert`ed — so the pool silently rendered a single option while the footer
+  # still counted three. Re-stream with `reset: true` on every arrival at `:index`, which
+  # covers returning from a save, from Cancel, and from a direct patch alike.
   defp apply_action(socket, :index, _params) do
     socket
     |> assign(:page_title, "Add the options")
@@ -72,6 +101,7 @@ defmodule ConsensusWeb.GroupLive.Options do
     |> assign(:edit_form, nil)
     |> assign(:image_form, nil)
     |> assign(:replacing_image, false)
+    |> stream(:activities, socket.assigns.group.activities, reset: true)
   end
 
   defp apply_action(socket, :edit_activity, %{"activity_id" => raw_id}) do
@@ -467,8 +497,16 @@ defmodule ConsensusWeb.GroupLive.Options do
   # straight off `image_url`/`description`, so a page with no og:description can never
   # be reported as having one.
 
-  defp provenance_text(%Activity{source_url: nil}, _fetching) do
-    "typed by you · no details yet"
+  # A typed row starts with nothing, but the organizer can add a photo URL or a
+  # description by hand in `02b` — so "no details yet" is only true while it still has
+  # none. Reporting it unconditionally made the row contradict the editor the organizer
+  # had just saved.
+  defp provenance_text(%Activity{source_url: nil} = activity, _fetching) do
+    if present?(activity.image_url) or present?(activity.description) do
+      "typed by you · " <> resolved_summary(activity, "added")
+    else
+      "typed by you · no details yet"
+    end
   end
 
   defp provenance_text(%Activity{id: id} = activity, fetching) do

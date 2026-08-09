@@ -202,10 +202,17 @@ defmodule ConsensusWeb.JourneyTest do
     assert html =~ "Osteria Mozza (Highland)", "the edited name did not survive"
     assert html =~ "Book ahead.", "the edited description did not survive"
 
-    {:ok, _editor, html} = live(conn, ~p"/groups/#{group.id}/options/#{second.id}")
-
     assert html =~ "http://192.0.2.10/mozza.jpg",
            "the image URL pulled from the pasted link did not survive"
+
+    # The pool froze when the vote opened (D-037): the option editor that step 5 used is
+    # no longer reachable for this group, because a delete there would cascade into
+    # ballots. The review screen above is where the organizer sees the pool now, and it
+    # is the one that had to still carry the pasted image.
+    assert {:error, {:live_redirect, %{to: locked_to}}} =
+             live(conn, ~p"/groups/#{group.id}/options/#{second.id}")
+
+    assert locked_to == ~p"/groups/#{group.id}/review"
 
     ## 9. Nothing was re-entered anywhere, and nothing leaked into another organizer's world.
 

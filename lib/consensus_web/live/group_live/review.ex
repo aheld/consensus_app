@@ -3,14 +3,28 @@ defmodule ConsensusWeb.GroupLive.Review do
   Design frame `03 · review pool` — `/groups/:id/review`.
 
   The last stop before publishing. The organizer reorders the pool (drag, or the ↑/↓
-  buttons for anyone without a mouse), flips anonymous voting, sees the veto rule, and
-  either gets the share link — which is what actually moves the group `:draft -> :voting`
-  via `Consensus.Activities.publish_group/2` — or cancels the whole thing.
+  buttons for anyone without a mouse), sees the anonymity and veto rules, and either gets
+  the share link — which is what actually moves the group `:draft -> :voting` via
+  `Consensus.Activities.publish_group/2` — or cancels the whole thing.
 
   A friend can still be adding options while the organizer is on this screen (the
   subtitle says so), so this LiveView subscribes to the group's PubSub topic
   (`Consensus.Activities.subscribe_group/1`) and reloads on every broadcast rather than
   trusting whatever it mounted with.
+
+  **This screen outlives the draft**, and that is why it has an `@editable` assign:
+  `ConsensusWeb.HomeLive` sends a `:voting` group here too, since it is the closest thing
+  to a live view of a group until `GroupLive.Results` exists. Once the group leaves
+  `:draft` the pool is frozen (D-037) and every reorder or removal control is dropped —
+  the drag handle, the ↑/↓ pair, the `Sortable` hook and the `×`. That is a courtesy, not
+  the enforcement: `Consensus.Activities` refuses those writes regardless, which is what
+  protects ballots that have already been cast from a `phx-click` pushed at a socket the
+  organizer can still mount.
+
+  The anonymity card is a **statement, not a switch** (D-035). MVP voting is
+  unconditionally anonymous — `Consensus.Voting.tally/1` is structurally incapable of
+  returning per-participant choices in either mode — so a toggle here would have promised
+  attribution the engine will never produce.
   """
 
   use ConsensusWeb, :live_view
@@ -67,12 +81,6 @@ defmodule ConsensusWeb.GroupLive.Review do
       activity -> Activities.delete_activity(socket.assigns.current_scope, activity)
     end
 
-    {:noreply, reload(socket)}
-  end
-
-  def handle_event("toggle_anonymous", _params, socket) do
-    group = socket.assigns.group
-    Activities.update_group(socket.assigns.current_scope, group, %{anonymous: !group.anonymous})
     {:noreply, reload(socket)}
   end
 
@@ -169,6 +177,7 @@ defmodule ConsensusWeb.GroupLive.Review do
     socket
     |> assign(:group, group)
     |> assign(:activity_count, length(group.activities))
+    |> assign(:editable, group.status == :draft)
     |> stream(:activities, group.activities, reset: true)
   end
 
@@ -242,23 +251,40 @@ defmodule ConsensusWeb.GroupLive.Review do
     <Layouts.app flash={@flash} current_scope={@current_scope}>
       <div class="px-5 pb-3.5 pt-4">
         <h1 class="text-[27px]/[1.1] font-bold tracking-[-0.025em] text-ink">Your pool</h1>
-        <p class="text-[12.5px] leading-[1.4] text-muted">Drag to reorder. Friends can still add.</p>
+        <p class="text-[12.5px] leading-[1.4] text-muted">
+          <%!-- The comp reads "Drag to reorder. Friends can still add." Friends adding
+          options to someone else's pool is not built (out of scope, and D-037 freezes the
+          pool the moment the vote opens), so that sentence promises something the app
+          refuses to do. Deliberate copy deviation from frame 03 — do not "restore" it. --%>
+          {if @editable,
+            do: "Drag to reorder. This is what everyone votes on.",
+            else: "Voting is open — the pool is locked."}
+        </p>
       </div>
 
       <div class="flex min-h-0 flex-1 flex-col gap-[7px] px-5">
-        <div id="pool-list" phx-update="stream" phx-hook="Sortable" class="flex flex-col gap-[7px]">
+        <div
+          id="pool-list"
+          phx-update="stream"
+          phx-hook={@editable && "Sortable"}
+          class="flex flex-col gap-[7px]"
+        >
           <div
             :for={{dom_id, activity} <- @streams.activities}
             id={dom_id}
             data-sortable-id={activity.id}
-            draggable="true"
+            draggable={to_string(@editable)}
             class="flex items-center gap-2.5 rounded-2xl border-2 border-ink bg-white px-[11px] py-[9px] shadow-sticker-2"
           >
-            <span class="cursor-grab select-none font-mono text-[13px] text-muted" aria-hidden="true">
+            <span
+              :if={@editable}
+              class="cursor-grab select-none font-mono text-[13px] text-muted"
+              aria-hidden="true"
+            >
               ⠿
             </span>
 
-            <div class="flex flex-col gap-0.5">
+            <div :if={@editable} class="flex flex-col gap-0.5">
               <button
                 type="button"
                 phx-click="move_up"
@@ -303,6 +329,7 @@ defmodule ConsensusWeb.GroupLive.Review do
             </div>
 
             <button
+              :if={@editable}
               type="button"
               phx-click="remove_activity"
               phx-value-id={activity.id}
@@ -317,22 +344,11 @@ defmodule ConsensusWeb.GroupLive.Review do
         <.sticker_card tone={:violet_tint} depth={2} class="mt-1 flex items-center gap-3 px-3.5 py-3">
           <div class="flex-1">
             <p class="text-[13.5px] font-bold text-ink">Anonymous voting</p>
-            <p class="text-[11px] leading-[1.35] text-ink-soft">Nobody sees who picked what.</p>
+            <p class="text-[11px] leading-[1.35] text-ink-soft">
+              Nobody sees who picked what — totals only.
+            </p>
           </div>
-          <button
-            type="button"
-            role="switch"
-            aria-checked={to_string(@group.anonymous)}
-            aria-label="Anonymous voting"
-            phx-click="toggle_anonymous"
-            class={[
-              "flex h-[27px] w-[46px] shrink-0 items-center rounded-full border-2 border-ink px-[3px]",
-              @group.anonymous && "justify-end bg-violet",
-              !@group.anonymous && "justify-start bg-white"
-            ]}
-          >
-            <span class="size-[19px] rounded-full border-[1.5px] border-ink bg-white" />
-          </button>
+          <span class="shrink-0 font-mono text-[11px] font-semibold text-violet">ALWAYS ON</span>
         </.sticker_card>
 
         <div
@@ -362,7 +378,7 @@ defmodule ConsensusWeb.GroupLive.Review do
         </div>
 
         <.button variant="primary" type="button" phx-click="publish">
-          Get the share link
+          {if @editable, do: "Get the share link", else: "See the share link"}
         </.button>
       </div>
     </Layouts.app>

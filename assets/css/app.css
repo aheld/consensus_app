@@ -160,6 +160,23 @@
   .stripes-blue {
     background: repeating-linear-gradient(135deg, #d9e6fb 0 9px, #edf3fe 9px 18px);
   }
+
+  /* The inert, muted stripe on a `Sticker.tally_bar/1` row whose activity has been
+   * vetoed (D-034, D-035, docs/plans/voting-loop.md). Deliberately not one of the five
+   * colour-cycle stripes above: those stand in for a *missing photo* and read as
+   * "content", where this one has to read as "eliminated, do not look here" — a muted
+   * ink pattern instead of a pastel one. Values (7% ink fill, 25% ink border) are
+   * copied directly from the `05`/`05b` design frames rather than an existing token,
+   * the same way the five stripes above hardcode their own hex pairs.
+   */
+  .stripes-vetoed {
+    border-color: rgba(23, 33, 28, 0.25);
+    background: repeating-linear-gradient(
+      135deg,
+      rgba(23, 33, 28, 0.07) 0 5px,
+      transparent 5px 10px
+    );
+  }
 }
 
 @media (prefers-reduced-motion: reduce) {

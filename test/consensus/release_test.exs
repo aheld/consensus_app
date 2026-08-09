@@ -73,11 +73,38 @@ defmodule Consensus.ReleaseTest do
 
       assert {:ok, [^last], _} = Consensus.Release.rollback(TmpRepo, last)
 
-      # The newest migration drops `home_page`, so reversing exactly that one has to
-      # bring the table back — which is also the only assertion that its `down/0` runs.
+      # The newest migration creates the voting tables, so reversing exactly that one
+      # has to take them away — which is also the only assertion that its `down/0`
+      # runs — while leaving everything an earlier migration created in place.
+      tables = tables(database)
+      refute "participants" in tables
+      refute "votes" in tables
+      assert "activity_groups" in tables
+      assert "activities" in tables
+      assert "users" in tables
+    end
+
+    test "reverses a migration in the middle of the chain, and everything after it",
+         %{tmp_dir: tmp} do
+      database = configure_tmp_repo(tmp)
+      Consensus.Release.migrate()
+
+      # `drop_home_page` is the one migration in this repo whose `down/0` has real work
+      # to do — it recreates a table with a named CHECK constraint from literal SQL,
+      # because the `create constraint(...)` DSL compiles fine and only raises when a
+      # rollback actually runs it. `rollback/2` reverses everything after *and
+      # including* the version it is given, so asking for that one also unwinds every
+      # migration added since.
+      drop_home_page = 20_260_808_183_755
+      assert drop_home_page in migration_versions()
+
+      assert {:ok, reverted, _} = Consensus.Release.rollback(TmpRepo, drop_home_page)
+      assert drop_home_page in reverted
+
       tables = tables(database)
       assert "home_page" in tables
       assert "users" in tables
+      refute "participants" in tables
     end
 
     test "rolling back to 0 reverses the whole schema", %{tmp_dir: tmp} do

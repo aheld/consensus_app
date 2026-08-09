@@ -22,7 +22,7 @@ defmodule Consensus.Accounts.UserNotifier do
     email =
       new()
       |> to(recipient)
-      |> from({"Consensus", "contact@example.com"})
+      |> from(sender())
       |> subject(subject)
       |> text_body(body)
 
@@ -44,6 +44,29 @@ defmodule Consensus.Accounts.UserNotifier do
     Mailer.deliver(email)
   catch
     kind, reason -> {:error, {kind, reason}}
+  end
+
+  @default_sender {"Consensus", "onboarding@resend.dev"}
+
+  @doc """
+  The `From` this app sends as, as Swoosh's `{name, address}` tuple.
+
+  Configurable because a real provider will not send as whatever it likes: Resend
+  rejects a `From` whose domain you have not verified in its dashboard, so the address
+  has to track the deployment rather than be baked into the source. `config/runtime.exs`
+  sets it from `MAIL_FROM` / `MAIL_FROM_NAME` in production.
+
+  The default is Resend's own `onboarding@resend.dev`, which is the one sender every
+  Resend account may use without verifying a domain — so a first deploy delivers to the
+  account owner instead of failing. It is deliberately *not* `contact@example.com`,
+  which was the previous hardcoded value and could never have delivered anywhere.
+  """
+  def sender do
+    case Application.get_env(:consensus, :mail_from) do
+      {name, address} when is_binary(name) and is_binary(address) -> {name, address}
+      address when is_binary(address) -> {elem(@default_sender, 0), address}
+      _ -> @default_sender
+    end
   end
 
   @doc """

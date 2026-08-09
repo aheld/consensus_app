@@ -561,14 +561,20 @@ Concrete names, so the rules above land in the right place:
   produced five failures in `Consensus.ContentTest`. ExUnit runs sync cases only after every async
   one has finished, so `async: false` gives the module the file to itself; the DDL still rolls back
   with the sandbox transaction. Ordinary inserts and updates remain safe under `async: true`.
-  Current split, across 21 test files:
+  Current split, across 24 test files:
   - **Five declare `async: true`** — `content_test`, `router_test`, `deploy_config_test`,
     `error_html_test`, `error_json_test`. `router_test` and `deploy_config_test` are plain
     `ExUnit.Case` and touch no database at all (`deploy_config_test` only reads `fly.toml` as
     text), which is why they are free.
-  - **Six explicitly pin `async: false`** — `seeds_test`, `user_notifier_test`, `application_test`,
-    `boot_check_test`, `release_test`, `health_controller_test`. Each has a reason in a comment at
-    the top; do not flip one without reading it.
+  - **Seven explicitly pin `async: false`** — `seeds_test`, `user_notifier_test`,
+    `application_test`, `boot_check_test`, `release_test`, `health_controller_test`, and
+    `voting_concurrency_test`. Each has a reason in a comment at the top; do not flip one without
+    reading it. The last one is the odd case and the interesting one: it does not issue DDL, it
+    **leaves the sandbox entirely**, starting a second dynamic instance of `Consensus.Repo`
+    (`put_dynamic_repo/1`) on a throwaway file under `tmp_dir` with a real connection pool, so that
+    N ballots can be cast at genuinely the same instant. It is the only test in the repo that can
+    observe concurrency at all — everything else is sequential by `max_cases: 1` plus the sandbox's
+    one-connection-per-test. Read its moduledoc before touching it.
   - **The remaining ten take the default, which is sync** — `accounts_test`,
     `user_session_controller_test`, `user_auth_test`, `home_live_test`,
     `admin_live/{users,home_page}_test`, `user_live/{registration,login,confirmation,settings}_test`.

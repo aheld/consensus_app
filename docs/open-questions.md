@@ -77,18 +77,28 @@ procedure in TODO.md §7 (steps R1–R8) is documented, self-consistent and labe
 never been executed against a live app, and it necessarily destroys and recreates the Machine
 (D-019).
 
-### F-3. Production has a mail adapter but no mail provider
+### F-3. The mail provider is configured but the secret may not be set
 
-`config/runtime.exs` pins `Swoosh.Adapters.Logger` for `:prod`, which logs the recipient — not the
-body, so no working magic link reaches `fly logs` — and returns `{:ok, _}`. Nothing is delivered.
-Magic-link login and the confirm-your-email-change flow therefore reach nobody in production.
+**Mostly closed by D-039.** Resend is now the provider: `config/runtime.exs` selects
+`Swoosh.Adapters.Resend` for `:prod` whenever `RESEND_API_KEY` is set, and falls back to
+`Swoosh.Adapters.Logger` — with a boot warning — when it is not.
 
-Registration takes a password and signs the new account in immediately, so nobody is *blocked*, and
-`Accounts.delete_user/2` from `/admin/users` is the account-recovery lever this deployment actually
-has. But the credential pre-stuffing defence in D-017 only fires when the real owner clicks a link
-they can only receive by email — so today it is a correct mechanism with no delivery channel. Adding
-a provider is a one-line change in `config/runtime.exs`; until it lands, do not document magic-link
-login as a working production path.
+What remains open is operational, not a code gap, and it has two halves that fail differently:
+
+1. **The secret must actually be set** (`fly secrets set RESEND_API_KEY=re_...`). Until it is, the
+   fallback is in force and nothing is delivered. `fly secrets list` is the only reliable check —
+   do not infer it from the config file, which is conditional by design.
+2. **`MAIL_FROM` must be on a domain verified in the Resend dashboard.** This one fails *after* the
+   key is set and looks different: the app is configured correctly, the boot warning is gone, and
+   every send is rejected at the provider. Unset, the sender defaults to `onboarding@resend.dev`,
+   which Resend only delivers to the account owner's own address — so a "working" first test can be
+   misleading about whether anyone else will receive anything.
+
+Registration takes a password and signs the new account in immediately, so nobody is ever *blocked*,
+and `Accounts.delete_user/2` from `/admin/users` remains the account-recovery lever. Note what is
+still gated on delivery: the credential pre-stuffing defence in D-017 only fires when the real owner
+clicks a link they can only receive by email, so it stays a correct mechanism with no channel until
+both halves above are done.
 
 ### F-4. Two test guards weaken silently in environments unlike this one
 
@@ -161,9 +171,12 @@ reproduced, none blocks anything. Listed roughly by value.
 
 ---
 
-## Blocking — decide before writing voting-engine code
+## Blocking — decide before finishing the voting engine
 
-### Q-4. Guest identity — localStorage is not enough
+The domain layer (`Consensus.Voting`, D-034 through D-037) is built; the `/join` web layer is not.
+Some of what follows is therefore now half-answered, and says so in place.
+
+### Q-4. Guest identity — the token is settled, the transport is not
 
 Milestone 1.1 puts guest sessions in `localStorage`. Two problems:
 
@@ -173,9 +186,18 @@ Milestone 1.1 puts guest sessions in `localStorage`. Two problems:
 2. **Integrity.** "One vote per voter" and "one veto per voter" are unenforceable if identity
    lives entirely client-side. Anyone can clear storage and vote again.
 
-Likely need a server-issued participant token in an httpOnly cookie, with `localStorage` as a
-convenience mirror only. Decide the identity model before the schema is written — it touches
-`participants`, `votes`, and every guarded mutation.
+**Half settled.** The storage half is decided and built: `participants.token` is 32 bytes of
+`:crypto.strong_rand_bytes/1`, minted server-side by `Consensus.Voting.create_participant/2`,
+never castable from client input, and the *only* way to turn a browser back into a participant
+row (`get_participant_by_token/1`). "One vote per voter" is enforced by `participants.voted_at`
+and a conditional `UPDATE` (D-036), and "one veto per voter" by the ballot being submitted whole,
+once. `localStorage` is not used anywhere.
+
+**Still open:** the transport. The token has to reach the browser somehow, and the plan puts it in
+the Phoenix session via `JoinController.enter/2` — but that controller, and the whole `/join` tree,
+is not built yet, so nothing has been decided about cookie attributes, what happens in an iMessage
+webview that drops the cookie, or whether a returning voter with no cookie may re-claim their row
+at all. Decide that with the web layer, not before.
 
 ### Q-5. Do booking deep-links actually exist?
 
@@ -216,37 +238,39 @@ friction we said we wouldn't add. Needs an explicit call.
 
 ## Spec gaps — the two docs disagree or omit something
 
-### Q-8. Veto semantics are underspecified
+### Q-8. Veto semantics — only the floor is still open
 
-MVP includes: "Each voter can apply one Veto … instantly removing it from the eligible list."
-Undefined:
+Four of the five bullets are answered by the shipped engine and recorded in
+[decisions.md](decisions.md):
 
-- What happens to votes already cast for a now-vetoed option? Refund, or silently lost?
-- Can a veto be withdrawn?
-- If voting is anonymous, is the veto anonymous too? Options vanishing without attribution is
-  confusing; attributed vetoes reintroduce exactly the social pressure the feature exists to remove.
-- What if vetoes eliminate every option? Need a floor (e.g. veto blocked when ≤2 options remain).
-- With 5–8 voters each holding a veto, one person can unilaterally kill anything. Is instant
-  removal right, or should veto be a heavy downweight?
+- *What happens to votes already cast for a now-vetoed option?* Nothing is deleted. `tally/1`
+  splits the pool into survivors and eliminated; a vetoed row keeps its approval count and is
+  rendered struck through with `bar_percent: 0`.
+- *Can a veto be withdrawn?* No — the whole ballot is locked once cast (**D-036**).
+- *Is the veto anonymous?* Yes, like every other mark: the context cannot produce per-participant
+  choices in any mode (**D-035**).
+- *What if vetoes eliminate every option?* `outcome/1` returns `:no_consensus`, distinguishable
+  from "nobody has voted yet", and deliberately does **not** crown the least-vetoed option
+  (**D-034**).
 
-### Q-9. The two candidate vote schemas disagree
+**Still open — the floor.** Nothing caps total vetoes across the pool: one per participant,
+unlimited in aggregate, so any group with as many participants as options can veto everything and
+land in `:no_consensus`. Whether to block a veto at ≤2 surviving options, or to keep instant
+removal and let `:no_consensus` be a real outcome the results screen renders honestly, is
+undecided. Related and also undecided: with 5–8 voters each holding a veto, one person can
+unilaterally kill anything — instant removal, or a heavy downweight?
 
-The PRD's original schema sketch had `Vote.preference_type (yes/no/veto)`. The roadmap's `votes`
-table has `rank_weight` but **no** veto representation — despite veto being an MVP must-have and RCV
-being Post-MVP. The roadmap schema models the Post-MVP feature and drops the MVP one. Both sketches
-are in [prd-technical-extracts.md](prd-technical-extracts.md) § From §6 and the roadmap draft.
-
-### Q-10. `participants` table is missing
-
-`votes.participant_id` is declared as a foreign key to `participants.id`, but no `participants`
-table is defined anywhere in the roadmap. Needs: session scoping, display name, anonymity flag,
-identity token (see Q-4), veto-used flag, joined/last-seen timestamps.
-
-### Q-11. No `users` table either
-
-`sessions.organizer_id` references `users.id`. Organizer accounts are Post-MVP. For the MVP the
-organizer is presumably just a participant with a role flag plus a secret organizer token — decide
-whether `users` exists at all in v1.
+**Q-9, Q-10 and Q-11 have been deleted from this file**, per the rule at the top. The
+`participants` and `votes` tables are migrated and live in
+`priv/repo/migrations/20260808210450_create_voting_tables.exs`, with the schemas in
+`lib/consensus/voting/`. They answer all three: `votes.kind` is `"approve" | "veto"` read through
+`Ecto.Enum` and there is deliberately **no** rank or weight column, since ranked-choice is
+Post-MVP (Q-9); `participants` exists with group scoping, display name, `kind`, token and
+`voted_at` (Q-10); and `users` exists and predates all of it (D-003, D-004), so the organizer is
+an account, not a participant with a role flag (Q-11). Anonymity is not a per-group behaviour —
+see D-035 — so there is no anonymity flag on `participants`, and there is no `veto_used` flag
+because a ballot is submitted whole and once (D-036). The surviving numbers are unchanged, so this
+section runs Q-8 then Q-12.
 
 ### Q-12. Ambiguous fields in the sessions/options schema
 

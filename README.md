@@ -5,8 +5,9 @@ with username-or-email authentication, an admin area, and the beginning of the a
 product — an organizer can sign up, build a titled activity group with a hard deadline, fill
 it with options (typed by hand or pasted as a URL that gets its title/description/image
 pulled from the page automatically), review and reorder the pool, and publish it to a share
-link. Voting on that link, ranking, tallying, and the results screen are **not built yet** —
-see *What is not built yet* below.
+link — and the people he shares it with can open it with no account, vote, and watch the tally
+move live. Place discovery (Yelp/Places) is the main thing still missing; see *What is not
+built yet* below.
 
 **Status.** The foundation (accounts, sessions, roles, an admin area, first-boot seeding, a
 Docker release image, a CI/CD pipeline) is production-ready and was committed at `8825433`
@@ -169,12 +170,15 @@ tests). `mix ecto.reset` drops and rebuilds it.
 
 ### What is not built yet
 
-The recipient's side of the link (`/join/:slug`), voting itself, ranking, tallying, the live
-results screen, the winner/booking CTA, and any place-discovery integration (Yelp/Places) do
-not exist. A published group's share link currently has nothing on the other end to vote with.
-See `docs/PRD.md` for what all of that is supposed to do, and `docs/open-questions.md` for
-what is still undecided about it (guest identity, veto semantics, the votes/participants
-schema, and more).
+**Place discovery** (Yelp/Places) — options are typed or pasted as a link, never searched.
+**Friends adding options to someone else's pool** — the pool freezes when the vote opens
+(D-037), and design frame `03`'s "Friends can still add" copy was changed to match. **Ranked
+choice** (Borda/IRV) — the MVP tally is approval voting, which is what the ballot comp draws;
+ranked choice is explicitly Post-MVP. **Real nudges** — the organizer's *Nudge* button
+confirms rather than sending, because it would need mail delivery to be configured. And the
+**veto floor**: nothing stops vetoes eliminating every option, which `outcome/1` reports
+honestly as `:no_consensus` rather than crowning something the group struck out (Q-8 in
+`docs/open-questions.md` is still open on whether that should be prevented).
 
 ---
 
@@ -192,13 +196,17 @@ schema, and more).
 | `/groups/:id/options`, `/groups/:id/options/:activity_id` | Wizard step 2 — the option pool, and the full-screen editor for one option. A pasted link is fetched server-side, asynchronously; a typed name is not. See [`GroupLive.Options`](lib/consensus_web/live/group_live/options.ex). |
 | `/groups/:id/review` | Wizard step 3 — reorder, toggle anonymous voting, publish (`:draft` → `:voting`) or cancel. See [`GroupLive.Review`](lib/consensus_web/live/group_live/review.ex). |
 | `/groups/:id/share` | The share link, shown after publishing. See [`GroupLive.Share`](lib/consensus_web/live/group_live/share.ex). |
+| `/groups/:id/results` | The organizer's live results (design frame `05`): a violet countdown, the voted/waiting avatar row, the running tally with veto elimination and a tangerine star on the leader, plus **Nudge** and **Close now**. Updates over PubSub as ballots land. See [`GroupLive.Results`](lib/consensus_web/live/group_live/results.ex). |
+| `/join/:slug` | **The recipient's front door** (frame `06`), public and account-free. Name, `skip →` for anonymous, or — if you happen to be signed in — *Continue as \<username\>*. See [`JoinLive.Entry`](lib/consensus_web/live/join_live/entry.ex). |
+| `/join/:slug/enter` | `POST`. The one path that mints a participant. A **controller**, not a LiveView, because a LiveView cannot write a session cookie — and the guest's identity is a signed token in that cookie, keyed by group. See [`JoinController`](lib/consensus_web/controllers/join_controller.ex). |
+| `/join/:slug/vote` | The sticker-grid ballot: approval voting ("tap all you'd be happy with") plus at most one veto. Once cast, **the ballot is locked** (D-036) — returning here redirects to results, because the lock is a route-level fact rather than a disabled button. See [`JoinLive.Ballot`](lib/consensus_web/live/join_live/ballot.ex). |
+| `/join/:slug/results` | The participant's view of the same live tally (frame `05b`), with the "Your ranking is in" confirmation. Deliberately has no "Change my ranking" button — see D-036. See [`JoinLive.Results`](lib/consensus_web/live/join_live/results.ex). |
 | `/admin`, `/admin/users` | Admin → Users ([`AdminLive.Users`](lib/consensus_web/live/admin_live/users.ex)). Lists every account; **Promote**, **Demote** and **Delete**. Refuses to demote the last admin (`{:error, :last_admin}`); both demotion and deletion disconnect that user's live sessions, and **deleting a non-admin now cascades to every activity group they organize** (see *Architecture* below). All three actions need **sudo mode** (a log-in within the last 20 minutes): out of it, the page shows a `#sudo-notice` banner and greys the buttons, and `Consensus.Accounts` refuses regardless of what the client sends. Renders the default-password banner. |
 | `/admin/dashboard` | Phoenix LiveDashboard. Mounted in **every** environment, admin-only — not left on `:dev_routes`. |
 | `/dev/mailbox` | Swoosh mailbox preview. Development only, gated on `Application.compile_env(:consensus, :dev_routes)`. |
 | `/health` | Readiness probe for Fly's health checker ([`HealthController`](lib/consensus_web/controllers/health_controller.ex)). Outside the `:browser` pipeline — no session, CSRF or layout — and excluded from `force_ssl`. `200 ok` only when no migration is pending *and* the `users` table is readable; otherwise `503`. See *Deployment*. |
 
-`mix phx.routes` prints the authoritative list. There is no `/join/:slug` route yet — that is
-the recipient's side of the link, and it is not built (see *What is not built yet* above).
+`mix phx.routes` prints the authoritative list.
 
 ---
 
@@ -398,8 +406,9 @@ or password change.
 
 **3. Registration takes a password and signs the user in immediately.** Stock 1.8 registration is
 magic-link-only: you register, then click a link in an email to get a session. That makes the app
-unusable on a fresh deploy with no mail provider configured — and this one ships without one (see
-the caveat below). So `/users/register` takes username + email + password, and hands the populated
+unusable on a fresh deploy whose mail provider is not yet configured — which is the state this app
+boots in until `RESEND_API_KEY` is set (see *Mail* below). So `/users/register` takes username +
+email + password, and hands the populated
 form to `UserSessionController` via `phx-trigger-action` to obtain a signed session cookie.
 
 **4. Log-in accepts a username or an email.** The form posts `user[login]`;
@@ -471,21 +480,33 @@ chose. The UI says so up front.
   [docs/decisions.md](docs/decisions.md) D-015. **Note this also deletes every activity group the
   person organized** — see *Architecture* above.
 
-### Caveat: production has a mail adapter, but no mail *provider*
+### Mail: Resend, but only once its key is set
 
-[`config/config.exs`](config/config.exs) sets `Consensus.Mailer` to `Swoosh.Adapters.Local`, and
-[`config/prod.exs`](config/prod.exs) sets `config :swoosh, local: false` — which stops Swoosh from
-starting the storage process that adapter calls. In a release the two together made **every
-delivery exit**, taking the calling process with it, which would have crashed sign-up. So
-[`config/runtime.exs`](config/runtime.exs) pins a production adapter that works:
+The provider is **Resend** ([docs/decisions.md](docs/decisions.md) D-039).
+[`config/runtime.exs`](config/runtime.exs) selects it for `:prod` **only when `RESEND_API_KEY` is
+set and non-empty**, and otherwise falls back to `Swoosh.Adapters.Logger`, printing a boot warning
+that names the fix. So a deploy without the secret still boots and still works — it just delivers
+nothing:
 
-```elixir
-config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Logger, level: :info
+```bash
+fly secrets set RESEND_API_KEY=re_... MAIL_FROM=hello@your-verified-domain.com
 ```
 
-It sits ahead of the commented Mailgun example in the same file, so configuring a real provider
-still wins. Delivery now always succeeds and logs the recipient — not the body, so no magic-link
-token reaches the logs. Belt and braces:
+Two things bite here. **`MAIL_FROM` must be on a domain you have verified in the Resend
+dashboard**, or every send is rejected by the provider; unset, it falls back to Resend's
+`onboarding@resend.dev`, which only delivers to the address that owns the Resend account. And
+until the key is set, magic-link login and confirm-your-email-change reach nobody — use password
+login, and `Delete` on `/admin/users` for someone genuinely locked out.
+
+The fallback is a real design decision rather than caution: mail is best-effort here (invariant 9),
+so a missing mail key must never cost a boot the way a missing `SECRET_KEY_BASE` does.
+
+Why the fallback is `Logger` and not the generated default: [`config/config.exs`](config/config.exs)
+sets `Swoosh.Adapters.Local`, and [`config/prod.exs`](config/prod.exs) sets
+`config :swoosh, local: false`, which stops Swoosh starting the storage process that adapter calls.
+In a release the two together made **every delivery exit**, taking the calling process with it,
+which would have crashed sign-up. `Logger` always succeeds and logs the recipient — not the body,
+so no magic-link token reaches the logs. Belt and braces:
 [`Consensus.Accounts.UserNotifier.deliver/3`](lib/consensus/accounts/user_notifier.ex) wraps the
 send in a `catch`, turning both an `{:error, _}` tuple and a process **exit** into a logged
 `{:error, reason}`, so no mailer failure can ever escape into a web request. See
@@ -512,7 +533,9 @@ Every environment variable the application actually reads:
 | `PHX_HOST` | `config/runtime.exs`, `:prod` only | `"example.com"` | Effectively yes, and it must be **the hostname the browser actually uses** — `<app>.fly.dev` for a stock Fly deploy. Missing or wrong is *silent*, not fatal: it becomes the endpoint's `:url` host, `check_origin` defaults to true in prod and validates `Origin` against it, so every LiveView socket 403s while `GET /` and `/health` keep answering 200 and Fly calls the machine healthy. `test/consensus/deploy_config_test.exs` asserts `fly.toml`'s `PHX_HOST` equals `<app>.fly.dev`; CI's docker job asserts a real socket handshake returns 101. |
 | `PHX_SERVER` | `config/runtime.exs` | unset | Required for a release to actually listen. `rel/overlays/bin/server` sets it. |
 | `PORT` | `config/runtime.exs`, all envs | `4000` | No. Must equal `internal_port` in `fly.toml` (`8080` there). |
-| `POOL_SIZE` | `config/runtime.exs`, `:prod` only | `5` | No. SQLite serialises writes; extra slots only help readers. |
+| `POOL_SIZE` | `config/runtime.exs`, `:prod` only | `1` | No, and **do not raise it without a measurement** (D-038). SQLite allows one write transaction across the whole file, so extra slots buy no write concurrency — they only add contenders for a lock that was never shareable, and they slow reads too. A 15-voter deadline burst measured p95 25,762 ms at `5` (with ballots lost outright) against 10.6 ms at `1`. |
+| `RESEND_API_KEY` | `config/runtime.exs`, `:prod` only | unset | For real email, yes. Unset ⇒ `Swoosh.Adapters.Logger` and a boot warning; nothing is delivered but the app runs (D-039). |
+| `MAIL_FROM` / `MAIL_FROM_NAME` | `config/runtime.exs`, `:prod` only | `onboarding@resend.dev` / `Consensus` | Only with `RESEND_API_KEY`. The address must be on a domain **verified in Resend**; the default only delivers to the Resend account owner. |
 | `DNS_CLUSTER_QUERY` | `config/runtime.exs`, `:prod` only | unset → `:ignore` | No. Irrelevant on a single machine. |
 | `ADMIN_USERNAME` | [`lib/consensus/seeds.ex`](lib/consensus/seeds.ex) | `aheld` | No. Read only on a boot where the database holds **no administrator** (`Accounts.count_admins() == 0`) — normally the first boot. Ignored once any admin exists. |
 | `ADMIN_EMAIL` | `lib/consensus/seeds.ex` | `aheld@example.com` | No. Same gate as `ADMIN_USERNAME`, and read on the same boot or not at all. |
@@ -530,7 +553,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 438 tests, 0 failures (~2.6-3.1s warm)
+mix test                        # 606 tests, 0 failures (~15-25s warm)
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
@@ -745,7 +768,7 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │                                #   migrate, plus their .bat pairs. migrate is generator
 │                                #   output and is NOT in the deploy path — migrations run
 │                                #   from the supervision tree; see Deployment.
-└── test/                        # 438 tests; mirrors lib/, plus support/ (ConnCase, DataCase,
+└── test/                        # 606 tests; mirrors lib/, plus support/ (ConnCase, DataCase,
                                  #   fixtures, link_preview_stub.ex), journey_test.exs (the one
                                  #   end-to-end acceptance test), and deploy_config_test.exs,
                                  #   which reads fly.toml as text

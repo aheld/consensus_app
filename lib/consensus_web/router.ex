@@ -88,9 +88,50 @@ defmodule ConsensusWeb.Router do
       live "/groups/:id/options/:activity_id", GroupLive.Options, :edit_activity
       live "/groups/:id/review", GroupLive.Review, :show
       live "/groups/:id/share", GroupLive.Share, :show
+
+      # Design frame `05` — the organizer's live-results screen. In the existing
+      # `:require_authenticated_user` live_session (not a new one — AGENTS.md: a
+      # live_session name is declared once) because only the organizer, signed in,
+      # reaches it; the participant-side twin of this screen is `JoinLive.Results`
+      # below, under `/join/:slug/results`, which a guest with no account reaches
+      # instead.
+      live "/groups/:id/results", GroupLive.Results, :show
     end
 
     post "/users/update-password", UserSessionController, :update_password
+  end
+
+  ## The recipient's public join flow
+  #
+  # No account, ever (CLAUDE.md product invariant 1 — voter friction is zero), so this
+  # is a plain `:browser` scope, not `:require_authenticated_user`. `live_session
+  # :participant` chains two `on_mount` hooks: `ConsensusWeb.UserAuth`'s existing
+  # `:mount_current_scope` first, so a *signed-in* visitor still gets `@current_scope`
+  # (frame `06`'s "join as yourself" affordance) without a second `:current_user`
+  # live_session (not allowed — see above); then `ConsensusWeb.JoinAuth`'s
+  # `:resolve_participant`, which resolves the session's participant token into
+  # `@participant`, assigns `@group`, and applies the `/join`-tree status guards from
+  # docs/plans/voting-loop.md (`:draft` bounces home with a flash, `:completed`/
+  # `:cancelled` bounces to results).
+  #
+  # `POST /join/:slug/enter` is a plain controller route, not a LiveView — a LiveView
+  # cannot write a session cookie, which is the whole reason `JoinController` exists.
+  # It sits in the same scope, outside the `live_session` block, since it is not itself
+  # a LiveView route.
+  scope "/", ConsensusWeb do
+    pipe_through :browser
+
+    live_session :participant,
+      on_mount: [
+        {ConsensusWeb.UserAuth, :mount_current_scope},
+        {ConsensusWeb.JoinAuth, :resolve_participant}
+      ] do
+      live "/join/:slug", JoinLive.Entry, :show
+      live "/join/:slug/vote", JoinLive.Ballot, :show
+      live "/join/:slug/results", JoinLive.Results, :show
+    end
+
+    post "/join/:slug/enter", JoinController, :enter
   end
 
   scope "/", ConsensusWeb do

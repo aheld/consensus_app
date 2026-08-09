@@ -542,12 +542,23 @@ fly logs --app <FLY_APP_NAME>
     15:25:00.064 [error] Exqlite.Connection (#PID<0.1941.0> ("db_conn_3")) failed to connect: ** (Exqlite.Error) database is locked
     ```
 
-    **Red `[error]`, and expected — but only on the first boot against an empty volume.**
+    **This should no longer happen at all, as of D-038 — see the note below.** It is kept
+    because the reasoning still explains the shape of any `database is locked` you meet at
+    boot, and because a raised `POOL_SIZE` brings it straight back.
+
+    > **D-038 note.** `pool_size` is now **1** by default, so there is exactly one connection
+    > opening and nothing for it to race. The two lines below were an artefact of the old
+    > `pool_size: 5`. If you see them on a fresh volume today, the first thing to check is
+    > whether `POOL_SIZE` has been set to something greater than 1 as a Fly secret or in
+    > `fly.toml`.
+
+    **Red `[error]`, and was expected — but only on the first boot against an empty volume.**
     Usually two lines, sometimes one — across three fresh volumes this printed 2, 1 and 2. It
     is a race, so both the count and *which* `db_conn_N` loses vary between otherwise
     identical boots, and in principle a boot where none of them collide prints none at all.
-    Treat one or two as normal and zero as equally fine. The pool's five connections
-    (`pool_size: 5` in `config/runtime.exs`) open simultaneously and
+    Treat one or two as normal and zero as equally fine. The pool's connections
+    (five of them, back when `config/runtime.exs` defaulted `pool_size` to 5) open
+    simultaneously and
     each runs `PRAGMA journal_mode = wal` as part of connecting. On a **brand-new** database
     file that pragma has to convert the file's journal mode, which takes an exclusive lock —
     and in `Exqlite.Connection.do_connect/2` the journal-mode pragma is applied eleven steps
@@ -613,13 +624,18 @@ fly apps open --app <FLY_APP_NAME>
 - [ ] **4.5 — Log in.** Go to `https://<FLY_APP_NAME>.fly.dev/users/log-in`. Use the
       **"Email or username"** field — it accepts either. Enter your `ADMIN_USERNAME`
       (default `aheld`) and the password you set in step 3.3 (or `adminpass` if you skipped
-      it). Use the password form, not the magic-link form: production has a working mail
-      **adapter** but no mail **provider** — [config/runtime.exs](config/runtime.exs) pins
-      `config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Logger, level: :info`
-      for `:prod`, so a send succeeds and `fly logs` shows `New email delivered to <address>`,
-      but the body — and therefore the link — is never logged and never reaches an inbox.
-      (See [docs/decisions.md](docs/decisions.md) D-014: the generated `Swoosh.Adapters.Local`
-      plus `config :swoosh, local: false` combination made every delivery *exit* in a release.)
+      it). Use the password form, not the magic-link form, **unless you have already set
+      `RESEND_API_KEY`**. Resend is the configured provider (D-039), but
+      [config/runtime.exs](config/runtime.exs) only selects it when that secret exists; without
+      it the fallback is
+      `config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Logger, level: :info`,
+      so a send succeeds and `fly logs` shows `New email delivered to <address>`, but the body
+      — and therefore the link — is never logged and never reaches an inbox. Check with
+      `fly secrets list`. Note that a key alone is not enough: `MAIL_FROM` must be on a domain
+      verified in the Resend dashboard, or every send is rejected at the provider.
+      (See [docs/decisions.md](docs/decisions.md) D-014, partly superseded by D-039: the
+      generated `Swoosh.Adapters.Local` plus `config :swoosh, local: false` combination made
+      every delivery *exit* in a release, which is why the fallback is `Logger`.)
 
 - [ ] **4.6 — Change the password if you skipped step 3.3.** Go to
       `https://<FLY_APP_NAME>.fly.dev/users/settings` and use the "New password" form. The
@@ -1265,7 +1281,8 @@ auto-start disabled never comes back (<https://fly.io/docs/launch/autostop-autos
 | Deploy succeeded, but a new migration "did not run" | Migrations run at boot only when `RELEASE_NAME` is set — `skip_migrations?/0` in `lib/consensus/application.ex` returns `true` otherwise. The release start script `/app/bin/server` sets it. If the Dockerfile's `CMD` was changed away from `["/app/bin/server"]`, or the container is started some other way, migrations are skipped silently and the app boots against the old schema. (This is also why `mix phx.server` on your laptop does not auto-migrate.) | Confirm the Dockerfile still ends with `CMD ["/app/bin/server"]`. To check what actually ran: `fly logs` right after a deploy should show a `== Running ... change/0 forward` line, or `Migrations already up`. To force one by hand: `fly ssh console -C "/app/bin/migrate" --app <FLY_APP_NAME>`. |
 | Boot fails with `could not seed the bootstrap admin user` | `Consensus.Seeds` could not create the admin — most often because `ADMIN_EMAIL` is already taken by a different account, or `ADMIN_USERNAME` collides. | Read the changeset errors in the log. Pick a different `ADMIN_EMAIL`/`ADMIN_USERNAME` via `fly secrets set`, or fix the conflicting row over a remote IEx session. |
 | The default-password banner is still showing after you changed the password | The banner is computed from `Seeds.admins_with_default_password/0` at LiveView mount (and again after a role change), never per render — so an open tab keeps its stale value. | Reload `/admin/users`. If it persists, read the banner text: it names every admin account still on the default, and the account you changed will not be among them. |
-| Magic-link login emails never arrive | Production has no mail **provider**. `config/runtime.exs` pins `Swoosh.Adapters.Logger` for `:prod`, so each send succeeds and logs `New email delivered to <address>` — the message body, and therefore the link, is not logged. Nothing is delivered to an inbox. | Use password login, which is the supported path. To turn on real delivery, configure a provider in the "Configuring the mailer" section of `config/runtime.exs` (the commented Mailgun example expects `MAILGUN_API_KEY` / `MAILGUN_DOMAIN` as `fly secrets`), then redeploy. Until then the magic link is not the password-recovery route it would otherwise be — for someone actually locked out, use the **Delete** button on `/admin/users` (§7). |
+| Magic-link login emails never arrive, and boot logs warn `RESEND_API_KEY is not set` | The provider (Resend, D-039) is configured but its secret is missing, so `config/runtime.exs` fell back to `Swoosh.Adapters.Logger`: each send succeeds and logs `New email delivered to <address>`, the body and therefore the link is not logged, and nothing reaches an inbox. | `fly secrets set RESEND_API_KEY=re_...` then redeploy. Confirm with `fly secrets list`. Meanwhile password login is the supported path, and for someone genuinely locked out use **Delete** on `/admin/users` (§7). |
+| Magic-link emails still never arrive, but there is **no** boot warning | The key is set, so the app is using Resend — and Resend is rejecting the messages. Almost always the sender: Resend refuses a `From` whose domain is not verified in its dashboard. If `MAIL_FROM` is unset the sender is `onboarding@resend.dev`, which Resend delivers **only** to the address that owns the Resend account, so a successful test to yourself proves nothing about anyone else. | Verify your domain in the Resend dashboard, then `fly secrets set MAIL_FROM=hello@your-verified-domain.com`. Check `fly logs` for the `could not deliver` line that `Consensus.Accounts.UserNotifier` writes — invariant 9 means a rejected send is logged rather than raised, so it will not show up as an error page. |
 | GitHub Actions: `deploy` fails with `Could not find App`, or deploys somewhere unexpected | The `fly.toml` you edited in §2.3 was never committed, so the repository — which is what Actions checks out — still says `app = 'consensus-app'`. `fly deploy` from your laptop keeps working, which makes this look like a CI-only problem. | `git status --short fly.toml` and `git show HEAD:fly.toml \| grep ^app`. Then do §2.4: `git commit -am "Point fly.toml at <FLY_APP_NAME>"` and `git push`. Re-run with `gh run rerun --failed`. |
 | `fly deploy` refuses, mentioning an existing mounted volume | Fly states: *"If a Machine has a mounted volume, `fly deploy` can't be used to mount a different one."* A Machine's mount is bound to a volume **ID**, fixed when the Machine was created — not to the name `consensus_data`. So this is what you get whenever you changed `[[mounts]]` `source`/`destination` after the Machine existed, or created a replacement volume and expected a deploy to pick it up. `fly apps restart` does not help either: it is a *"rolling restart against all running Machines"*, which re-runs the existing Machine config, mount included. | If you only meant to keep the current data: revert the mount change in `fly.toml` and redeploy. If you actually want the Machine on a different volume, there is no in-place move — snapshot first, then destroy and recreate the Machine. §7's **"Restoring from a snapshot"** is that sequence written out with checkpoints (R1–R8); follow it rather than improvising, and note it is labelled untested. |
 

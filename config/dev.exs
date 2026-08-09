@@ -3,7 +3,12 @@ import Config
 # Configure your database
 config :consensus, Consensus.Repo,
   database: Path.expand("../consensus_dev.db", __DIR__),
-  pool_size: 5,
+  # ONE connection, deliberately — see D-038. SQLite allows a single write transaction
+  # across the whole file, so extra pool slots do not buy write concurrency; they
+  # manufacture contention for a lock that was never shareable, and SQLite's busy
+  # handler is documented to be unfair about who wins. Measured on a 15-voter deadline
+  # burst: pool 5 → p95 25,762ms; pool 1 → p95 10.6ms. Reads got faster too.
+  pool_size: 1,
   # Match production so "database is locked" cannot be a production-only surprise.
   # `BEGIN IMMEDIATE` rather than ecto_sqlite3's default `BEGIN DEFERRED`. A deferred
   # transaction takes no write lock at `BEGIN` and asks for one on its first write — and if
@@ -14,6 +19,12 @@ config :consensus, Consensus.Repo,
   default_transaction_mode: :immediate,
   journal_mode: :wal,
   busy_timeout: 5_000,
+  # Pinned rather than inherited. `:normal` is already ecto_sqlite3's and exqlite's
+  # default, so this changes nothing today — it makes the durability trade a decision
+  # instead of a default nobody chose. With WAL, `:normal` fsyncs at checkpoint rather
+  # than at every commit: a process crash cannot corrupt or lose a committed
+  # transaction, only a host power loss or kernel panic can. D-038.
+  synchronous: :normal,
   stacktrace: true,
   show_sensitive_data_on_connection_error: true
 

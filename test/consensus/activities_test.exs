@@ -6,6 +6,7 @@ defmodule Consensus.ActivitiesTest do
   import Consensus.ActivitiesFixtures
 
   alias Consensus.Activities
+  alias Consensus.Activities.Activity
   alias Consensus.Activities.Group
   alias Consensus.Repo
 
@@ -119,12 +120,65 @@ defmodule Consensus.ActivitiesTest do
       assert second.position == 2
     end
 
-    test "refuses a group that is not draft or voting" do
+    test "refuses a group that is no longer a draft" do
       scope = user_scope_fixture()
       group = group_fixture(scope)
       {:ok, cancelled} = Activities.cancel_group(scope, group)
 
-      assert {:error, :group_not_open} = Activities.add_activity(scope, cancelled, %{name: "x"})
+      assert {:error, :pool_locked} = Activities.add_activity(scope, cancelled, %{name: "x"})
+    end
+  end
+
+  # D-037. `votes.activity_id` cascades, so editing the pool after the vote opens
+  # silently destroys ballots that have already been cast — and the ballot is locked
+  # (D-036), so the voter cannot recast. Every pool write therefore refuses outside
+  # `:draft`. These four assertions are the enforcement; the LiveViews only hide the
+  # controls.
+  describe "the pool is frozen once the vote opens" do
+    setup do
+      scope = user_scope_fixture()
+      group = group_fixture(scope, %{deadline_at: DateTime.add(DateTime.utc_now(), 3600)})
+      {:ok, a} = Activities.add_activity(scope, group, %{name: "Guisados"})
+      {:ok, b} = Activities.add_activity(scope, group, %{name: "Mozza"})
+      {:ok, voting} = Activities.publish_group(scope, group)
+
+      %{scope: scope, group: voting, a: a, b: b}
+    end
+
+    test "add_activity/3 refuses", %{scope: scope, group: group} do
+      assert {:error, :pool_locked} = Activities.add_activity(scope, group, %{name: "Late"})
+      assert Activities.count_activities(group) == 2
+    end
+
+    test "update_activity/3 refuses", %{scope: scope, a: a} do
+      assert {:error, :pool_locked} = Activities.update_activity(scope, a, %{name: "Renamed"})
+      assert Repo.get!(Activity, a.id).name == "Guisados"
+    end
+
+    test "delete_activity/2 refuses, which is what protects cast ballots", %{scope: scope, a: a} do
+      assert {:error, :pool_locked} = Activities.delete_activity(scope, a)
+      assert Repo.get(Activity, a.id)
+    end
+
+    test "reorder_activities/3 refuses", %{scope: scope, group: group, a: a, b: b} do
+      assert {:error, :pool_locked} = Activities.reorder_activities(scope, group, [b.id, a.id])
+
+      ordered =
+        from(x in Activity,
+          where: x.group_id == ^group.id,
+          order_by: [asc: x.position],
+          select: x.id
+        )
+        |> Repo.all()
+
+      assert ordered == [a.id, b.id]
+    end
+
+    test "a completed group is frozen too", %{scope: scope, group: group, a: a} do
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      assert {:error, :pool_locked} = Activities.add_activity(scope, completed, %{name: "x"})
+      assert {:error, :pool_locked} = Activities.delete_activity(scope, a)
     end
   end
 
