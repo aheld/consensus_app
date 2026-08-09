@@ -1088,6 +1088,36 @@ The hardcoded `contact@example.com` sender had to go regardless: Resend rejects 
 
 ---
 
+## D-040 — Consensus is served from `dinner.isourthing.com`, not `<app>.fly.dev`
+
+- **Date:** 2026-08-08
+- **Status:** settled
+- **Decision:** `PHX_HOST` is **`dinner.isourthing.com`**, a custom domain with a Fly-issued certificate, and `primary_region` is **`ewr`**. `fly.toml`'s `app` stays `consensus-app` — the Fly app name and the hostname are now different things. `test/consensus/deploy_config_test.exs` no longer derives `PHX_HOST` from `app`; it asserts against a recorded `@serving_hostname` constant instead, and gained a second test pinning `app` itself, which lost its only guard when the derivation went away.
+
+**Why:** the domain is the product's actual address. `PHX_HOST` is not cosmetic — it becomes the endpoint's `:url` host, `check_origin` defaults to `true` in production and validates every LiveView socket's `Origin` against it, and every page in this app is a LiveView. Pointing it at `consensus-app.fly.dev` while people arrive at `dinner.isourthing.com` 403s every socket upgrade, leaving the app completely non-interactive while `GET /` and `/health` both keep answering 200 and Fly reports the machine healthy.
+
+That is not hypothetical here. The deploy that preceded this entry booted with
+
+    check_origin: ["https://example.com", "//another.com:888", "//other.com"]
+
+— `example.com` being `runtime.exs`'s fallback when `PHX_HOST` is unset — so LiveView was broken in production while every external signal said healthy. This is D-023's failure mode, observed rather than predicted.
+
+CLAUDE.md's instruction for this situation was explicit: *"If this app ever moves to a custom domain, **edit** that first test and record the move in `decisions.md` — do not delete it."* The test is edited, not deleted, and its failure message now names all three things that have to move together: the constant, `fly.toml`'s `PHX_HOST`, and the certificate.
+
+**Alternatives rejected:**
+- *Keep `PHX_HOST = consensus-app.fly.dev` and let the custom domain redirect.* Anyone arriving at the custom domain gets a dead app, and the certificate already issued for it says that is where people are meant to arrive.
+- *List both hosts in `check_origin`.* Workable, but `PHX_HOST` still has to pick one for `:url`, and every generated absolute URL — including the `/join/:slug` share link an organizer sends to friends — would carry the wrong host. The share link *is* the product.
+- *Delete the `PHX_HOST` test now that it cannot derive its expectation.* That would remove the guard precisely when the config got harder to check by eye.
+- *Move the region to `iad` to match what `fly.toml` used to say.* No benefit; the machine, volume and certificate are all in `ewr`, and a volume cannot attach to a machine in another region. `ewr` and `iad` are both US East.
+
+**Consequences:**
+- `app` and hostname are now independent, so renaming the Fly app no longer implies a hostname change and vice versa. The new `app` test exists because of exactly that loosening.
+- CI's `docker` job `sed`s `PHX_HOST` out of `fly.toml` and asserts `/health` and a websocket handshake under it. It now exercises a genuinely non-local hostname, which is a stronger test of the `force_ssl` `paths:` exclusion than `consensus-app.fly.dev` was — `localhost` and `127.0.0.1` are excluded wholesale by the sibling `hosts:` rule, and neither of those applies here.
+- Certificate renewal is now a production dependency. `fly certs list -a consensus-app` is the check; an expired or removed cert takes the app down in a way `/health` will not report.
+- The volume was recreated as `consensus_data` at `/data` in the same change (see the deployment notes in TODO.md). The previous `name` volume at `/mnt/name` was an artefact of an accidental `fly launch`; `/data` is the path the Dockerfile prepares with `RUN mkdir -p /data && chown nobody:root /data`, so mounting anywhere else defeated that preparation and the boot preflight that depends on it.
+
+---
+
 ## Still open
 
 D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).

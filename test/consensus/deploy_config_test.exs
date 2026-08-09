@@ -35,36 +35,58 @@ defmodule Consensus.DeployConfigTest do
 
   @fly_toml "fly.toml"
 
+  # The hostname real browsers use, and the one the Fly certificate is issued for
+  # (`fly certs list -a consensus-app`). Recorded here rather than derived from `app`
+  # because this app is served from a custom domain, not <app>.fly.dev — see D-040.
+  # If the domain ever changes, this constant, fly.toml's PHX_HOST and the Fly cert all
+  # move together; see the failure message below.
+  @serving_hostname "dinner.isourthing.com"
+
   setup_all do
     %{source: File.read!(@fly_toml)}
   end
 
   describe "fly.toml internal consistency" do
-    test "PHX_HOST is the hostname Fly serves `app` at", %{source: source} do
+    test "PHX_HOST is the custom domain the certificate is issued for", %{source: source} do
       {app, app_line} = fetch_string!(source, "app")
       {phx_host, host_line} = fetch_string!(source, "PHX_HOST")
 
-      expected = app <> ".fly.dev"
+      assert phx_host == @serving_hostname, """
+      fly.toml's PHX_HOST is not the hostname this app is actually served at.
 
-      assert phx_host == expected, """
-      fly.toml contradicts itself. Fly serves an app at <app>.fly.dev, so these two
-      lines have to agree and they do not:
-
-          #{@fly_toml}:#{app_line}:  app = '#{app}'
           #{@fly_toml}:#{host_line}:  PHX_HOST = '#{phx_host}'
+          expected:                    PHX_HOST = '#{@serving_hostname}'
 
-      Reconcile them by setting PHX_HOST = '#{expected}' on line #{host_line}, or by
-      renaming `app` to '#{String.replace_suffix(phx_host, ".fly.dev", "")}' on line #{app_line}.
+      This app moved to a custom domain (D-040), so PHX_HOST is deliberately NOT
+      '#{app}.fly.dev' — that was the rule this test enforced before the move, and
+      reverting to it now would break every LiveView for real users.
 
-      This is not cosmetic. PHX_HOST becomes the endpoint's :url host, `check_origin`
-      defaults to true in production, and every page in this app is a LiveView — so a
-      mismatch 403s every socket upgrade and leaves the app completely non-interactive,
-      while GET / and GET /health both keep answering 200 and Fly's health check
-      (which polls /health) reports the machine healthy.
+      Whichever direction you are changing this, three things move together: this
+      constant, the PHX_HOST line in fly.toml, and the Fly certificate
+      (`fly certs list -a #{app}`, line #{app_line} names the app). Changing one alone
+      is the bug this test exists to catch.
 
-      If you are deliberately serving this app from a custom domain rather than
-      *.fly.dev, that is a real decision: record it in docs/decisions.md and relax this
-      test to match, rather than deleting it.
+      Why it matters: PHX_HOST becomes the endpoint's :url host, `check_origin` defaults
+      to true in production, and every page in this app is a LiveView — so a mismatch
+      403s every socket upgrade and leaves the app completely non-interactive, while
+      GET / and GET /health both keep answering 200 and Fly's health check (which polls
+      /health) reports the machine healthy. It is invisible from the outside.
+      """
+    end
+
+    test "the app name is still what the certificate and volume were provisioned against",
+         %{source: source} do
+      # PHX_HOST is no longer derived from `app`, so `app` lost the guard it used to get
+      # for free from the test above. It still has to be right: it selects which Fly app
+      # `flyctl deploy` targets, and therefore which volume and which certificate.
+      {app, _line} = fetch_string!(source, "app")
+
+      assert app == "consensus-app", """
+      fly.toml's `app` changed to '#{app}'.
+
+      That reroutes every deploy to a different Fly app — one with no consensus_data
+      volume and no certificate for #{@serving_hostname}. If the rename is intentional,
+      provision both there first, then update this test and D-040.
       """
     end
 

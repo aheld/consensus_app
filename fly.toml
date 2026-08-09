@@ -8,7 +8,7 @@
 # Then make PHX_HOST match the hostname Fly gives you.
 
 app = 'consensus-app'
-primary_region = 'iad'
+primary_region = 'ewr'
 
 # Give the BEAM somewhere to spill on a small machine. Without swap, a memory spike
 # is an OOM kill, and with a single machine an OOM kill is an outage.
@@ -23,7 +23,12 @@ kill_timeout = '30s'
 [build]
 
 [env]
-  PHX_HOST = 'consensus-app.fly.dev'
+  # The hostname browsers actually use — a custom domain, not <app>.fly.dev (D-040).
+  # This is the endpoint's :url host, which `check_origin` validates every LiveView
+  # socket's Origin against. Get it wrong and every socket 403s while GET / and /health
+  # both keep answering 200 and Fly reports the machine healthy — a total, invisible
+  # outage. Changing it means changing the cert too (`fly certs list`).
+  PHX_HOST = 'dinner.isourthing.com'
   PORT = '8080'
   # Must live inside the [mounts] destination below, or the database is silently
   # recreated (empty) on every deploy.
