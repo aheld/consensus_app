@@ -30,4 +30,24 @@ defmodule Consensus.Accounts.Scope do
   end
 
   def for_user(nil), do: nil
+
+  @doc """
+  Returns true when the scope belongs to a signed-in administrator.
+
+  Safe to call with `nil`, which is what a public page passes before anyone logs in.
+  This is a **display** predicate — `ConsensusWeb.Chrome.header/1` reads it to decide
+  whether the `⋯` menu offers an Admin link. It is never the authorization: that is the
+  router's `:require_admin_user` plug plus the `:require_admin` on_mount hook, and, for
+  a write, `Consensus.Accounts`' re-read of the actor's role inside the transaction
+  (CLAUDE.md invariant 1).
+
+  It lives here rather than in `ConsensusWeb.Layouts` because it is a predicate about a
+  scope and has nothing to do with layouts. `Layouts` imports `ConsensusWeb.Chrome`
+  through `ConsensusWeb.html_helpers/0`, so a `Chrome` → `Layouts` call made the two
+  modules mutually dependent for this one two-clause function; it compiled only because
+  the call was remote, and an `import ConsensusWeb.Layouts` in `chrome.ex` would have
+  turned it into a compile deadlock.
+  """
+  def admin?(%__MODULE__{user: %User{is_admin: true}}), do: true
+  def admin?(_scope), do: false
 end

@@ -36,13 +36,30 @@ defmodule ConsensusWeb.JoinLive.EntryTest do
       assert html =~ "#{organizer.username} invited you"
       assert html =~ group.title
       assert html =~ "3 spots"
-      assert html =~ "10 sec"
+      # Derived from the pool, not a literal. It used to be a hardcoded `~10 sec` sitting
+      # in a row of two computed pills, identical for a 3-option pool and a 30-option one.
+      # Frame `1a-8` prints `5 SPOTS` beside `~10 SEC`, i.e. two seconds an option; three
+      # options rounds to 5.
+      assert html =~ "~5 sec"
+      refute html =~ "10 sec"
       assert html =~ "Your first name"
       assert html =~ "skip"
       assert html =~ "Start voting"
       assert html =~ "No app"
       assert html =~ "no account"
       assert html =~ "no password"
+    end
+
+    # The point of deriving it: a bigger pool has to say a bigger number, or it is the same
+    # unbacked claim it was before, just written as a function.
+    test "the effort pill scales with the pool", %{conn: conn} do
+      scope = user_scope_fixture()
+      {big, _activities} = voting_group_fixture(scope, 9)
+
+      {:ok, _view, html} = live(conn, ~p"/join/#{big.slug}")
+
+      assert html =~ "9 spots"
+      assert html =~ "~20 sec"
     end
 
     test "omits the voted-friends row when nobody has voted", %{conn: conn, group: group} do
@@ -168,6 +185,29 @@ defmodule ConsensusWeb.JoinLive.EntryTest do
       participant = Voting.get_participant_by_token(token)
       assert participant.display_name == nil
       assert participant.kind == :guest
+    end
+
+    # `skip →` starts 8px from the right edge of the `<label>` wrapping `#display_name`
+    # (measured at 360×640: label ends x=264.4, the control starts x=272.4) and one tap on
+    # it posts the join, mints the anonymous participant and navigates to the ballot — after
+    # which `mount/3` bounces this screen straight to the ballot, so there is no way back to
+    # retype the name. Armed only once there is something to lose, the shape
+    # `JoinLive.Ballot.leave_confirm/2` uses.
+    test "asks first once a name has been typed, and not before", %{conn: conn} do
+      {group, _activities} = voting_group_fixture(user_scope_fixture())
+
+      {:ok, lv, _html} = live(conn, ~p"/join/#{group.slug}")
+
+      assert has_element?(lv, "button[phx-click='skip']")
+      refute has_element?(lv, "button[phx-click='skip'][data-confirm]")
+
+      # Whitespace is normalised to `nil` by `create_participant/2` anyway, so it is not a
+      # typed name and must not raise a dialog.
+      render_change(lv, "validate_name", %{"display_name" => "   "})
+      refute has_element?(lv, "button[phx-click='skip'][data-confirm]")
+
+      render_change(lv, "validate_name", %{"display_name" => "Ada"})
+      assert has_element?(lv, "button[phx-click='skip'][data-confirm]")
     end
   end
 

@@ -1,6 +1,6 @@
 ---
 name: phoenix
-description: Phoenix 1.8 and LiveView 1.2 conventions for the Consensus app — layouts (Layouts.app plus root.html.heex, no app.html.heex, no global navbar — D-032), core components, HEEx syntax ({} vs <%= %>, :if/:for), the LiveView lifecycle (mount/handle_params/handle_event/handle_info/handle_async), start_async for a network call like Consensus.LinkPreview.fetch/1, LiveView streams and the reset: true reload idiom, live_session and on_mount hooks, Phoenix 1.8 scopes (Consensus.Accounts.Scope and @current_scope, never current_user), revoking a mounted LiveView's access with UserAuth.disconnect_sessions/1, verified routes ~p including the organizer's creation-flow wizard under /groups, PubSub for real-time updates, the router pipelines in lib/consensus_web/router.ex, and testing with Phoenix.LiveViewTest (render_async, the $callers link-preview stub, journey_test.exs). Use this when adding or editing anything under lib/consensus_web/ — a LiveView, a route, a component, a template, a LiveView test — or when debugging a missing current_scope assign, a ~p route warning, a HEEx compile error, a LiveView test that fails on async assigns, or a start_async task that can't find its test stub. For button/input/card/chip/pill styling and the sticker design tokens, see the design-system skill instead.
+description: Phoenix 1.8 and LiveView 1.2 conventions for the Consensus app — layouts (Layouts.app plus root.html.heex, no app.html.heex, a global header/footer rendered by Layouts.app — D-041), core components, HEEx syntax ({} vs <%= %>, :if/:for), the LiveView lifecycle (mount/handle_params/handle_event/handle_info/handle_async), start_async for a network call like Consensus.LinkPreview.fetch/1, LiveView streams and the reset: true reload idiom, live_session and on_mount hooks, Phoenix 1.8 scopes (Consensus.Accounts.Scope and @current_scope, never current_user), revoking a mounted LiveView's access with UserAuth.disconnect_sessions/1, verified routes ~p including the organizer's creation-flow wizard under /groups, PubSub for real-time updates, the router pipelines in lib/consensus_web/router.ex, and testing with Phoenix.LiveViewTest (render_async, the $callers link-preview stub, journey_test.exs). Use this when adding or editing anything under lib/consensus_web/ — a LiveView, a route, a component, a template, a LiveView test — or when debugging a missing current_scope assign, a ~p route warning, a HEEx compile error, a LiveView test that fails on async assigns, or a start_async task that can't find its test stub. For button/input/card/chip/pill styling and the sticker design tokens, see the design-system skill instead.
 ---
 
 # Phoenix 1.8 + LiveView in this repo
@@ -29,11 +29,11 @@ Diffed 2026-08-08 — the app has moved well past the generator, so **do not ass
 
 | Still byte-identical | Diverged |
 |---|---|
-| `lib/consensus_web.ex` | `components/layouts.ex` (Consensus branding, admin nav, account menu, `admin?/1`) |
+| `lib/consensus_web.ex` | `components/layouts.ex` (the app column, the global chrome, `avatar/1`, `flash_group/1`) |
 | `test/support/conn_case.ex` | `components/layouts/root.html.heex` (account menu removed — see below) |
 | `test/support/data_case.ex` | `router.ex` (admin scope, `HomeLive`, LiveDashboard in all envs) |
 | | `user_auth.ex` (`:require_admin` / `require_admin_user`) |
-| | `components/core_components.ex` — one hunk: `<.table>` is wrapped in `<div class="overflow-x-auto">` so a wide row scrolls itself instead of the page |
+| | `components/core_components.ex` — restyled onto the sticker system; `flash/1` in particular is a flow card, not the generator's fixed overlay (D-041) |
 | | all four `live/user_live/*.ex` |
 
 Regenerate that table with:
@@ -60,7 +60,8 @@ lib/consensus_web/router.ex                # pipelines, scopes, live_sessions
 lib/consensus_web/user_auth.ex             # plugs + on_mount hooks (extended: admin)
 lib/consensus_web/endpoint.ex
 lib/consensus_web/components/
-  layouts.ex                               # Layouts.app/1, avatar/1, account_menu/1, flash_group/1
+  layouts.ex                               # Layouts.app/1, avatar/1, flash_group/1
+  chrome.ex                                # Chrome.header/1 + footer/1 — the global chrome (D-041)
   layouts/root.html.heex                   # the ONLY .heex layout file — no <script> theme toggle
   core_components.ex                       # flash, button, input, header, table, list, icon, ...
   sticker.ex                               # ConsensusWeb.Sticker — see the design-system skill
@@ -95,15 +96,18 @@ raising and `rescue` would miss it (same reasoning as `UserNotifier`). `config/p
 to the machine's private address and a 301 could never pass. Do not move this route into
 `:browser`, and do not point the check at `/`.
 
-Ten LiveViews exist on disk today: `live/home_live.ex`, `live/admin_live/users.ex`,
-`live/group_live/{new,options,review,share}.ex` (the creation wizard, D-027/D-029 through D-032),
+Nineteen LiveViews exist on disk today: `live/home_live.ex`, `live/admin_live/{users,feedback}.ex`,
+`live/group_live/{new,options,review,share,results}.ex` (the creation wizard, D-027/D-029 through D-032),
+`live/join_live/{entry,ballot,results}.ex` (the guest's voting loop),
+`live/{about,how_it_works,privacy,feedback}_live.ex` (the four standing pages the global footer
+links to, D-041/D-042), and
 `live/user_live/{login,registration,confirmation,settings}.ex`. `live/admin_live/home_page.ex` is
 **gone** (D-027 — the admin-editable home page was deleted; `Consensus.Content` no longer exists).
 `mix compile --warnings-as-errors` and `mix format --check-formatted` both exit 0 (verified
 2026-08-08). The app is still being written concurrently, so `ls lib/consensus_web/live/` before
 assuming a module's shape.
 
-## Layouts: 1.8 has no `app.html.heex`, and this app has no navbar (D-032)
+## Layouts: 1.8 has no `app.html.heex`, and `Layouts.app/1` carries the global chrome (D-041)
 
 Phoenix 1.7 had `layouts/root.html.heex` **and** `layouts/app.html.heex`. **1.8 deleted the second one.**
 There is exactly one layout template file here, `layouts/root.html.heex`, set by the `:browser` pipeline:
@@ -122,40 +126,108 @@ LiveViews call it themselves. Every LiveView/HTML template in this app must open
 </Layouts.app>
 ```
 
-**`Layouts.app/1` is canvas, column and flash only — nothing else.** daisyUI is gone (D-028) and
-there is no global navigation bar (D-032): the design gives every screen a different header —
-the home screen has a wordmark and an avatar, the wizard steps have a back button and a
-three-segment progress bar, the option editor has a close button and a destructive `Remove` —
-and a shared bar above all of them would either duplicate the back affordance or push the
-progress bar down a row. So `app/1` renders exactly `<main>` + a centred `<div>` column +
-`<.flash_group>`, and every screen draws its own header inside the `inner_block` slot. Rules
-that fall out of that:
+**`Layouts.app/1` is canvas, column, flash — and the global header and footer (D-041, which
+superseded D-032).** It renders an outer `<div>` + a centred `<div>` column + `<Chrome.header>` + `<.flash_group>` +
+`<main>` holding the screen's `inner_block` + `<Chrome.footer>`, in that order — the flash sits
+between the header and `<main>`, which is what bounds it to the column. Note the
+nesting: the chrome is **outside** `<main>`, so its `<header>` is the page's `banner` landmark
+and its `<footer>` is `contentinfo`; a screen's own `<header>` row (HomeLive's "Your sessions")
+stays generic inside `<main>`, which is right. A screen does **not** draw
+its own header any more; it fills in the header's variable parts through `Layouts.app/1`
+attributes. D-032's reasoning still holds and is why the global header *coexists* with each
+screen's own row rather than replacing it — the wizard's three-segment progress bar, the option
+editor's `Remove`, the results screen's violet countdown block are all still per-screen. What
+moved out is the **back affordance**, which now exists only in the header. Rules that fall out
+of that:
 
 - `Layouts` is already aliased by `html_helpers/0` in `lib/consensus_web.ex`. Never alias it again.
 - `attr :flash, :map, required: true` — omitting `flash=` is a compile-time error.
-- `attr :current_scope, :map, default: nil` — optional to the component. `Layouts.app/1` itself
-  does not read it (it renders no nav of its own); pass it anyway so a screen's own header can.
-- **Two more attrs exist and neither is generator-default: `width` (`:phone`, the default 440px
+- `attr :current_scope, :map, default: nil` — optional to the component, but **now actually read**:
+  it is handed to `Chrome.header/1`, which decides the `⋯` menu's contents from it. Always pass it.
+- **Five chrome attrs, all optional:**
+  - `back` — a path. The screen's *one* back affordance; the header omits the control entirely
+    when `nil`. A screen that also draws its own way back is a regression (plan ruling 1 in
+    `docs/plans/chrome-and-feedback.md`) — that includes a body-level "Back to …" link and a
+    form's "Cancel" that resolves to the same route as the `‹`.
+  - `back_patch` — the same control as a `live_patch`. Use it, not `back`, when the back
+    destination is *this same LiveView* (`GroupLive.Options`' editor closing to its own pool):
+    a `navigate` remounts, which tears down the socket, cancels in-flight `start_async` work
+    and rebuilds every stream. Give one or the other, never both.
+  - `context` — the header's right-hand DM Mono slot (`"STEP 2 OF 3"`, `"LIVE SESSION"`,
+    `"ADMIN"`). `:app` variant only; `nil` leaves it blank. **It is for state, never for the
+    page's name.** If the body's `<.eyebrow>` or `<h1>` already says the word, leave the slot
+    empty — the two render in the same uppercase treatment 110px apart and read as a bug.
+  - `variant` — `:app` (default: context slot + `⋯` menu; every screen this app owns, signed in
+    or out), `:public` (the `/join` tree: a yellow `Create your own →` pill, no `‹`, no `⋯`, an
+    **inert** wordmark, and a footer stripped to the two credit lines — a guest's ballot lives in
+    socket assigns and every other link discards it), or `:marketing` (`/`, `/about`, `/privacy`,
+    `/how-it-works`, `/feedback` **while signed out**: a plain `Log in` link, no `⋯`). Those
+    marketing routes pass `variant={if @current_scope, do: :app, else: :marketing}`.
+  - `current_path` — always `current_path={@current_path}`. `ConsensusWeb.CurrentPath` is an
+    `on_mount` hook declared once in `ConsensusWeb.live_view/0`, so the assign exists in every
+    LiveView without any `live_session` opting in. The header uses it to drop the `⋯` entry
+    pointing at the page you are already on; the footer uses it to hang `?return_to=` off the
+    standing-page links so `/about` and friends come back where they were tapped. A page that
+    reads `return_to` back **must** launder it through `CurrentPath.return_to/1` (or
+    `safe_return_to/1`) — it is a query parameter, so a raw `<.link navigate>` is an open
+    redirect.
+- **Three more attrs exist and none is generator-default: `width` (`:phone`, the default 440px
   column every design frame was drawn at, or `:wide` for the desktop organizer console — a
-  1280px column, not the phone column stretched) and `background` (a Tailwind class string,
-  default `"bg-surface"`, the colour behind the column).** Pass `width={:wide}` on the one screen
-  that needs it (the desktop console reuses `Layouts.app/1` rather than a second layout module);
-  everything else takes the default.
+  1280px column, not the phone column stretched), `background` (a Tailwind class string,
+  default `"bg-surface"`, the colour behind the column), and `fill_viewport`.** Pass
+  `width={:wide}` on the one screen that needs it (the desktop console reuses `Layouts.app/1`
+  rather than a second layout module); everything else takes the default.
+- **`fill_viewport` (default `false`) is how a screen chooses its scroll model, and the default
+  is the right answer almost always (D-046).** Off, the column is `min-h-dvh` and *the page* is
+  the scroller — which is what a phone browser handles best: the URL bar collapses, momentum is
+  native, nothing double-scrolls. On, the column is `h-dvh`, and only then can a screen put a
+  `flex-1 min-h-0 overflow-y-auto` region inside `<main>` and have it scroll.
+
+  **Without a height-bounded ancestor those three classes do nothing at all** — an auto-height
+  flex container grows to its content, so there is no overflow to scroll and no error to see.
+  The ballot's grid shipped exactly that way and the page scrolled instead, putting
+  `#submit-ballot` 212px below the fold at 360×640. `JoinLive.Ballot`'s **grid** view and the
+  swipe deck's end-of-deck summary are the only callers today, because frame `1c-1` is itself a
+  fixed-height device with one internal scroll track. If you turn it on, every sibling of that
+  track needs `shrink-0`, or the flex algorithm squeezes the header/footer blocks instead of
+  scrolling the list. `GroupLive.Options`' pool list has the inert version of this markup and is
+  deliberately left alone — see `open-questions.md` F-7.
+
+  **`fill_viewport` is not the whole answer, and assuming it is put the submit button 330.7px
+  below the fold on an iPhone SE (D-049 §4).** `.viewport-column`'s clamp is gated on
+  `@media (min-height: 640px)`, because an unconditional one paints content over the footer in
+  landscape — so *below* 640px the page is the scroller again and `fill_viewport` buys nothing.
+  The second mechanism covers that: `.ballot-actions` (and `.results-actions`, on the two results
+  screens, which pass no `fill_viewport` at all) make the block of controls
+  `position: sticky; bottom: 0` so it stays on screen at any viewport height. The ballot's opt-out
+  lives in the **same** `@media (min-height: 640px)` block as the clamp, so the two are exactly
+  complementary; `ballot_test.exs` reads `app.css` as text and fails if the thresholds drift.
+  Reach for it on any screen whose actions sit under a region that grows.
 - `<.flash_group>` lives in `Layouts` and is rendered *inside* `Layouts.app`. Never call it anywhere else.
-- **There is no account menu inside `Layouts.app/1`, and no `<li :if={admin?(@current_scope)}>`
-  nav item anywhere.** `Layouts.account_menu/1` is a separate function component — a `<details>`
-  element (works before LiveView connects, closes on `Escape`, no JS of ours) that a screen
-  renders itself, wherever the design puts it (`HomeLive` and `GroupLive.New` both call it
-  today). It requires `current_scope` and renders `Layouts.avatar/1` (a circle with the user's
-  upper-cased first initial — no upload, so it is always available) plus the email, an
-  `<.link :if={admin?(@current_scope)} navigate={~p"/admin/users"}>Admin</.link>`, Settings and
-  Log out. `Layouts.admin?/1` still exists and still means the same thing —
-  `admin?(%Scope{user: %User{is_admin: true}})` is `true`, everything else `false`, safe to call
-  with `nil` — it is just no longer wired to a navbar `<li>`.
+- **`Layouts.account_menu/1` is deleted (D-041).** The account menu is now the header's `⋯`
+  control, inside `Chrome.header/1`, and a screen never places it. It is the same `<details>`
+  element as before (works before LiveView connects, closes on `Escape`, no JS of ours),
+  restyled as a 29px circle. Signed in it shows the email, `Admin` (administrators only),
+  `Settings` and `Log out`; signed out it shows `Log in` and `Start something`. **Every entry is
+  dropped when it points at the page you are already standing on**, and the whole `⋯` is dropped
+  when that would leave a single entry (which is exactly the two auth screens — the survivor
+  duplicates the form's own cross-link 40px below). `Layouts.admin?/1` is **gone**: it moved to
+  `Consensus.Accounts.Scope.admin?/1`, where it is a predicate about a scope rather than about
+  layouts, because `Layouts` imports `Chrome` and `Chrome` was calling back into `Layouts` for it.
+  Same two clauses, still safe to call with `nil`, still a display predicate and never the
+  authorization.
+- **`Layouts.avatar/1` survives** — a circle with the user's upper-cased first initial, no
+  upload. It is *not* in the header in this design; screens that want one place it in their body
+  (`GroupLive.New`'s GROUP row is the only caller today). Do not delete it.
+- **`Chrome.header/1` and `CoreComponents.header/1` share a name and are both imported**, so a
+  bare `<.header>` is an ambiguous call and will not compile. Nothing calls the CoreComponents
+  one; write `<Chrome.header>` (the alias is set up in `html_helpers/0`) or call the other one
+  fully qualified.
 - **daisyUI is removed (D-028) and there is no theme toggle, no dark mode, and no inline
   `<script>` in `root.html.heex` at all any more** — the generator's `data-theme`-before-paint
   script is gone along with the theme it toggled. `root.html.heex` is now doctype/head/body and
-  `{@inner_content}`, nothing more; its own comment explains why (D-032). If you see
+  `{@inner_content}`, nothing more; its own comment explains why the global chrome lives in
+  `Layouts.app/1` rather than here (it has to sit inside the centred column). If you see
   `Layouts.theme_toggle/1`, `btn`, `input`, `card`, `alert`, `badge`, `menu`, `tabs`, `toggle` or
   `fieldset` classes anywhere in HEEx, they render as **nothing** — grep before adding one. For
   what replaced daisyUI (the sticker design tokens, `ConsensusWeb.Sticker`'s primitives, the
@@ -227,8 +299,11 @@ the same key on the socket. Read the user as `@current_scope.user`.
 
 Because `for_user(nil)` returns `nil`, guard both levels — `socket.assigns.current_scope &&
 socket.assigns.current_scope.user` — which is exactly what `UserAuth.on_mount(:require_authenticated, ...)`
-does. `Layouts.account_menu/1` does the same, as a HEEx tag modifier rather than a block:
-`<details :if={@current_scope && @current_scope.user} ...>`.
+does. `JoinLive.Entry` does the same, as a HEEx tag modifier rather than a block:
+`<button :if={@current_scope && @current_scope.user} ...>`. `Chrome.header/1` reaches the same
+question through a predicate instead — `<details :if={@variant == :app and
+menu_worth_opening?(@current_scope, @current_path)}>` — because the `⋯` also has to disappear when
+the menu would open on a single entry.
 
 `current_user` does not appear as an assign, a conn key, or a parameter anywhere in this app.
 `Accounts.login_user_by_magic_link/1` used to take the currently-signed-in user as a second
@@ -243,7 +318,7 @@ registration, i.e. by the very password under suspicion.) Two web-layer conseque
 
 - `UserSessionController.magic_link_info/2` matches `%{hashed_password: nil}` on the returned user
   and flashes *"You are logged in. The password that was set on this account has been removed —
-  choose a new one under Settings."* instead of the usual "User confirmed successfully."
+  choose a new one under Settings."* instead of the usual "You're in — this address is confirmed."
 - `ConsensusWeb.UserLive.Confirmation` computes a `@clears_password?` assign in `mount/3` and renders
   a warning **before** the button is pressed. It is `is_nil(user.confirmed_at) and not
   is_nil(user.hashed_password)` — **no `@current_scope` input**, because there is no signed-in

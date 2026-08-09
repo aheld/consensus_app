@@ -1,0 +1,19 @@
+<Layouts.app flash={%{}} background="bg-canvas" variant={:marketing}>
+  <div class="flex flex-1 flex-col gap-5 px-6 pb-8 pt-6">
+    <.eyebrow>500</.eyebrow>
+    <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em]">
+      Something broke on our side.
+    </h1>
+    <p class="text-[14.5px] leading-[1.45] text-ink-soft">
+      Not your fault, and nothing you had already sent is lost — a vote is only ever
+      recorded when it succeeds. Try again in a moment; if it keeps happening, tell us
+      with the unhappy face in the footer below.
+    </p>
+
+    <div class="mt-auto flex flex-col gap-3 pt-4">
+      <.button variant="primary" navigate={~p"/"}>
+        Go to Consensus <span aria-hidden="true">→</span>
+      </.button>
+    </div>
+  </div>
+</Layouts.app>

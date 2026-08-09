@@ -27,6 +27,23 @@ defmodule Consensus.Accounts.User do
   email provider configured. The `login_user_by_magic_link/1` safeguard against
   credential pre-stuffing described in `mix help phx.gen.auth` is preserved — see
   `Consensus.Accounts.login_user_by_magic_link/1` and docs/decisions.md.
+
+  ## `require_password: false`
+
+  The generator's own magic-link registration asks for no password at all, and
+  `ConsensusWeb.UserLive.Registration`'s "Email magic link" mode is that path. It used
+  to satisfy this changeset by generating a random string nobody would ever know, which
+  left `hashed_password` non-nil — and `ConsensusWeb.UserSessionController.clears_password?/1`
+  reads exactly that field to decide whether the magic link discarded a password, so
+  every no-password signup was told, on its first ever sign-in, that "the password that
+  was set on this account has been removed". A warning that fires on 100% of a path is
+  the crying-wolf failure that controller's own comment exists to prevent (D-045).
+
+  Passing `require_password: false` drops only `validate_required([:password])`. The
+  `cast/3` list is untouched (CLAUDE.md invariant 6), nothing new can be set through it,
+  and an account created this way is exactly the shape D-017 leaves behind after a magic
+  link reclaims an account: confirmed by the inbox, `hashed_password` nil, a password
+  settable later from Settings.
   """
   def registration_changeset(user, attrs, opts \\ []) do
     user
@@ -155,13 +172,23 @@ defmodule Consensus.Accounts.User do
 
   defp validate_password(changeset, opts) do
     changeset
-    |> validate_required([:password])
+    |> maybe_require_password(opts)
     |> maybe_validate_password_length(opts)
     # Examples of additional password validation:
     # |> validate_format(:password, ~r/[a-z]/, message: "at least one lower case character")
     # |> validate_format(:password, ~r/[A-Z]/, message: "at least one upper case character")
     # |> validate_format(:password, ~r/[!?@#$%^&*_0-9]/, message: "at least one digit or punctuation character")
     |> maybe_hash_password(opts)
+  end
+
+  # Default `true`, so every existing caller is unchanged. Only the magic-link half of
+  # registration passes `false` — see the `registration_changeset/3` docs.
+  defp maybe_require_password(changeset, opts) do
+    if Keyword.get(opts, :require_password, true) do
+      validate_required(changeset, [:password])
+    else
+      changeset
+    end
   end
 
   defp maybe_validate_password_length(changeset, opts) do

@@ -89,11 +89,17 @@ defmodule ConsensusWeb.JoinLive.Entry do
       is_nil(participant) ->
         {:ok, assign_entry(socket, group)}
 
+      # `replace: true` on both bounces. This screen is a pass-through for anyone who has
+      # already joined, and appending a history entry every time meant Back from the ballot
+      # landed here, was bounced forward again, and could never leave — while the bounce is
+      # a fresh mount, so it also discarded the unsent ballot. See
+      # `ConsensusWeb.JoinLive.Ballot`'s "Navigation lives in the URL" section, which fixes
+      # the other half.
       not is_nil(participant.voted_at) ->
-        {:ok, push_navigate(socket, to: ~p"/join/#{group.slug}/results")}
+        {:ok, push_navigate(socket, to: ~p"/join/#{group.slug}/results", replace: true)}
 
       true ->
-        {:ok, push_navigate(socket, to: ~p"/join/#{group.slug}/vote")}
+        {:ok, push_navigate(socket, to: ~p"/join/#{group.slug}/vote", replace: true)}
     end
   end
 
@@ -158,6 +164,16 @@ defmodule ConsensusWeb.JoinLive.Entry do
     form[:display_name].value |> to_string() |> String.length()
   end
 
+  # `nil` disarms the prompt — see the call site for why a mis-tap on `skip →` is
+  # irreversible and why an empty field must not be asked about. Trimmed, because
+  # `Consensus.Voting.create_participant/2` normalises a blank string to `nil` anyway, so
+  # skipping with only spaces in the field loses nothing to warn about.
+  defp skip_confirm(form) do
+    if form[:display_name].value |> to_string() |> String.trim() != "" do
+      "Skip the name? You'll join as a guest, and what you typed goes away."
+    end
+  end
+
   defp organizer_initial(%{username: username}) when is_binary(username) and username != "" do
     String.upcase(String.first(username))
   end
@@ -169,6 +185,26 @@ defmodule ConsensusWeb.JoinLive.Entry do
   end
 
   defp spots_pill_text(count), do: "#{count} #{pluralize(count, "spot")}"
+
+  # The third pill was the literal `~10 sec`, sitting in a row of two *computed* pills and
+  # so reading as data of the same kind — while being the same number for a 3-option pool
+  # and a 30-option one. It is derived now, from the one rate the design itself states:
+  # frame `1a-8` prints `5 SPOTS` beside `~10 SEC`, i.e. two seconds an option, and its own
+  # subhead says "one tap each". At five options this renders exactly what the frame draws.
+  #
+  # Rounded to the nearest 5 so it stays a shape a reader recognises as an estimate rather
+  # than a measurement, and switched to minutes past a minute, where "~90 sec" stops being
+  # a friendly number. This is the same standard `/how-it-works` was held to when its
+  # unbacked "takes about two minutes" was deleted for not being checkable against the
+  # code; here the claim is small enough to keep, so it is made checkable instead.
+  @seconds_per_option 2
+
+  defp effort_pill_text(count) do
+    case max(5, round(count * @seconds_per_option / 5) * 5) do
+      seconds when seconds < 60 -> "~#{seconds} sec"
+      seconds -> "~#{round(seconds / 60)} min"
+    end
+  end
 
   defp friends_caption(count), do: "#{count} #{pluralize(count, "friend")} already voted"
 
@@ -224,8 +260,20 @@ defmodule ConsensusWeb.JoinLive.Entry do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-white">
-      <div class="relative flex min-h-dvh flex-col overflow-hidden">
+    <%!-- `:public` (plan ruling 2): a wordmark and one yellow "Create your own →" pill,
+          no `‹` and no `⋯`. There is nothing above `/join/:slug` to go back to — this
+          is where a shared link lands — and the `⋯` has nothing in it a guest wants.
+          `min-h-dvh` on the inner column became `flex-1`: the header and footer are part
+          of the same column now, so a full-viewport child would push the page past the
+          viewport and give this screen two scrollbars. --%>
+    <Layouts.app
+      flash={@flash}
+      current_path={@current_path}
+      current_scope={@current_scope}
+      background="bg-white"
+      variant={:public}
+    >
+      <div class="relative flex flex-1 flex-col overflow-hidden">
         <%!-- The two soft blob shapes from the comp — purely decorative, so both are
               `aria-hidden` and `pointer-events-none`. Positioned relative to the whole
               screen rather than a fixed 700px mockup frame, per DESIGN-SPEC.md's own
@@ -266,7 +314,7 @@ defmodule ConsensusWeb.JoinLive.Entry do
               {closes_pill_text(@group, @now, @tz_offset)}
             </span>
             <span class="rounded-full border-2 border-ink bg-white px-3 py-[6px] font-mono text-[11.5px] font-semibold uppercase text-ink">
-              ~10 sec
+              {effort_pill_text(@activity_count)}
             </span>
           </div>
 
@@ -301,11 +349,15 @@ defmodule ConsensusWeb.JoinLive.Entry do
         </div>
 
         <div class="relative z-10 flex flex-col gap-3 px-[22px] pb-6 pt-[18px]">
+          <%!-- `min-h-[44px]`: this measured 141.4×40.5 at 360×640 — 3.5px under the touch
+                floor, on the first screen a guest ever touches, in the flow product
+                invariant 1 exists for. The `-my-3` was already there and still cancels the
+                growth, so nothing on the screen moves. --%>
           <button
             :if={@current_scope && @current_scope.user}
             type="button"
             phx-click="join_as_user"
-            class="self-start font-mono text-[11px] font-semibold text-violet underline decoration-2 underline-offset-2 hover:text-tangerine"
+            class="-my-3 inline-flex min-h-[44px] items-center self-start px-2 py-3 font-mono text-[11px] font-semibold text-violet underline decoration-2 underline-offset-2 hover:text-tangerine active:text-tangerine"
           >
             Continue as {@current_scope.user.username} →
           </button>
@@ -319,24 +371,98 @@ defmodule ConsensusWeb.JoinLive.Entry do
             phx-trigger-action={@trigger_submit}
             class="flex flex-col gap-1.5"
           >
-            <%!-- Hand-built rather than `<.input>`: the comp puts the "skip →" control
-                  *inside* the same bordered field, which `<.input>`'s label+error column
-                  layout has no slot for (design-system skill: build by hand when no
-                  variant fits, same as the pool-row example there). --%>
-            <div class="flex items-center gap-2 rounded-2xl border-2 border-ink bg-white px-4 py-[14px] shadow-field">
-              <input
-                type="text"
-                name={@form[:display_name].name}
-                id={@form[:display_name].id}
-                value={@form[:display_name].value}
-                placeholder="Your first name"
-                autocomplete="given-name"
-                class="w-full flex-1 border-0 bg-transparent p-0 text-[15px] font-medium text-ink outline-none placeholder:text-muted"
-              />
+            <%!-- The only screen in the app whose drop-off the PRD puts a number on ("guest
+                  drop-off on the link interface under 5%"), and it had the worst touch
+                  surface in the app. Three things changed, all measured at 390×844:
+
+                  **A label, and one that says why.** There was no `<label>` anywhere on this
+                  screen — the only cue was a placeholder that vanishes on the first keystroke,
+                  while every other field in the app carries a mono uppercase label. Worse, the
+                  sentence above it says the picks stay anonymous, so a first-time voter was
+                  asked for a name on a screen that had just told them they were anonymous,
+                  with nothing saying what the name is for or what "skip →" costs. The label is
+                  the app's standard `.eyebrow`; the line under it is what makes "skip →" a
+                  choice instead of a guess.
+
+                  **The label wraps the padding, so the whole field is tappable.** The bordered
+                  box measured 346×55 but the `<input>` inside it was 262×23 with `p-0
+                  border-0`, so 16px of obvious-looking field above and below focused nothing.
+                  The padding now lives on a `<label>` that owns the input, and the skip button
+                  is `self-stretch`, which takes it from 40×17 to the full 51px height.
+
+                  **16px, not 15px.** iOS Safari zooms the viewport on focus for any input
+                  under 16px, so a guest's first action on a phone was a zoom they then had to
+                  pinch back out of. This is a deliberate 1px deviation from the comp; the
+                  alternative (`maximum-scale=1` on the viewport) disables pinch-zoom for
+                  everyone, which is an accessibility regression, not a fix.
+
+                  Still hand-built rather than `<.input>`: the comp puts "skip →" *inside* the
+                  bordered field, which `<.input>`'s label+error column layout has no slot for
+                  (design-system skill: build by hand when no variant fits). --%>
+            <label for={@form[:display_name].id} class="eyebrow">Your name</label>
+            <%!-- **The sentence that asks for a name has to be right about where it goes,
+                  and this one was wrong in both halves** (D-049).
+
+                  *"Just so {organizer} can see who has voted"* — not just the organizer.
+                  `ConsensusWeb.JoinLive.Results` renders the WHO'S VOTED row for
+                  `@participant == nil`, so a `curl` with no cookies at all against
+                  `/join/:slug/results` returns the voted list; anyone holding the share
+                  link reads it without joining. That is settled behaviour (participation
+                  is public), so the sentence is what changes.
+
+                  *"your initial goes in the list"* — not just the initial.
+                  `Sticker.participant_avatar/1` puts the **full typed name** into `title`
+                  and into an `sr-only` span; the visible glyph is the only part that is one
+                  letter, and a screen reader reads the whole thing. Saying "initial" to
+                  someone deciding what to type is the more consequential half of the two.
+
+                  What is actually true is the pair below, and every other place this app
+                  makes the claim now says it in this same order: who voted is public, what
+                  they picked is nobody's. See D-035 for why the second half is structural
+                  rather than a setting. --%>
+            <p class="-mt-1 text-[11.5px] leading-[1.4] text-ink-soft">
+              Anyone with this link can see who has voted, under whatever you type here.
+              Nobody sees what you picked — not even {@organizer.username}. Skip it and you
+              show up as a guest.
+            </p>
+            <div class="flex items-stretch gap-2 rounded-2xl border-2 border-ink bg-white px-4 shadow-field">
+              <%!-- `border-r-2 border-ink-30 pr-3` marks where the field stops. The border
+                    and the padding are both *inside* the `flex-1` label, so the tap target
+                    for the input is unchanged — this buys legibility, not hit area, and the
+                    hit area is what `data-confirm` below covers. --%>
+              <label
+                for={@form[:display_name].id}
+                class="flex flex-1 items-center border-r-2 border-ink-30 py-[14px] pr-3"
+              >
+                <input
+                  type="text"
+                  name={@form[:display_name].name}
+                  id={@form[:display_name].id}
+                  value={@form[:display_name].value}
+                  placeholder="Your first name"
+                  autocomplete="given-name"
+                  class="w-full flex-1 border-0 bg-transparent p-0 text-[16px] font-medium text-ink outline-none placeholder:text-muted"
+                />
+              </label>
+              <%!-- **This is a one-tap, irreversible join sitting 8px from the name field.**
+                    Measured at 360×640: the `<label>` wrapping `#display_name` ends at
+                    x=264.4 and `skip →` starts at x=272.4. `handle_event("skip", …)` assigns
+                    an empty display name and `kind => "guest"` and flips `@trigger_submit`,
+                    so the tap immediately POSTs the join, creates the anonymous participant
+                    and lands on the ballot. A voter tapping past the end of their typed name
+                    to place a caret joined anonymously instead, with the name gone and no
+                    way back — `JoinLive.Entry` bounces anyone holding a participant token
+                    straight to the ballot, so there is no second chance at this screen.
+
+                    Armed only while there is something to lose, which is the shape
+                    `JoinLive.Ballot.leave_confirm/2` and `Chrome`'s `back_confirm` both use:
+                    on an empty field skipping costs nothing, and a dialog there would be
+                    friction on the one flow product invariant 1 says must have none. --%>
               <button
                 type="button"
                 phx-click="skip"
-                class="shrink-0 font-mono text-[11px] text-violet hover:text-tangerine"
+                data-confirm={skip_confirm(@form)}
+                class="-mr-2 shrink-0 self-stretch px-2 font-mono text-[11px] text-violet hover:text-tangerine active:text-tangerine"
               >
                 skip →
               </button>

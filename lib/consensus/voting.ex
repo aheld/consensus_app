@@ -384,7 +384,8 @@ defmodule Consensus.Voting do
   Survivors come first, ranked by `approvals` descending and ties broken by
   `activity.position` ascending (the organizer's own order), which makes the result
   deterministic and testable. Every vetoed activity follows, in position order — one
-  veto eliminates an option outright ("Everyone gets one veto. Vetoed places drop out").
+  veto eliminates an option outright ("Everyone gets one veto. A vetoed option drops out
+  for everyone", as `03 review` states it to the organizer).
 
   `leader?` marks the top survivor, and only when it has at least one approval — an
   untouched pool has no leader. `winner?` is that same activity once the group has
@@ -450,8 +451,16 @@ defmodule Consensus.Voting do
       least-vetoed option: "everyone gets one veto, vetoed places drop out" is the rule
       the organizer showed the group, and quietly crowning something the group struck
       out would break it. See D-034.
-    * `:no_votes` — an empty pool, or a pool where nothing has been approved or vetoed
-      yet.
+    * `:vetoes_only` — **some** of the pool has been vetoed and nothing that survived has
+      a single approval. Reachable with real ballots: a voter may spend their veto and
+      approve nothing, and `cast_ballot/3` accepts that ballot. This used to fall through
+      to `:no_votes` and the screen then said "Voting closed before anyone cast a ballot"
+      over a `1/1 voted` avatar row and a struck-through, `VETOED`-pilled option — the
+      screen contradicting itself, twice, in the reader's own line of sight. The
+      discriminator is the tally alone: a veto row can only exist if a ballot carried it.
+    * `:no_votes` — an empty pool, or a pool where nothing has been approved **or** vetoed.
+      With `cast_ballot/3` refusing a ballot that is neither, that is now exactly "nobody
+      voted", which is what every screen rendering it says.
 
   The runner-up failsafe CLAUDE.md product invariant 5 asks for is the second element of
   the tally itself; `outcome/1` names the top, not the list.
@@ -463,6 +472,11 @@ defmodule Consensus.Voting do
       row = Enum.find(tally, & &1.winner?) -> {:winner, row}
       row = Enum.find(tally, & &1.leader?) -> {:leader, row}
       Enum.all?(tally, & &1.vetoed?) -> :no_consensus
+      # Ordered after `:no_consensus` (which is the all-vetoed case) and before
+      # `:no_votes`. Reaching here means no *surviving* option carries an approval, so the
+      # two sub-cases it covers — nobody approved anything, and the only approvals landed
+      # on options that were then vetoed — get one sentence that is true of both.
+      Enum.any?(tally, & &1.vetoed?) -> :vetoes_only
       true -> :no_votes
     end
   end

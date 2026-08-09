@@ -38,6 +38,36 @@ defmodule ConsensusWeb.GroupLive.NewTest do
              )
     end
 
+    # The chips write `deadline_at` into a hidden input by patching the DOM from the server.
+    # A change event that left the browser before that patch arrived carried the still-empty
+    # hidden field, and the server took it over the selection it had just made — chip picked,
+    # then title typed in the same tick, and the deadline was silently gone. Both events here
+    # send `deadline_at: ""`, which is exactly the payload the browser sent in the race.
+    test "a change event that races the chip's DOM patch does not wipe the deadline", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      # Pushed raw rather than through `form/3`: `form/3` refuses to send a hidden input a
+      # value that is not in the rendered DOM, which is precisely the state the race puts the
+      # browser in, so the harness cannot express it any other way.
+      raced = %{"group" => %{"title" => "Dinner", "deadline_at" => ""}}
+
+      render_change(lv, "validate", raced)
+
+      assert has_element?(
+               lv,
+               "#group-form button[phx-value-key='tomorrow'][aria-pressed='true']"
+             )
+
+      render_submit(lv, "save", raced)
+
+      assert [%{title: "Dinner", deadline_at: %DateTime{}}] = Activities.list_groups(scope)
+    end
+
     test "submitting without a title shows an error and creates nothing", %{
       conn: conn,
       scope: scope
@@ -164,6 +194,44 @@ defmodule ConsensusWeb.GroupLive.NewTest do
     test "a non-numeric id redirects instead of crashing", %{conn: conn} do
       assert {:error, {:live_redirect, %{to: to}}} = live(conn, ~p"/groups/not-a-real-id/edit")
       assert to == ~p"/"
+    end
+  end
+
+  # D-045 — measured before this landed: typing a title, tapping the footer's About us and
+  # pressing back returned an empty field.
+  describe "the unsaved-draft guard" do
+    test "is disarmed on an untouched form", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      refute has_element?(lv, "#chrome-back[data-confirm]")
+      refute has_element?(lv, "footer a[data-confirm]")
+    end
+
+    test "arms once a title is typed", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> form("#group-form", group: %{"title" => "Dinner Friday?"}) |> render_change()
+
+      assert has_element?(lv, "#chrome-back[data-confirm]")
+      assert has_element?(lv, "footer a[data-confirm]")
+    end
+
+    test "arms once a deadline chip is picked, even with no title", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      render_click(lv, "select_deadline", %{"key" => "tomorrow"})
+
+      assert has_element?(lv, "#chrome-back[data-confirm]")
+    end
+
+    # On `:edit` the form arrives pre-filled, so "non-empty" would arm the prompt on a
+    # form nobody has touched. The comparison is against what is stored.
+    test "is disarmed on an untouched edit form", %{conn: conn, scope: scope} do
+      group = group_fixture(scope, %{title: "Already saved", deadline_at: future_deadline()})
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/edit")
+
+      refute has_element?(lv, "#chrome-back[data-confirm]")
     end
   end
 end

@@ -8,8 +8,14 @@ defmodule ConsensusWeb.UserSessionController do
     create(conn, params, "Account created successfully!")
   end
 
+  # Not the generator's "User confirmed successfully." — a schema noun addressing the
+  # reader in the third person, and it is the **first** sentence a brand-new account ever
+  # sees, on the screen that finishes signing up. The same class of generator voice the
+  # consolidation sweep purged from the six "group"/"session" strings; this one survived
+  # because no test anywhere referenced it (`grep -rn "confirmed successfully" test/`
+  # returned nothing until `user_session_controller_test.exs` gained one).
   def create(conn, %{"_action" => "confirmed"} = params) do
-    create(conn, params, "User confirmed successfully.")
+    create(conn, params, "You're in — this address is confirmed.")
   end
 
   def create(conn, params) do
@@ -32,6 +38,7 @@ defmodule ConsensusWeb.UserSessionController do
 
         conn
         |> put_flash(:info, magic_link_info(clears_password?, info))
+        |> UserAuth.store_return_to(user_params["return_to"])
         |> UserAuth.log_in_user(user, user_params)
 
       _ ->
@@ -49,8 +56,12 @@ defmodule ConsensusWeb.UserSessionController do
     login = user_params["login"] || user_params["email"] || ""
 
     if user = Accounts.get_user_by_login_and_password(login, password) do
+      # `store_return_to/2` validates and drops anything that is not an internal path —
+      # see its docs. `log_in_user/3` reads the session *before* `create_or_extend_session`
+      # renews it, so writing here is in time.
       conn
       |> put_flash(:info, info)
+      |> UserAuth.store_return_to(user_params["return_to"])
       |> UserAuth.log_in_user(user, user_params)
     else
       # In order to prevent user enumeration attacks, don't disclose whether the

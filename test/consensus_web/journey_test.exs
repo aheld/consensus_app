@@ -60,11 +60,11 @@ defmodule ConsensusWeb.JourneyTest do
 
     {:ok, home, html} = live(conn, ~p"/")
     assert html =~ "Decide"
-    assert html =~ "Get started"
+    assert html =~ "Start something"
 
     {:ok, register, _html} =
       home
-      |> element(~s{a[href="/users/register"]}, "Get started")
+      |> element(~s{a[href="/users/register"]}, "Start something")
       |> render_click()
       |> follow_redirect(conn, ~p"/users/register")
 

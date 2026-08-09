@@ -1,6 +1,6 @@
 <!DOCTYPE html>
 <html><head><meta charset="utf-8">
-<title>1b · sticker grid · kept in play</title>
+<title>1c · sticker grid · kept in play</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
@@ -11,8 +11,12 @@ body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-se
 </style></head><body>
 <div style="display:flex;flex-direction:column;gap:8px">
 <div style="width:300px;height:600px;background:#DDF0E2;border:2px solid #17211C;border-radius:30px;box-shadow:5px 5px 0 #17211C;overflow:hidden;display:flex;flex-direction:column">
-  <div style="padding:14px 18px 8px"><div style="font:700 19px/1.1 'Instrument Sans',sans-serif;letter-spacing:-.025em">Tap all you'd be happy with</div><div style="font:400 11.5px 'Instrument Sans',sans-serif;color:#3B4A42;margin-top:4px">Pick as many as you like.</div></div>
-  <div style="flex:1;min-height:0;padding:8px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start">
+  <div style="flex:none;display:flex;align-items:center;gap:8px;padding:8px 14px 9px;border-bottom:2px solid #17211C;background:#fff">
+    <img src="./icon.svg" width="18" height="18" alt=""><span style="font:700 12.5px 'Instrument Sans',sans-serif">Consensus</span>
+    <a href="#1b" style="margin-left:auto;background:#FFD84D;border:2px solid #17211C;border-radius:99px;padding:4px 10px;font:700 10.5px 'Instrument Sans',sans-serif;color:#17211C;text-decoration:none;box-shadow:2px 2px 0 #17211C" style-hover="background:#FF6A2B;color:#fff">Create your own →</a>
+  </div>
+  <div style="padding:12px 18px 8px"><div style="font:700 18px/1.1 'Instrument Sans',sans-serif;letter-spacing:-.025em">Tap all you'd be happy with</div><div style="font:400 11.5px 'Instrument Sans',sans-serif;color:#3B4A42;margin-top:4px">Pick as many as you like.</div></div>
+  <div style="flex:1;min-height:0;overflow-y:auto;padding:8px 16px;display:grid;grid-template-columns:1fr 1fr;gap:10px;align-content:start">
     <div style="border:2px solid #17211C;border-radius:16px;background:#B9EFC9;box-shadow:3px 3px 0 #17211C;padding:11px;display:flex;flex-direction:column;gap:7px;min-height:96px;position:relative;cursor:pointer">
       <div style="position:absolute;top:8px;right:8px;width:21px;height:21px;border-radius:50%;background:#17211C;color:#fff;display:grid;place-items:center;font:600 11px 'Instrument Sans',sans-serif">✓</div>
       <div style="height:38px;background:repeating-linear-gradient(135deg,rgba(23,33,28,.14) 0 6px,transparent 6px 12px);border:1.5px solid #17211C;border-radius:9px"></div>
@@ -45,6 +49,18 @@ body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-se
   <div style="padding:10px 16px 18px;display:flex;flex-direction:column;gap:8px">
     <div style="font:500 11px 'DM Mono',monospace;color:#3B4A42;text-align:center">2 PICKED · 1 VETO LEFT</div>
     <div style="background:#FF6A2B;color:#fff;border:2px solid #17211C;border-radius:15px;box-shadow:4px 4px 0 #17211C;padding:14px;text-align:center;font:700 15px 'Instrument Sans',sans-serif;cursor:pointer" style-hover="transform:translate(1px,1px);box-shadow:3px 3px 0 #17211C">Send my votes</div>
+  </div>
+  <div style="position:relative;flex:none;border-top:2px solid #17211C;background:#F7FBF8;padding:7px 14px 9px;display:flex;flex-direction:column;align-items:center;gap:2px">
+    <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px">
+      <span style="font:600 10.5px 'Instrument Sans',sans-serif;color:#3B4A42">How's this going?</span>
+      <div title="Good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#B9EFC9;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 14.6c1 1.2 2.4 1.8 4 1.8s3-.6 4-1.8"/></svg></div>
+      <div title="Not good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#FFC2A3;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 16.4c1-1.2 2.4-1.8 4-1.8s3 .6 4 1.8"/></svg></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font:600 10.5px 'Instrument Sans',sans-serif">
+      <a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">About us</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">How it works</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">Privacy</a>
+    </div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center"><a href="https://marketfinder.us" style="color:#6B46F0;text-decoration:none" style-hover="color:#FF6A2B">also check out marketfinder.us</a></div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">Made with ❤️ in Philadelphia</div>
   </div>
 </div>
 <div style="font:500 10.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">sticker grid · kept in play</div>

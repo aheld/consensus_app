@@ -28,8 +28,12 @@ config :consensus,
 config :consensus, ConsensusWeb.Endpoint,
   url: [host: "localhost"],
   adapter: Bandit.PhoenixAdapter,
+  # `root_layout` rather than the generator's `layout: false`: `ConsensusWeb.ErrorHTML`'s
+  # 404 and 500 templates render the global chrome (D-041), and without the root layout
+  # they would come back as a bare fragment with no `<head>` — and so no stylesheet.
   render_errors: [
     formats: [html: ConsensusWeb.ErrorHTML, json: ConsensusWeb.ErrorJSON],
+    root_layout: {ConsensusWeb.Layouts, :root},
     layout: false
   ],
   pubsub_server: Consensus.PubSub,

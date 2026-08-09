@@ -47,6 +47,23 @@
   --color-ink-30: rgba(23, 33, 28, 0.3);
   --color-ink-12: rgba(23, 33, 28, 0.12);
 
+  /* The desaturated green-grey the chrome footer separates its links with (`·`).
+     A flat colour rather than an ink alpha on purpose: the footer sits on
+     --surface, and an alpha of ink there reads colder than the design's own
+     #A9B7AE. See docs/design/screens/4a-0-*.html and D-041. */
+  --color-faint-soft: #a9b7ae;
+
+  /* The swipe deck's ♥ approve control darkens its fill on hover instead of pressing
+     into its shadow — it is a 58px circle with no room to press. The only hover in the
+     imported design that works that way. See docs/design/IMPORT-NOTES.md §9.1 and D-044. */
+  --color-violet-deep: #5a38dd;
+
+  /* The unselected option card's hover fill on the sticker grid. Parallels
+     --color-violet-tint; the value already existed as a gradient stop inside
+     .stripes-yellow but was not a token, so the hover had to borrow --yellow (a much
+     louder fill) until now. docs/design/IMPORT-NOTES.md §9.1. */
+  --color-yellow-tint: #fff6dc;
+
   /* --- type --- */
   --font-sans: "Instrument Sans", ui-sans-serif, system-ui, sans-serif;
   --font-mono: "DM Mono", ui-monospace, SFMono-Regular, monospace;
@@ -101,20 +118,32 @@
 
 @layer components {
   /* Rule 4 of the sticker system: anything you can click presses 1px into its own
-     shadow. Nothing fades and nothing scales. `.press-N` pairs with `shadow-sticker-N`. */
-  .press-2:not(:disabled):hover {
-    transform: translate(1px, 1px);
-    box-shadow: var(--shadow-sticker-1);
-  }
+     shadow. Nothing fades and nothing scales. `.press-N` pairs with `shadow-sticker-N`.
 
-  .press-3:not(:disabled):hover {
-    transform: translate(1px, 1px);
-    box-shadow: var(--shadow-sticker-2);
-  }
+     The hover half is behind `@media (hover: hover) and (pointer: fine)` and must stay
+     there. A touch browser has no hover state to leave: it synthesises one on tap and
+     holds it until the finger lands somewhere else, so on a phone every pressed control
+     in the app stayed 1px down with a shrunken shadow long after the gesture ended —
+     which on the ballot's grid competed with the mint `picked` fill the same tap had just
+     set. The `:active` block below is unguarded on purpose: it is the state that *does*
+     exist on touch, and it is what gives a tap its acknowledgement. This is the same
+     pairing `join_live/ballot.ex` applies inline (`hover:` beside `active:`, `group-hover:`
+     beside `group-active:`) — the shared rules were simply not swept with it. */
+  @media (hover: hover) and (pointer: fine) {
+    .press-2:not(:disabled):hover {
+      transform: translate(1px, 1px);
+      box-shadow: var(--shadow-sticker-1);
+    }
 
-  .press-4:not(:disabled):hover {
-    transform: translate(1px, 1px);
-    box-shadow: var(--shadow-sticker-3);
+    .press-3:not(:disabled):hover {
+      transform: translate(1px, 1px);
+      box-shadow: var(--shadow-sticker-2);
+    }
+
+    .press-4:not(:disabled):hover {
+      transform: translate(1px, 1px);
+      box-shadow: var(--shadow-sticker-3);
+    }
   }
 
   .press-2:not(:disabled):active,
@@ -140,25 +169,61 @@
    * is legibility rather than decoration: a pool of five options with one repeated stripe
    * reads as a single grey block, and the eye stops separating the rows. `stripes-violet`
    * is also the large single-photo placeholder on the option editor, where it stands alone.
-   * The colour pairs are taken from the design frames directly. */
+   * The colour pairs are taken from the design frames directly.
+   *
+   * **The pitch is a variable, because the design scales it with the element.** The frames
+   * do not draw one band width: `1a-4 03 review` uses a 5px band, `1c-1`'s 38px grid
+   * thumbnail uses 6px, `1c-0`'s full-bleed deck photo uses 10px. Shipping one 9px band
+   * everywhere made Kismet's violet stripe visibly twice as wide as Guisados' blue on two
+   * cards 10px apart — the pattern that exists to *separate* rows was the thing making them
+   * look unrelated. `--stripe-pitch` defaults to the mid value each class shipped with; the
+   * `.stripe-pitch-*` utilities below set it per element. Every band is `pitch` on,
+   * `pitch` off, so the second stop is always `calc(pitch * 2)`. */
   .stripes-violet {
-    background: repeating-linear-gradient(135deg, #d6ccfb 0 12px, #ede7fe 12px 24px);
+    background: repeating-linear-gradient(
+      135deg,
+      #d6ccfb 0 var(--stripe-pitch, 12px),
+      #ede7fe var(--stripe-pitch, 12px) calc(var(--stripe-pitch, 12px) * 2)
+    );
   }
 
   .stripes-mint {
-    background: repeating-linear-gradient(135deg, #c9e8d2 0 9px, #e6f5ea 9px 18px);
+    background: repeating-linear-gradient(
+      135deg,
+      #c9e8d2 0 var(--stripe-pitch, 9px),
+      #e6f5ea var(--stripe-pitch, 9px) calc(var(--stripe-pitch, 9px) * 2)
+    );
   }
 
   .stripes-peach {
-    background: repeating-linear-gradient(135deg, #ffdcc7 0 9px, #ffefe5 9px 18px);
+    background: repeating-linear-gradient(
+      135deg,
+      #ffdcc7 0 var(--stripe-pitch, 9px),
+      #ffefe5 var(--stripe-pitch, 9px) calc(var(--stripe-pitch, 9px) * 2)
+    );
   }
 
   .stripes-yellow {
-    background: repeating-linear-gradient(135deg, #ffe9ae 0 9px, #fff6dc 9px 18px);
+    background: repeating-linear-gradient(
+      135deg,
+      #ffe9ae 0 var(--stripe-pitch, 9px),
+      #fff6dc var(--stripe-pitch, 9px) calc(var(--stripe-pitch, 9px) * 2)
+    );
   }
 
   .stripes-blue {
-    background: repeating-linear-gradient(135deg, #d9e6fb 0 9px, #edf3fe 9px 18px);
+    background: repeating-linear-gradient(
+      135deg,
+      #d9e6fb 0 var(--stripe-pitch, 9px),
+      #edf3fe var(--stripe-pitch, 9px) calc(var(--stripe-pitch, 9px) * 2)
+    );
+  }
+
+  /* Frame `1c-1`'s 38px grid thumbnail. `.stripes-ink` — the selected state on that same
+   * thumbnail — is already hard-coded at 6px, so before this the selected tile was the only
+   * one in the pool drawn at the pitch the frame specifies. */
+  .stripe-pitch-6 {
+    --stripe-pitch: 6px;
   }
 
   /* The inert, muted stripe on a `Sticker.tally_bar/1` row whose activity has been
@@ -179,6 +244,97 @@
   }
 }
 
+/* `Layouts.app/1`'s `fill_viewport` column (D-046 §1). Unlayered so the media block below
+ * beats Tailwind's own `min-h-dvh`/`h-dvh` utilities, which is the whole point of it.
+ *
+ * A bare `h-dvh` clamps the column to the viewport at *every* height, and every sibling of
+ * the ballot's grid track is `shrink-0`, so once the chrome alone exceeds the viewport the
+ * `flex-1 min-h-0` track is driven toward zero and the overflow lands on top of the
+ * footer rather than anywhere reachable. Measured on a 5-option pool: at 375×500 the track
+ * floored at 58px; at 667×375 — an iPhone SE in landscape, one rotation away, and the
+ * ballot has no orientation lock — it floored at 16px and `#submit-ballot` painted 59px
+ * past `<main>`'s bottom edge, straight through "Made with ❤️ in Philadelphia". There was
+ * no page scroll to escape it either, because `h-dvh` is what replaced the `min-h-dvh`
+ * that used to provide one.
+ *
+ * So the clamp is gated on there being room for it. Below the threshold the column is just
+ * `min-height: 100dvh` and the page is the scroller again — the behaviour every other
+ * screen has, and the behaviour this one had before `fill_viewport` existed. The threshold
+ * is derived, then measured. The ballot's chrome at 360 wide is header 48 + view toggle 66
+ * + heading and hint 62 + status region ~100 + submit 60 + footer 58 = 394, and the track
+ * carries a `min-h-[200px]` floor of its own, which puts the arithmetic floor at 594 — but at
+ * exactly 360×600 the submit button still ended 11.9px past `<main>`, because the real chrome
+ * runs ~12px over that estimate once the heading and hint wrap. The gate is therefore
+ * **640px**, the shortest common phone portrait and the viewport the whole fix was measured
+ * at: there the grid track is 204px and `#submit-ballot` ends at 557.75 against a footer
+ * starting at 581.75, and at 320×640 — the narrowest phone, so the tallest chrome — the track
+ * sits on its floor with 9.9px of slack. Do not lower it without re-measuring `#submit-ballot`
+ * bottom against `<footer>` top at the new number, in both views, at 320 and 360 wide. */
+.viewport-column {
+  min-height: 100dvh;
+}
+
+@media (min-height: 640px) {
+  .viewport-column {
+    height: 100dvh;
+    min-height: 0;
+  }
+}
+
+/* The other half of the same fix, and the half that was missing: what happens **below** the
+ * gate. `ConsensusWeb.JoinLive.Ballot`'s `submit_block/1` carries this class, and the block
+ * holds both `#ballot-status` (the running count) and `#submit-ballot`.
+ *
+ * The gate above only decides which box scrolls; it does nothing about where the submit
+ * button ends up when the answer is "the page". Measured on a five-option pool at
+ * **375×553** — the iPhone SE / iPhone 8 Safari layout viewport, and a real phone, not a
+ * corner case — the grid track was 530px with `scrollHeight` 530 (nothing scrolling
+ * internally, exactly as designed below the gate), `document.scrollHeight` 966, and
+ * `#submit-ballot` ended at y=883.7 against a 553px viewport: **330.7px below the fold**,
+ * with the counter below it too. The first screenful ended mid-pool with no indication
+ * either existed. The gate cannot be lowered to cover that: the chrome at 375 wide measures
+ * 436px (header 48 + toggle 66 + heading 72.3 + submit block 191.4 + footer 58.3) and the
+ * track's own `min-h-[200px]` floor puts the clamped total at 636px, 83px past the viewport
+ * — the clamp would go back to painting the button over the footer, which is the failure the
+ * gate exists to prevent.
+ *
+ * So below the gate the block sticks to the bottom of the viewport instead. The page keeps
+ * the whole pool as its scroll length (313.6px of it visible once the heading scrolls away
+ * at 375×553, against the 117px a clamped track could have offered), and the two things a
+ * voter needs to finish are on screen at every scroll position and at every viewport height
+ * — including landscape, where no threshold ever helped.
+ *
+ * `.results-actions` is `ConsensusWeb.ResultsComponents.results_panel/1`'s `:footer` slot,
+ * which has the same shape (a `shrink-0` block of controls under a region that grows) and
+ * the same defect for a simpler reason: **neither results screen asks `Layouts.app` for
+ * `fill_viewport` at all**, so the page is the scroller there at every height and the panel's
+ * own `overflow-y-auto` middle has nothing bounding it (measured: `scrollHeight` 744 ==
+ * `clientHeight` 744). At 420×900 on a completed session `#results-start-your-own` — the
+ * guest's only forward action, on the terminal screen of the flow the product exists for and
+ * the screen the PRD's "guest drop-off under 5%" is measured on — sat at document y=971.3
+ * against a 900px viewport. It therefore takes the base rule and **no** opt-out.
+ *
+ * Written base-first and switched **off** above 640px for `.ballot-actions` alone, rather
+ * than negated, so that opt-out is exactly complementary to the clamp above by construction
+ * and cannot drift from it. Above the gate the ballot's column is clamped, the page does not
+ * scroll, sticky would never engage, and `--shadow-sheet` would be a resting shadow no frame
+ * draws — `04 share`'s bottom sheet is the only other element in the app that carries it, and
+ * for the same "this floats over content" reason. */
+.ballot-actions,
+.results-actions {
+  position: sticky;
+  bottom: 0;
+  z-index: 20;
+  box-shadow: var(--shadow-sheet);
+}
+
+@media (min-height: 640px) {
+  .ballot-actions {
+    position: static;
+    box-shadow: none;
+  }
+}
+
 @media (prefers-reduced-motion: reduce) {
   .press-2,
   .press-3,
@@ -193,5 +349,141 @@
   .press-3:active,
   .press-4:active {
     transform: none;
+  }
+}
+
+/* The swipe deck's top card (docs/design/screens/1c-0-swipe-deck-kept-in-play.html,
+ * D-044). `ConsensusWeb.Sticker.deck_stack/1` renders the element; the `SwipeCard` hook
+ * in assets/js/hooks.js sets `.is-dragging` and `data-swipe-hint` while a drag is live.
+ *
+ * These four rules sit OUTSIDE `@layer components` on purpose. Cascade layers beat
+ * specificity, and every layered rule loses to a Tailwind utility — the card carries
+ * `bg-white`, so a layered `.deck-card[data-swipe-hint=...]` background would never
+ * paint. An unlayered rule wins over every layer, which is exactly what a transient
+ * drag state needs.
+ *
+ * `touch-action: pan-y` gives the horizontal axis to the drag and leaves the vertical
+ * one to the page; without it a phone browser claims the whole gesture and the card
+ * never moves. */
+.deck-card {
+  touch-action: pan-y;
+}
+
+.deck-card:not(.is-dragging) {
+  transition: transform 180ms ease-out;
+}
+
+.deck-card.is-dragging {
+  transition: none;
+}
+
+/* Which way the card is about to go, while it is being dragged. The buttons below the
+ * card are the accessible equivalent and need no hint — they say what they do.
+ *
+ * The wash is an `::after` overlay, NOT a background on the card. Measured at 420×900:
+ * the photo region is an opaque child covering ~84% of the card, so a background on the
+ * element itself only painted the ~79px body strip under it and the direction signal was
+ * invisible across the part of the card the finger is actually on. The card is
+ * `overflow: hidden`, so the overlay is clipped to the radius, and it is
+ * `pointer-events: none` so it never eats the drag.
+ *
+ * It paints over the photo and **not** over the card's body: `Sticker.deck_stack/1` gives
+ * the name/detail block `relative z-[3] bg-white` on purpose (D-046 §7). At `inset: 0`
+ * with nothing raised above it, the 0.85 veil covered the card's own words at the exact
+ * moment a release would commit the vote — the name's contrast against its background
+ * fell from 13.9:1 to roughly 1.4:1. If you are here to delete that `z-[3]`, this is why
+ * it exists; the `::before` stamp below carries the same kind of note for its own
+ * `z-index`.
+ *
+ * `--swipe-progress` is set by the hook from 0 to 1 as the drag approaches the commit
+ * threshold, so the wash ramps in rather than snapping — and reaches full strength at
+ * exactly the distance that releasing would commit at. */
+.deck-card::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  opacity: 0;
+}
+
+/* Hue comes from `data-swipe-dir`, which the hook sets as soon as the axis locks, so the
+ * card responds immediately. Strength comes from `--swipe-progress`, so it only reaches
+ * the full fill at the distance a release actually commits at — the two used to be one
+ * attribute set at 24px against a 90px commit, which left a 66px band where the card was
+ * solid mint and letting go silently discarded the vote. */
+.deck-card[data-swipe-dir="approve"]::after {
+  background: var(--color-mint);
+}
+
+.deck-card[data-swipe-dir="pass"]::after {
+  background: var(--color-yellow-soft);
+}
+
+.deck-card.is-dragging::after {
+  opacity: calc(var(--swipe-progress, 0) * 0.55);
+}
+
+.deck-card.is-dragging[data-swipe-hint="approve"]::after,
+.deck-card.is-dragging[data-swipe-hint="pass"]::after {
+  opacity: 0.85;
+}
+
+/* The word for the decision the release would commit, stamped on the card while a drag is
+ * live. The wash alone could not carry it: measured at the commit distance the approve
+ * hue is `--color-mint` at 0.85 over a `bg-canvas` page, which is also a pale green — the
+ * card read as almost the same colour as the page behind it and direction was carried
+ * entirely by a hue one of whose two values is the background. Static content per
+ * direction, so no JS writes it; `z-index` puts it over the wash, which is `::after` and
+ * would otherwise paint on top. */
+.deck-card::before {
+  content: "";
+  position: absolute;
+  top: 16px;
+  left: 50%;
+  z-index: 2;
+  transform: translateX(-50%);
+  padding: 4px 10px;
+  border: 2px solid var(--color-ink);
+  border-radius: 999px;
+  background: var(--color-ink);
+  color: #fff;
+  font-family: var(--font-mono, ui-monospace, monospace);
+  font-size: 11px;
+  font-weight: 600;
+  letter-spacing: 0.08em;
+  pointer-events: none;
+  opacity: 0;
+}
+
+.deck-card[data-swipe-dir="approve"]::before {
+  content: "PICK";
+}
+
+.deck-card[data-swipe-dir="pass"]::before {
+  content: "PASS";
+}
+
+.deck-card.is-dragging::before {
+  opacity: var(--swipe-progress, 0);
+}
+
+/* The sticker grid's selected thumbnail (`1c-1`): the frame swaps the pastel stripe for a
+ * muted-ink one on a selected card, so the mint fill is not the only thing saying which is
+ * which. Unlayered for the same reason the rules above are — `Sticker.photo_frame/1` adds
+ * `.stripes-violet` (inside `@layer components`) whenever there is no image, and a layered
+ * rule can never win against it however specific it is. */
+.stripes-ink {
+  background: repeating-linear-gradient(
+    135deg,
+    rgba(23, 33, 28, 0.14) 0 6px,
+    transparent 6px 12px
+  );
+}
+
+/* Nothing here flings a card — a decision replaces the element server-side — so the only
+ * motion is the spring back when a drag falls short of the threshold. Drop that too. */
+@media (prefers-reduced-motion: reduce) {
+  .deck-card:not(.is-dragging) {
+    transition: none;
   }
 }

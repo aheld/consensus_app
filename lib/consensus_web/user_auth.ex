@@ -26,6 +26,10 @@ defmodule ConsensusWeb.UserAuth do
   # the reissuing of tokens completely.
   @session_reissue_age_in_days 7
 
+  # Session keys `renew_session/2` carries across a log-in or a log-out. See the long
+  # comment on that function: these are a guest's ballot receipts, not credentials.
+  @participant_key_prefix "participant_token:"
+
   @doc """
   Logs the user in.
 
@@ -38,6 +42,36 @@ defmodule ConsensusWeb.UserAuth do
     conn
     |> create_or_extend_session(user, params)
     |> redirect(to: user_return_to || signed_in_path(conn))
+  end
+
+  @doc """
+  Records where log-in should land, from a caller-supplied path.
+
+  `log_in_user/3` already honours `:user_return_to`, but until D-045 the only thing that
+  ever wrote it was `maybe_store_return_to/1`, which runs in a plug on a **GET** request.
+  A LiveView that wants to send someone away to re-authenticate has no conn to write, so
+  `ConsensusWeb.AdminLive.Users` flashed "you will come back to Admin → Users" and the app
+  then delivered them to `/users/settings` (`signed_in_path/1` for an already-signed-in
+  conn). This is the missing half: the LiveView puts the destination in the log-in URL,
+  `ConsensusWeb.UserLive.Login` carries it through the form, and
+  `ConsensusWeb.UserSessionController` calls this before `log_in_user/3`.
+
+  **The path is validated, and it must stay validated.** This writes a value that a
+  successful authentication then redirects to, so an unchecked `return_to` on this
+  endpoint is an open redirect on the log-in page — the single most valuable place in an
+  app to have one, because the victim arrives already convinced. `ConsensusWeb.CurrentPath.safe_return_to/1`
+  is the same check the footer's standing-page links use: a single-slash absolute path
+  only, so anything carrying a scheme or a host (`https://evil.example`), and both
+  protocol-relative spellings (`//evil.example`, `/\\evil.example`) are refused. Anything
+  refused is dropped silently and log-in falls back to `signed_in_path/1` — a rejected
+  destination must never become an error message that teaches an attacker the filter's
+  shape.
+  """
+  def store_return_to(conn, path) do
+    case ConsensusWeb.CurrentPath.safe_return_to(path) do
+      nil -> conn
+      safe -> put_session(conn, :user_return_to, safe)
+    end
   end
 
   @doc """
@@ -140,12 +174,38 @@ defmodule ConsensusWeb.UserAuth do
   #       |> put_session(:preferred_locale, preferred_locale)
   #     end
   #
+  # The generator's comment above is exactly the hook this app needs, and not taking it
+  # cost a voter their ballot. `ConsensusWeb.JoinAuth.participant_session_key/1` writes
+  # `"participant_token:<group_id>"` — a guest's *only* proof that they joined a vote and
+  # cast it, since a guest has no account (product invariant 1). Signing in wiped every one
+  # of them: measured, a guest who voted and then tapped the header's "Create your own →"
+  # (rendered on every `/join` screen) and logged in was returned to `/join/:slug` as a
+  # brand-new visitor, offered the ballot again, and `JoinController.resolve_guest/3` — whose
+  # only dedupe *is* that session key — minted a second participant row. Guests carry
+  # `user_id: nil`, so the partial unique index does not catch it, and the tally counted one
+  # person twice.
+  #
+  # These keys are ballot receipts, not credentials: they authorize nothing an attacker
+  # wants, the ballot they unlock is already locked by `Consensus.Voting` (D-036), and they
+  # name no account. Session fixation is a reason to drop the *identity* in the session, not
+  # the guest's record of what they did before acquiring one. Preserved on log-out for the
+  # same reason — logging out of an account must not orphan the vote a guest cast in the
+  # same browser.
   defp renew_session(conn, _user) do
     delete_csrf_token()
 
-    conn
-    |> configure_session(renew: true)
-    |> clear_session()
+    participant_tokens =
+      conn
+      |> get_session()
+      |> Enum.filter(fn {key, _value} ->
+        is_binary(key) and String.starts_with?(key, @participant_key_prefix)
+      end)
+
+    conn = conn |> configure_session(renew: true) |> clear_session()
+
+    Enum.reduce(participant_tokens, conn, fn {key, value}, conn ->
+      put_session(conn, key, value)
+    end)
   end
 
   defp maybe_write_remember_me_cookie(conn, token, %{"remember_me" => "true"}, _),
@@ -260,7 +320,31 @@ defmodule ConsensusWeb.UserAuth do
     end
   end
 
-  def on_mount(:require_sudo_mode, _params, session, socket) do
+  def on_mount(:require_sudo_mode, params, session, socket),
+    do: on_mount({:require_sudo_mode, nil}, params, session, socket)
+
+  # `{:require_sudo_mode, path}` is the same hook with the D-045 return trip on the end.
+  # A hook runs in a LiveView, so it has no conn to write `:user_return_to` into — which
+  # is exactly why `store_return_to/2` exists and why the destination has to travel in the
+  # log-in URL. The base path is supplied by the caller rather than read off the request
+  # because `on_mount` is handed no URI: it is the screen's *own* route, written in its own
+  # module, not anything a visitor can influence, and `store_return_to/2` re-validates it on
+  # the way back in regardless.
+  #
+  # Without it, a person bounced out of `/users/settings` for re-authentication logs in and
+  # is delivered to `signed_in_path/1` — `/users/settings` for a signed-in conn, which is
+  # right by luck for this one screen and would be wrong for the next one to use the hook.
+  #
+  # **The caller's path is a base, not the whole answer, because a LiveView can serve more
+  # than one route.** `ConsensusWeb.UserLive.Settings` serves `/users/settings` *and*
+  # `/users/settings/confirm-email/:token`, and the second is the one that matters here:
+  # that link is emailed and therefore read later, so exceeding the 10-minute window is the
+  # ordinary case, not the edge. With a static return path the bounce dropped the token on
+  # the floor and re-auth landed on the settings form with the old address still in it and
+  # nothing on screen saying the click had done nothing. `on_mount/4` *is* handed `params`,
+  # so the token is right there; it is appended when present, and `store_return_to/2`'s
+  # validation sees the finished path either way.
+  def on_mount({:require_sudo_mode, return_to}, params, session, socket) do
     socket = mount_current_scope(socket, session)
 
     if Accounts.sudo_mode?(socket.assigns.current_scope.user, -10) do
@@ -269,11 +353,22 @@ defmodule ConsensusWeb.UserAuth do
       socket =
         socket
         |> Phoenix.LiveView.put_flash(:error, "You must re-authenticate to access this page.")
-        |> Phoenix.LiveView.redirect(to: ~p"/users/log-in")
+        |> Phoenix.LiveView.redirect(to: log_in_path(sudo_return_to(return_to, params)))
 
       {:halt, socket}
     end
   end
+
+  # `/users/settings` + a `"token"` param is `/users/settings/confirm-email/:token`. The
+  # base path is a compile-time `~p` literal from the LiveView; the token is a URL segment
+  # and is encoded as one by `~p`.
+  defp sudo_return_to("/users/settings", %{"token" => token}) when is_binary(token),
+    do: ~p"/users/settings/confirm-email/#{token}"
+
+  defp sudo_return_to(return_to, _params), do: return_to
+
+  defp log_in_path(nil), do: ~p"/users/log-in"
+  defp log_in_path(path), do: ~p"/users/log-in?#{[return_to: path]}"
 
   defp mount_current_scope(socket, session) do
     Phoenix.Component.assign_new(socket, :current_scope, fn ->

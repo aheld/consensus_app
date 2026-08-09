@@ -15,15 +15,17 @@ defmodule ConsensusWeb.UserLive.Confirmation do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope} background="bg-canvas">
+    <%!-- Back goes to `/users/log-in`, not `/`: someone standing on a magic link that
+          turns out to be the wrong account needs the login screen, not the splash. --%>
+    <Layouts.app
+      flash={@flash}
+      current_path={@current_path}
+      current_scope={@current_scope}
+      background="bg-canvas"
+      back={~p"/users/log-in"}
+      context="MAGIC LINK"
+    >
       <div class="mx-auto flex w-full max-w-sm flex-1 flex-col gap-6 px-6 pb-10 pt-6">
-        <.link
-          navigate={~p"/"}
-          class="self-start font-mono text-[11px] font-semibold uppercase tracking-[0.1em] text-ink-soft transition-colors hover:text-ink"
-        >
-          Consensus
-        </.link>
-
         <h1 class="break-words text-[27px] font-bold leading-[1.15] tracking-[-0.025em]">
           Welcome, {@user.email}
         </h1>
@@ -69,10 +71,19 @@ defmodule ConsensusWeb.UserLive.Confirmation do
               Confirm and stay logged in
             </.button>
           </div>
+          <%!-- Measured 312×19.5 with a 20px hit box, 12px under the 60px primary — a
+                finger aiming at the primary and missing low lands here, and the wrong
+                outcome is a *non*-remembered session with nothing on screen saying so.
+                Grown to a real 44px box with `mt-1` on top of the form's `gap-3`, opening
+                the gap to 16px so an overshoot lands on neither. No negative margin: the
+                point is to push it away from the primary, not to keep it where it was.
+                Identical treatment to `UserLive.Login`'s "Log in only this time"; this is
+                the mandatory landing screen for every passwordless user and was missed
+                when that one was fixed. --%>
           <button
             type="submit"
             phx-disable-with="Confirming…"
-            class="text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink"
+            class="mt-1 inline-flex min-h-[44px] items-center justify-center text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink active:text-ink"
           >
             Confirm and log in only this time
           </button>
@@ -107,22 +118,31 @@ defmodule ConsensusWeb.UserLive.Confirmation do
                 Keep me logged in on this device
               </.button>
             </div>
+            <%!-- Same 20px-target correction as the confirm form above. --%>
             <button
               type="submit"
               phx-disable-with="Logging in…"
-              class="text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink"
+              class="mt-1 inline-flex min-h-[44px] items-center justify-center text-center text-[13px] font-semibold text-muted underline decoration-2 underline-offset-2 hover:text-ink active:text-ink"
             >
               Log me in only this time
             </button>
           <% end %>
         </.form>
 
+        <%!-- "*set* a password", not "change" it. This paragraph used to be unreachable in
+              practice: a magic-link registration injected a placeholder password, so
+              `clears_password?/1` was true and the `:if` suppressed it. D-045 removed the
+              placeholder (`require_password: false` — see `UserLive.Registration`), so
+              `hashed_password` is now genuinely NULL and this is what *every* magic-link
+              registrant reads on their first sign-in — told they can "change" a password
+              they have never had. `Settings` labels the field "New password", so "set" is
+              also the verb of the screen it points at. --%>
         <p
           :if={!@user.confirmed_at and not @clears_password?}
           class="text-[12.5px] leading-[1.5] text-muted"
         >
-          Confirming links this email address to your account. You can change your password
-          any time from the user settings.
+          Confirming links this email address to your account. You can set a password later
+          under Settings, or keep using the magic link.
         </p>
       </div>
     </Layouts.app>

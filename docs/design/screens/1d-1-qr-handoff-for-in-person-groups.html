@@ -1,0 +1,50 @@
+<!DOCTYPE html>
+<html><head><meta charset="utf-8">
+<title>1d · QR handoff · for in-person groups</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:ital,wght@0,400..700;1,400..700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+body{margin:0;background:#DDF0E2;font-family:'Instrument Sans',system-ui,sans-serif;color:#17211C;
+     display:flex;align-items:flex-start;justify-content:flex-start;padding:0}
+@keyframes blink{50%{opacity:0}}
+</style></head><body>
+<div style="display:flex;flex-direction:column;gap:8px">
+<div style="width:300px;height:600px;background:#6B46F0;border:2px solid #17211C;border-radius:30px;box-shadow:5px 5px 0 #17211C;overflow:hidden;display:flex;flex-direction:column;position:relative">
+  <div style="position:absolute;width:220px;height:220px;background:rgba(255,255,255,.12);border-radius:58% 42% 47% 53%/46% 55% 45% 54%;top:-60px;left:-60px"></div>
+  <div style="position:relative;flex:none;display:flex;align-items:center;gap:9px;padding:8px 13px 9px;border-bottom:2px solid #17211C;background:#fff">
+    <div style="width:27px;height:27px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:600 14px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">‹</div>
+    <a href="#1b" style="display:flex;align-items:center;gap:6px;text-decoration:none;color:#17211C"><img src="./icon.svg" width="18" height="18" alt=""><span style="font:700 12.5px 'Instrument Sans',sans-serif">Consensus</span></a>
+    <span style="flex:1;text-align:right;font:500 10px 'DM Mono',monospace;color:#5E6D64">SHARE</span>
+    <div style="width:27px;height:27px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:700 12px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">⋯</div>
+  </div>
+  <div style="position:relative;flex:1;min-height:0;overflow-y:auto;display:flex;flex-direction:column;align-items:center;padding:18px 20px 14px;gap:14px">
+  <div style="position:relative;font:700 22px/1.08 'Instrument Sans',sans-serif;color:#fff;letter-spacing:-.03em;text-align:center">Everyone's<br>at the table?</div>
+  <div style="position:relative;font:400 12.5px/1.45 'Instrument Sans',sans-serif;color:rgba(255,255,255,.85);text-align:center">Point their cameras here. No link, no typing.</div>
+  <div style="position:relative;background:#fff;border:2px solid #17211C;border-radius:20px;padding:14px;box-shadow:5px 5px 0 #17211C">
+    <div style="width:180px;height:180px;background:repeating-conic-gradient(#17211C 0 25%,#fff 0 50%) 0 0/15px 15px;border:2px solid #17211C;border-radius:6px;position:relative">
+      <div style="position:absolute;inset:50% auto auto 50%;transform:translate(-50%,-50%);width:46px;height:46px;background:#FF6A2B;border:2px solid #17211C;border-radius:50% 50% 50% 14%"></div>
+    </div>
+  </div>
+  <div style="position:relative;font:500 11.5px 'DM Mono',monospace;color:#fff;background:rgba(255,255,255,.16);border:2px solid rgba(255,255,255,.35);border-radius:99px;padding:8px 14px">CONSENSUS.APP/JOIN/AB3F9</div>
+  <div style="position:relative;margin-top:auto;width:100%;display:flex;flex-direction:column;gap:9px">
+    <div style="background:#FFD84D;border:2px solid #17211C;border-radius:15px;box-shadow:4px 4px 0 #17211C;padding:14px;text-align:center;font:700 15px 'Instrument Sans',sans-serif;cursor:pointer" style-hover="transform:translate(1px,1px);box-shadow:3px 3px 0 #17211C">3 joined · start voting</div>
+    <div style="text-align:center;font:500 10.5px 'DM Mono',monospace;color:rgba(255,255,255,.75)">OR SEND THE LINK INSTEAD</div>
+  </div>
+  </div>
+  <div style="position:relative;flex:none;border-top:2px solid #17211C;background:#F7FBF8;padding:7px 14px 9px;display:flex;flex-direction:column;align-items:center;gap:2px">
+    <div style="display:flex;align-items:center;gap:8px;padding-bottom:2px">
+      <span style="font:600 10.5px 'Instrument Sans',sans-serif;color:#3B4A42">How's this going?</span>
+      <div title="Good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#B9EFC9;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 14.6c1 1.2 2.4 1.8 4 1.8s3-.6 4-1.8"/></svg></div>
+      <div title="Not good" style="width:26px;height:26px;border:2px solid #17211C;border-radius:50%;background:#FFC2A3;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 16.4c1-1.2 2.4-1.8 4-1.8s3 .6 4 1.8"/></svg></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font:600 10.5px 'Instrument Sans',sans-serif">
+      <a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">About us</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">How it works</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none" style-hover="color:#FF6A2B">Privacy</a>
+    </div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center"><a href="https://marketfinder.us" style="color:#6B46F0;text-decoration:none" style-hover="color:#FF6A2B">also check out marketfinder.us</a></div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">Made with ❤️ in Philadelphia</div>
+  </div>
+</div>
+<div style="font:500 10.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">QR handoff · for in-person groups</div>
+</div>
+</body></html>

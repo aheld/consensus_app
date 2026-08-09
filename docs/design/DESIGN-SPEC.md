@@ -15,17 +15,34 @@ design frame at its native 340×700 (phone) size:
 
 | Target | Reference URL | Build status |
 |---|---|---|
+| header + footer (**ratified**) | <http://localhost:4999/screens/4a-0-pair-in-the-footer-header-drops-to-recommended.html> | in scope |
+| header + footer (rejected alternative) | <http://localhost:4999/screens/4b-0-pair-in-the-header-beside.html> | reference only |
 | `00a` intro / splash | <http://localhost:4999/screens/1b-0-00a-intro-start-page.html> | in scope |
-| `00` home | <http://localhost:4999/screens/1b-1-00-home-start-page-1a.html> | in scope |
-| desktop organizer console | <http://localhost:4999/screens/1b-2-desktop-organizer-console.html> | in scope (lowest priority) |
+| `00b` how it works | <http://localhost:4999/screens/1b-1-00b-how-it-works-from-footer.html> | in scope |
+| `00` home | <http://localhost:4999/screens/1b-2-00-home-start-page-1a.html> | in scope |
+| `00c` feedback form | <http://localhost:4999/screens/1b-3-00c-feedback-form-from-any-header.html> | in scope |
+| desktop organizer console | <http://localhost:4999/screens/1b-4-made-with-in-philadelphia.html> | in scope (lowest priority) |
 | `01` setup | <http://localhost:4999/screens/1a-0-01-setup.html> | in scope |
 | `02` add options | <http://localhost:4999/screens/1a-1-02-add-options-manual-mvp.html> | in scope |
 | `02b` edit an option | <http://localhost:4999/screens/1a-2-02b-edit-an-option-full-screen.html> | in scope |
 | `03` review pool | <http://localhost:4999/screens/1a-4-03-review-pool.html> | in scope |
 | `04` share | <http://localhost:4999/screens/1a-5-04-share.html> | in scope |
+| swipe deck | <http://localhost:4999/screens/1c-0-swipe-deck-kept-in-play.html> | in scope (a toggle, not the default) |
+| sticker grid (the default ballot) | <http://localhost:4999/screens/1c-1-sticker-grid-kept-in-play.html> | in scope |
+| `05` / `05b` live results | `1a-6-…`, `1a-7-…` | shipped (voting side) |
+| `06` recipient's first view | `1a-8-…` | shipped (voting side) |
 | phase-2 discover | `1a-3-…` | **out of scope** (Post-MVP, PRD scope discipline) |
-| `05` / `05b` live results | `1a-6-…`, `1a-7-…` | **out of scope** (voting side) |
-| `06` recipient's first view | `1a-8-…` | **out of scope** (voting side) |
+| share alternatives, join copy tone | `1d-…`, `1e-…` | reference only |
+
+The desktop-console row's filename is a red herring: the extractor captions each frame from the
+last centred line inside it, and that frame's last centred line is its own footer. `1b-4` is the
+1280×790 console.
+
+Two later imports sit on top of this file. [IMPORT-NOTES.md](IMPORT-NOTES.md) is the literal spec
+for everything the 2026-08-08 re-import added — the global header and footer, `00b`, `00c`, the
+swipe deck, and the token deltas. Where that import contradicts itself or contradicts a settled
+decision in `docs/decisions.md`, the rulings in
+[docs/plans/chrome-and-feedback.md](../plans/chrome-and-feedback.md) settle it and beat the frame.
 
 The design frames are static mockups. Two things in them are *not* literal targets:
 
@@ -94,6 +111,143 @@ badge (`1` yellow, `2` violet-soft, `3` peach; DM Mono 700 12px) + a 14px/700 ti
 
 Footer: tangerine **Get started** button (full width, 16px pad, 16px radius, 4px shadow)
 → registration. Below it, centred 12.5px: `Have a link? Open it →`.
+
+> **Copy substitution, shipped.** In the frame that line links to `#1b`, the mockup's own
+> ballot. There is no such route in the app — a ballot is `/join/:slug/vote` and the slug
+> only exists in the link the voter was sent — so the built version pointed it at
+> `/users/log-in`, which is precisely the screen PRD product invariant 1 says a voter must
+> never be shown. It now reads `Sent a link? Open that link — voting needs no account.
+> How it works →`. Same slot, same treatment; the destination is `/how-it-works`.
+
+> **The button's label is `Start something`, not the frame's `Get started` (D-047 §4).** The
+> same `~p"/users/register"` was called `Get started` here and `Start something` on
+> `/how-it-works` and `/privacy` — one destination, two names, one tap apart. The front door
+> is where most readers meet the action first, so it is the one that moved. The `⋯` menu's
+> signed-out entry, which had been missed, moved with it in the consolidation pass.
+
+### `00b` how it works — `/how-it-works`
+`--surface` background. Title block (7px gap): `h1` 30px/1.05, 700, `letter-spacing:-.03em`
+"How it works", then a 13.5px/1.45 `--ink-soft` sub-line. Then a vertical timeline (four
+steps in the frame, **five** as built — see the deviation below): a **36px** numbered badge
+(2px ink, **10px** radius — `00a`'s three badges are 9px; the frames disagree and 10px wins
+here — DM Mono 700 13px, `shadow-sticker-2`, fills cycling yellow → violet-soft → peach →
+yellow-soft → mint), a 2px vertical 5-on/5-off ink dash between badges but
+not after the last, and copy at 15px/700 + 12.5px/1.45 `--muted`. Then a white "Good to know"
+card (16px radius, 3px shadow, 14px pad) with an `.eyebrow` and three bullets whose `·` is
+`--violet` 700. Then the one tangerine **Start something** button. The full geometry is
+[IMPORT-NOTES.md](IMPORT-NOTES.md) §5.
+
+> **Copy substitution, shipped.** Three of the frame's own sentences are false of this
+> product and are not built (plan ruling 5 / IMPORT-NOTES Q-D / D-042). The frame's step 1
+> says *"Anyone you invite can throw theirs in too"* — friends adding options to somebody
+> else's pool is Post-MVP, and the pool freezes the moment voting opens (invariant 16 /
+> D-037). Its step 3 says *"Drag your top three"* — the ballot is approval voting with veto
+> elimination (D-034), and nothing is dragged. Its third "Good to know" bullet says *"Change
+> your ranking any time before the timer ends"* — a cast ballot is locked (D-036). The
+> structure, the rhythm and every measurement above are the frame's; the sentences
+> are rewritten to be true, and the two irreversible facts the frame denied are stated in the
+> "Good to know" card instead. Its second bullet also loses the word "nudge", which has no
+> implementation. Pinned by `refute` assertions in
+> `test/consensus_web/live/how_it_works_live_test.exs`.
+
+> **A fifth step, and a 36px badge (D-046).** The frame's four steps begin at "Add the
+> options", so nothing anywhere on the page said the organizer *names the session and sets the
+> hard deadline* — then the frame's own last step opens "When the timer runs out…", a definite
+> article for an object no earlier sentence introduces, and the single tangerine CTA drops the
+> reader onto `/groups/new`, whose only two inputs are exactly those two things. A page that
+> describes a four-step product and hands the reader an unannounced fifth screen is the
+> "unpredictable outcome" failure, and it is the same standard the CTA's own sub-line already
+> applies to accounts. Step 1 is now "Name it and pick a deadline"; the last reads "the
+> deadline you set", so its definite article has an antecedent. The badge is 36px, not 32:
+> §5.2's 32 is the content box inside a 2px border each side, and this is the element repeated
+> on every row that carries the timeline's rhythm.
+
+> **The CTA knows who is reading it.** The frame's **Start something** links to `#1b`, the
+> mockup's start page. Signed in it goes to `/groups/new`; signed out it goes to
+> `/users/register`, with an 11.5px muted line beneath saying what an account costs and that
+> voting never needs one.
+
+### `00c` feedback — `/feedback`
+`--surface` background. `h1` 27px/1.06, 700, `letter-spacing:-.025em`. Mood row: two 36px
+circles (20px face SVGs, the same two mouth paths as the footer pair), the picked one filled
+`--mint`/`--peach` with a 2px ink border and `shadow-sticker-2`, the other white at 55% opacity
+with an `ink/35` border and no shadow, then an 11.5px `--muted` caption. Then Name, Email and
+"What happened" in the app's standard field chrome, with a `0/600` DM Mono counter on the last
+one's label row. Then a dashed `ink/35` row holding the default-on "include the screen I was
+on" checkbox. Then a white action bar with a 2px ink top border, `sticky bottom-0` above the
+global footer. Geometry: [IMPORT-NOTES.md](IMPORT-NOTES.md) §6.
+
+> **Three deliberate deviations from the frame.** The frame's **Cancel** button is not built:
+> it resolves to the same route as the global header's `‹`, which plan ruling 1 names as the
+> duplicate back affordance this work exists to remove. The action bar is the one tangerine
+> **Send feedback**. The checkbox's parenthetical `(Dinner Friday? · voting)` is a session
+> title and status, and is replaced by a **route-derived label** — `(Home)`,
+> `(Adding options)` — with the literal path on a small mono line beneath. Resolving a real
+> session title from a path any visitor can type would print a stranger's session title onto
+> a signed-out page; the label is computed from the shape of the path alone, and the path is
+> what actually gets stored (D-042). And the frame carries `FEEDBACK` in the **header** slot,
+> which plan ruling 9 reserves for state rather than the page's name, so that slot is empty
+> and the body opens straight on the `h1` with no eyebrow standing in for it.
+
+> **§6.5's pinned action bar is built as pinned, and one review round shipped it in flow.**
+> The argument for flow was that a nested scroller under a sticky header is the thing a phone
+> handles worst — true, and not what §6.5 asks for. In flow the screen's single forward action
+> measured 84px below the fold at 420×700 and 159px below it at 360×640. `sticky bottom-0`
+> needs no nested scroller, and nothing competes with it for the viewport edge because
+> `Chrome.footer/1` is deliberately not sticky (D-041): at the bottom of the scroll the bar
+> ends exactly where the footer begins.
+
+> **Two more deviations, both consequences of pinning it, both D-046.** (1) **The consent row
+> moved into the bar**, above the button, where §6.4 draws it as the last child of the scroll
+> body. A `sticky` Send is reachable without scrolling by construction, so a consent row
+> anywhere in the body can be skipped unseen: measured at 420×700 with `scrollY=0`, the row's
+> top sat at 663.6 in a 700px viewport with everything below 606 behind the opaque bar and
+> `elementFromPoint` at the label's centre returning the bar, while Send sat at 620–680 fully
+> hit-testable. A default-on checkbox the sender cannot see is the same lie as one the app
+> ignores. The row keeps §6.4's geometry, its 44px label and the path line. (2) **The scroll
+> body reserves the bar's height** (`pb-[172px]`); without it the opaque bar deleted that much
+> live content — 16.4px of a 110px textarea visible at 360×640, and focusing it did not scroll,
+> because Chrome knows nothing about an overlay.
+
+> **Two metric deviations on this screen, one fixed and one recorded.** The `What happened`
+> textarea is **138px**, not the 110 that shipped: §6.3's `min-height:110px` is a *content* box
+> on top of `padding:14px` and a 2px border each side, and the app's box model is border-box.
+> Its type is **16px**, not §6.3's `400 13.5px/1.45` — iOS Safari zooms the page on focus below
+> 16px and does not zoom back, and a static mockup measured in a design tool is not evidence
+> about that (CLAUDE.md invariant 18). **`Send feedback` is deliberately left at the app-wide
+> primary metric** — 60px tall, 16px radius, `shadow-sticker-4` — against the frame's 48 / 15 /
+> `shadow-sticker-3`. `<.button variant="primary">` is shared by every screen; overriding the
+> primitive on one screen buys frame fidelity at the cost of the thing a design system is for.
+
+> **That button deviation is system-wide, not a `00c` exception — recorded here for all three
+> instances (D-047).** The frames give the same control three different metrics: §6.5's
+> `Send feedback` computes 48px tall at `700 14.5px` / 15px radius / `3px 3px 0`, §8's
+> `Send my votes` 51px at `700 15px` / 15px radius, and §9.4's `00b` CTA `700 15.5px`. The app
+> renders one primitive at 60px / 16px radius / `700 16px` / `shadow-sticker-4` on all of
+> them. Listing only the `00c` instance made it read as one recorded exception beside two
+> silent ones; it is one decision, taken once, and it holds wherever
+> `<.button variant="primary">` appears. Changing it means changing the primitive, which is a
+> new `D-0NN`, not a per-screen override.
+
+> **Two more `00c` deviations, both settled after critic round 2.** The **mood pair is 40px**,
+> not the 36 that shipped: §6.2's `width:36px; border-top-width:2px` is a content box, so the
+> frame paints 40, and D-041's amended rule re-cuts a control to the frame's painted total
+> wherever no container dimension depends on it. The label around each face went 44 → 48 in the
+> same change, which is what keeps the frame's 9px circle-to-circle gutter (a 40px circle in a
+> 44px label collapses it to 5px). And the **capture-consent row is drawn solid**, where line 43
+> of the frame draws `2px dashed rgba(23,33,28,.35)`. In this repo dashed is the documented "not
+> built yet" treatment (CLAUDE.md invariant 12; D-046 draws every inert control that way; D-047
+> changed `03 review`'s veto row for exactly this reason). That row is a live, functional,
+> default-on consent control, and it is the one place where frame `00c` and the app's own
+> convention genuinely disagree. The convention wins, because it is the one a reader of this app
+> has been taught everywhere else.
+
+> **Post-submit, undrawn in the design and settled by plan ruling 7:** the form is replaced
+> in place by a full-page thank-you — a mint sticker card with an ink check badge, a line
+> saying what was stored and whether the screen was included, and one tangerine button back
+> to the `?return_to=` the face was tapped on. The header's `‹` is dropped in that state, so
+> there is one way back rather than two. A flash over a screen that still looks like the form
+> reads as "nothing happened", which is the failure this whole piece of work removes.
 
 ### `00` home (signed in) — `/`
 `--surface` background. Header row: `h1` "Consensus" 27px/700 `letter-spacing:-.025em` and a
@@ -185,6 +339,24 @@ Full screen, not a modal. Header with a 34px `✕`, "Edit option" 15px/700, and 
 - Footer: a DM Mono 11.5px row `CLOSES THU 6:00 PM` with the live remaining time in tangerine
   on the right, above a tangerine **Get the share link**.
 
+> **The veto row is built solid, not dashed, and its copy is not the frame's (D-047).** In this
+> repo a dashed border is the documented "not built yet" treatment — `Bars` and `Movies` on
+> `02`, `Custom…` on `01`, all `disabled` and captioned "Coming soon". This row states a rule
+> that is live and enforced on every ballot, one screen after those, and it sits directly under
+> an equally immutable rule (`Anonymous voting · ALWAYS ON`) drawn as a solid violet card; a
+> reader should not have to work out which of the two a dashed border means. It is now that
+> card's sibling — same shape, a `--canvas` #DDF0E2 fill so the two are still tellable apart,
+> and a mono `1×` on the right where the anonymity card has `ALWAYS ON`. **Canvas, not the
+> yellow this line first recorded:** yellow was built and screenshotted first and it
+> out-shouted the tangerine `Get the share link`, which is the screen's one forward action
+> (the one-tangerine-per-screen rule). The `1×` renders in ink `rgb(23,33,28)` where the
+> anonymity card's `ALWAYS ON` renders violet and frame `1a-4` draws `1×` in tangerine — same
+> reason, and stated here so the asymmetry is on the record rather than read later as a bug.
+> The sentence is
+> "Everyone gets one veto. A vetoed option drops out for everyone.": "places" is dining
+> vocabulary in the one sentence stating the rule (PRD product invariant 2), and it disagreed
+> with what the voter is told one screen later.
+
 ### `04` share — `/groups/:id/share`
 The page behind is the live session, dimmed (`filter:saturate(.5); opacity:.4`). Over it, a
 bottom sheet: `--canvas` fill, 2px ink top border, `border-radius:26px 26px 32px 32px`,
@@ -203,6 +375,22 @@ bottom sheet: `--canvas` fill, 2px ink top border, `border-radius:26px 26px 32px
 1280×790, `--surface`, 20px radius, a left rail and a main column. Lowest priority of the
 in-scope set — build it after every phone screen is done, and treat it as a wide-viewport
 layout of the same home + group data rather than a separate app.
+
+### `1c-1` sticker grid — `/join/:slug/vote`
+The full spec is `IMPORT-NOTES.md` §8. One deviation is recorded here because it is a *surface*
+question rather than a metric one:
+
+> **`#ballot-status-region` is a bordered panel where the frame draws bare type (D-047).** The
+> frame prints the `2 PICKED · 1 VETO LEFT` line as one unadorned DM Mono line above the
+> submit. The app had grown three near-identical centred lines there — the counter, the
+> "nothing to send yet" hint and the D-036 irreversibility warning — in three barely different
+> treatments, so the sentence that matters most competed for the same slot as a running count.
+> They are one kind of thing (what is true about this ballot right now) and are drawn as one
+> block with an explicit weight ramp. The treatment is **not invented for this screen**: a
+> `rounded-2xl border-2 border-ink-30 bg-white/65` panel is this app's existing quiet
+> informational surface, used ten times across `core_components.check_your_email/1`, both
+> results screens and here. The counter inside it is `font-medium text-ink-soft` — DM Mono
+> 11px/500 `#3B4A42`, exactly what the frame computes for that line.
 
 ## What "matches the design" means for a critic
 

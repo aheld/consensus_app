@@ -489,6 +489,25 @@ defmodule ConsensusWeb.GroupLive.Options do
     form[:description].value |> to_string() |> String.length()
   end
 
+  ## The unsaved-draft guard on `:edit_activity` (D-045)
+  #
+  # `back_patch` and every control in the global footer re-run `handle_params/3`, which
+  # rebuilds `@edit_form` from the *stored* activity — so a name or description typed here
+  # and not saved is discarded silently. Only the `:edit_activity` branch needs this: the
+  # `:index` branch's "add an option" field commits on submit and holds nothing across a
+  # navigation that anyone would miss. The image URL form is excluded for the same reason —
+  # it is a one-field submit, and `@replacing_image` resets on its own.
+  defp edit_draft?(%{edit_form: form, editing_activity: activity}) do
+    field_differs?(form[:name].value, activity.name) or
+      field_differs?(form[:description].value, activity.description)
+  end
+
+  defp field_differs?(typed, stored),
+    do: String.trim(to_string(typed)) != String.trim(to_string(stored))
+
+  defp edit_discard_prompt,
+    do: "Leave without saving this option? Your edits to it aren't stored yet."
+
   ## Provenance line ("typed by you · no details yet", "fetching details…", ...)
   #
   # Derived from what the row actually holds, never from the fact that a fetch ran —
@@ -559,10 +578,20 @@ defmodule ConsensusWeb.GroupLive.Options do
     ]
   end
 
+  # `relative` + a `-inset-y-2` `::before` takes the painted 54×28 pill to a 54×44 hit box
+  # without moving a pixel of it — the same expander `GroupLive.Review`'s `×` and
+  # `Chrome`'s header circles use, on the screen the whole creation flow types into and
+  # repeated once per option. It grows vertically only: the pill is already wider than 44,
+  # and `Remove` sits 16px to its right with its own box (see the row below). 8px a side
+  # also stays inside the card's own `py-2.5`, so two stacked cards' boxes cannot meet.
   defp edit_pill_class do
     [
-      "inline-flex items-center gap-1 rounded-full border-2 border-ink bg-yellow",
-      "px-2.5 py-1 text-[10.5px] font-semibold text-ink shadow-sticker-2 press-2"
+      "relative inline-flex items-center gap-1 rounded-full border-2 border-ink bg-yellow",
+      "px-2.5 py-1 text-[10.5px] font-semibold text-ink shadow-sticker-2 press-2",
+      # `inset-x-0` is not decoration. An absolutely positioned `::before` with only
+      # `top`/`bottom` set has `width: auto` on empty content, which is zero — measured, the
+      # box stayed 54×29 until both axes were named.
+      "before:absolute before:inset-x-0 before:-inset-y-2 before:content-['']"
     ]
   end
 
@@ -570,24 +599,57 @@ defmodule ConsensusWeb.GroupLive.Options do
   def render(%{live_action: :edit_activity, editing_activity: activity} = assigns)
       when not is_nil(activity) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
+    <%!-- `02b`'s `✕` was a close-to-parent, i.e. a back control, so it is the global
+          header's `back` now (plan ruling 1) and this row keeps only the h1 and Remove.
+          `back_patch`, not `back`: `/groups/:id/options` is *this same LiveView*, so a
+          `navigate` would tear the socket down, cancel any in-flight `LinkPreview`
+          `start_async` keyed to a row and rebuild the stream — which is exactly what the
+          `✕`'s `patch` used to avoid. No `context` either: "EDIT OPTION" in the header
+          and "Edit option" in the row 40px below is the same string twice. --%>
+    <Layouts.app
+      flash={@flash}
+      current_path={@current_path}
+      current_scope={@current_scope}
+      back_patch={~p"/groups/#{@group}/options"}
+      back_confirm={edit_draft?(assigns) && edit_discard_prompt()}
+      footer_confirm={edit_draft?(assigns) && edit_discard_prompt()}
+    >
       <div class="flex items-center justify-between gap-3 border-b-2 border-ink px-5 py-3">
         <div class="flex items-center gap-2.5">
-          <.link
-            patch={~p"/groups/#{@group}/options"}
-            aria-label="Close"
-            class="grid size-[34px] shrink-0 place-items-center rounded-full border-2 border-ink text-base font-semibold hover:bg-yellow"
-          >
-            <span aria-hidden="true">✕</span>
-          </.link>
           <h1 class="text-[15px] font-bold text-ink">Edit option</h1>
         </div>
+        <%!-- Ink, not tangerine. Tangerine appears exactly once per screen as the one
+              forward action, and on this screen that is "Save option"; a destructive
+              control wearing the same colour as the forward one is the house rule
+              broken twice over. --%>
+        <%!-- **The one control on this screen that destroys an option, and it was the
+              smallest.** Measured at 360×640: painted 47.8×18.8 with no `::before` at all,
+              i.e. a 19px effective box on the vertical axis — 43% of the 44px platform
+              minimum — 13.9px under the sticky header, beside a 56px field and a 60px Save.
+
+              Same pseudo-element expander `Chrome.header/1` uses for its 29px circles and
+              `edit_pill_class/0` uses two hundred lines up: the glyph keeps the design's
+              12.5px underline treatment and the hit box reaches 44. The arithmetic is off
+              the **padding** box (no border and no padding here, so 18.8), giving
+              (44 − 18.8) / 2 = 12.6px a side — top lands at 49.3 against the header's 48px
+              bottom edge, so the two do not meet. Both axes are named because an absolutely
+              positioned `::before` with only `top`/`bottom` set has `width: auto`, which on
+              empty content is zero.
+
+              `active:` beside `hover:` for the reason every other control in this app now
+              carries it: `:hover` does not exist on touch, so on a phone the destructive
+              control acknowledged a tap in no way at all until the round-trip landed. --%>
         <button
           type="button"
           phx-click="remove_option"
           data-confirm={"Remove #{@editing_activity.name}? This can't be undone."}
           aria-label={"Remove #{@editing_activity.name}"}
-          class="text-[12.5px] font-semibold text-tangerine hover:underline"
+          class={[
+            "relative text-[12.5px] font-semibold text-ink-soft underline decoration-ink/30",
+            "underline-offset-2 hover:text-ink hover:decoration-ink",
+            "active:text-ink active:decoration-ink",
+            "before:absolute before:-inset-x-2 before:-inset-y-[12.6px] before:content-['']"
+          ]}
         >
           Remove
         </button>
@@ -607,21 +669,47 @@ defmodule ConsensusWeb.GroupLive.Options do
             >
               PULLED FROM LINK
             </span>
+            <%!-- **These two were the only controls in the app whose entire feedback state
+                  was `hover:`** — no `active:`, no `press-*`, and `box-shadow: none`, so on
+                  touch a tap produced no visual change whatsoever. Both also measured 32.5px
+                  tall at 360×640 (65.3×32.5 and 99×32.5), under the 44px minimum.
+
+                  The expander grows **vertically only**: they sit in a `flex gap-1.5` pair,
+                  so 6px is all the horizontal clearance there is and two boxes meeting would
+                  be worse than two small ones. `inset-x-0` rather than an inset, because the
+                  `width: auto` trap above applies here too. Off the padding box again —
+                  `border-2` means 32.5 − 4 = 28.5, so (44 − 28.5) / 2 = 7.75px a side, which
+                  lands the pair at 234.75–282.75 inside a photo frame whose bottom edge is
+                  285. --%>
             <div class="absolute bottom-2.5 right-2.5 flex gap-1.5">
               <button
                 type="button"
                 phx-click="toggle_replace_image"
-                class="rounded-2xl border-2 border-ink bg-white px-2.5 py-1.5 text-[11px] font-semibold hover:bg-yellow"
+                class={[
+                  "relative rounded-2xl border-2 border-ink bg-white px-2.5 py-1.5",
+                  "text-[11px] font-semibold hover:bg-yellow active:bg-yellow",
+                  "before:absolute before:inset-x-0 before:-inset-y-[7.75px] before:content-['']"
+                ]}
               >
                 Replace
               </button>
+              <%!-- "Remove photo", not "Remove": the row above this frame carries a
+                    `Remove` that deletes the whole option, and two controls with the same
+                    word on one screen doing different things — one destructive, one
+                    trivially undoable by pasting the link again — is plan confusion type 5.
+                    The bare word belongs to the destructive one. --%>
               <button
                 type="button"
                 phx-click="remove_image"
                 disabled={is_nil(@editing_activity.image_url)}
-                class="rounded-2xl border-2 border-ink bg-white px-2.5 py-1.5 text-[11px] font-semibold hover:bg-yellow disabled:cursor-not-allowed disabled:opacity-45"
+                class={[
+                  "relative rounded-2xl border-2 border-ink bg-white px-2.5 py-1.5",
+                  "text-[11px] font-semibold hover:bg-yellow active:bg-yellow",
+                  "disabled:cursor-not-allowed disabled:opacity-45",
+                  "before:absolute before:inset-x-0 before:-inset-y-[7.75px] before:content-['']"
+                ]}
               >
-                Remove
+                Remove photo
               </button>
             </div>
           </.photo_frame>
@@ -638,7 +726,7 @@ defmodule ConsensusWeb.GroupLive.Options do
                 field={@image_form[:url]}
                 type="text"
                 placeholder="https://…"
-                class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[13px] shadow-field focus:outline-none"
+                class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] shadow-field focus:outline-none"
               />
             </div>
             <button type="submit" class={yellow_button_class()}>Set</button>
@@ -657,7 +745,7 @@ defmodule ConsensusWeb.GroupLive.Options do
             <.input
               field={@edit_form[:name]}
               type="text"
-              class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[15px] font-bold shadow-field focus:outline-none"
+              class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] font-bold shadow-field focus:outline-none"
             />
           </div>
 
@@ -680,9 +768,14 @@ defmodule ConsensusWeb.GroupLive.Options do
             <.input
               field={@edit_form[:description]}
               type="textarea"
-              class="min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[13.5px] leading-[1.45] shadow-field focus:outline-none"
+              class="min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] leading-[1.45] shadow-field focus:outline-none"
             />
-            <p class="text-[11px] text-muted">Everyone sees this when they rank.</p>
+            <%!-- "vote", not "rank". Nothing in this app ranks anything —
+                  `JoinLive.Ballot`'s moduledoc says "there is no ranking anywhere in here"
+                  and `Consensus.Voting.Vote`'s says "there is deliberately no rank or weight
+                  column here". This was the last user-visible instance in `lib/`; keep
+                  `grep -rni rank lib/` clean. --%>
+            <p class="text-[11px] text-muted">Everyone sees this when they vote.</p>
           </div>
         </.form>
 
@@ -708,13 +801,11 @@ defmodule ConsensusWeb.GroupLive.Options do
         </div>
       </div>
 
+      <%!-- "Cancel" is gone. It navigated to `/groups/:id/options` — the same place the
+            header's `‹` goes — so it was the second back affordance plan ruling 1 exists
+            to remove, and it sat next to the tangerine as if it were the other half of a
+            pair of form actions. Save is the only action in this bar now. --%>
       <div class="flex items-center gap-2.5 border-t-2 border-ink bg-white px-5 py-4">
-        <.link
-          patch={~p"/groups/#{@group}/options"}
-          class="rounded-2xl border-2 border-ink bg-white px-4 py-3.5 text-[14px] font-bold text-ink shadow-sticker-2 press-2 hover:bg-yellow"
-        >
-          Cancel
-        </.link>
         <button
           type="submit"
           form="edit-option-form"
@@ -729,9 +820,15 @@ defmodule ConsensusWeb.GroupLive.Options do
 
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
+    <Layouts.app
+      flash={@flash}
+      current_path={@current_path}
+      current_scope={@current_scope}
+      back={~p"/groups/#{@group}/edit"}
+      context="STEP 2 OF 3"
+    >
       <div class="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-4">
-        <.step_progress total={3} current={2} back={~p"/groups/#{@group}/edit"} />
+        <.step_progress total={3} current={2} />
 
         <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em] text-ink">
           Add the<br />options
@@ -753,6 +850,14 @@ defmodule ConsensusWeb.GroupLive.Options do
         </div>
 
         <div class="flex flex-col gap-2">
+          <%!-- **Every field on this screen is 16px, and none may go below it.** iOS
+                Safari zooms the page on focus whenever the focused field computes under
+                16px and never zooms back out; this is the field the whole creation flow
+                types into, so it was the worst instance in the app. The frames specify
+                13–15px here — a static mockup measured in a design tool cannot see focus
+                zoom, and the join-entry field was already raised to 16px for exactly this
+                reason (the precedent existed, it simply was not swept). Recorded in
+                D-046. --%>
           <.eyebrow>Type a name or paste a link</.eyebrow>
           <.form for={@add_form} id="add-option-form" phx-submit="add_activity" class="flex gap-2">
             <div class="flex-1">
@@ -761,17 +866,33 @@ defmodule ConsensusWeb.GroupLive.Options do
                 field={@add_form[:query]}
                 type="text"
                 placeholder="Restaurant name or a link"
-                class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[14px] font-medium shadow-field placeholder:text-faint focus:outline-none"
+                class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] font-medium shadow-field placeholder:text-faint focus:outline-none"
               />
             </div>
             <button type="submit" class={yellow_button_class()}>Add</button>
           </.form>
+          <%!-- Place discovery (Yelp/Places) is Post-MVP and deliberately absent — see the PRD's
+                scope discipline. Saying so here is not decoration: the field accepts a typed name,
+                so someone who types "thai near me" and gets a pool entry called "thai near me" has
+                been silently misunderstood. This is the same obligation the dashed Bars/Movies
+                chips above carry — a thing that is not yet real has to look and read like it. --%>
+          <p class="text-[11.5px] leading-[1.4] text-muted">
+            Restaurant search coming soon. For now, type the name yourself or paste a link.
+          </p>
         </div>
 
+        <%!-- `overflow-x-clip` beside `overflow-y-auto`: Tailwind's `overflow-y-auto` sets
+              only one axis and the other computes to `auto`, so the cards' 2px hard offset
+              shadow (`scrollWidth` 382 against `clientWidth` 380 — measured with a single
+              option in the pool) painted a permanent full-width horizontal scrollbar under
+              the pool that scrolls exactly two pixels. At this width it reads as a divider
+              or a progress bar, not as a scrollbar, on the screen the organizer spends the
+              most time on. Clipping the axis rather than padding the track keeps the
+              cards' left edge on the page's type column. --%>
         <div
           id="pool-list"
           phx-update="stream"
-          class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto pb-2"
+          class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-clip pb-2"
         >
           <.sticker_card
             :for={{dom_id, activity} <- @streams.activities}
@@ -786,7 +907,13 @@ defmodule ConsensusWeb.GroupLive.Options do
                 {provenance_text(activity, @fetching)}
               </p>
             </div>
-            <div class="flex shrink-0 items-center gap-1.5">
+            <%!-- `gap-6`, not `gap-2.5`. Both controls now carry a `::before` expander, and
+                  `Remove` starts 6px early (`-m-1.5`) before its box adds another 8px to the
+                  left — so the gutter has to cover 14px before either control gets any clear
+                  space at all. At 16px the destructive control's hit box came within 2px of
+                  Edit's; 24px leaves 10px, measured. The name beside them is
+                  `min-w-0 flex-1 truncate`, so the width comes out of an ellipsis. --%>
+            <div class="flex shrink-0 items-center gap-6">
               <.link
                 patch={~p"/groups/#{@group}/options/#{activity.id}"}
                 aria-label={"Edit #{activity.name}"}
@@ -794,13 +921,27 @@ defmodule ConsensusWeb.GroupLive.Options do
               >
                 ✎ Edit
               </.link>
+              <%!-- Measured 16×24px, whose entire affordance was a hover colour — which does
+                    not exist on touch, so a tap gave no feedback at all. `-m-1.5 p-1.5`
+                    grows the box to 28×36 without moving the glyph, and `active:` gives
+                    touch the acknowledgement `hover:` gave the pointer.
+
+                    28×36 was still 8px short in each axis of the 44×44 platform minimum, on
+                    the destructive control of the screen the creation flow lives in — while
+                    `Chrome`'s header circles and `GroupLive.Review`'s `×` both reach 44 with
+                    a `::before` expander. `-inset-x-2 -inset-y-1` is that expander sized to
+                    land exactly on 44×44: asymmetric because the padding already bought
+                    height and not width. Both insets stay inside the card's own `px-2.5` /
+                    `py-2.5`, so no two cards' Remove boxes can touch across the list gap —
+                    which for a destructive control would be worse than the small target
+                    was. `data-confirm` is still what makes a mis-tap recoverable. --%>
               <button
                 type="button"
                 phx-click="delete_activity"
                 phx-value-id={activity.id}
                 data-confirm={"Remove #{activity.name} from the pool?"}
                 aria-label={"Remove #{activity.name}"}
-                class="text-muted hover:text-tangerine"
+                class="relative -m-1.5 rounded-full p-1.5 text-muted transition-colors before:absolute before:-inset-x-2 before:-inset-y-1 before:content-[''] hover:text-tangerine active:bg-yellow active:text-tangerine"
               >
                 <.icon name="hero-x-mark" class="size-4" />
               </button>

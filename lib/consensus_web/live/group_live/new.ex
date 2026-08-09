@@ -48,9 +48,10 @@ defmodule ConsensusWeb.GroupLive.New do
     group = %Group{organizer_id: socket.assigns.scope.user.id}
 
     socket
-    |> assign(:page_title, "New group")
+    |> assign(:page_title, "New session")
     |> assign(:group, group)
     |> assign(:selected_key, nil)
+    |> assign(:selected_at, nil)
     |> assign(:chips, Deadlines.options(socket.assigns.now, socket.assigns.tz_offset))
     |> assign_form(Activities.change_group(socket.assigns.scope, group))
   end
@@ -67,15 +68,16 @@ defmodule ConsensusWeb.GroupLive.New do
           )
 
         socket
-        |> assign(:page_title, "Edit group")
+        |> assign(:page_title, "Edit session")
         |> assign(:group, group)
         |> assign(:selected_key, selected_key_for(chips, group.deadline_at))
+        |> assign(:selected_at, group.deadline_at)
         |> assign(:chips, chips)
         |> assign_form(Activities.change_group(socket.assigns.scope, group))
 
       :error ->
         socket
-        |> put_flash(:error, "That group could not be found.")
+        |> put_flash(:error, "That session could not be found.")
         |> push_navigate(to: ~p"/")
     end
   end
@@ -126,7 +128,10 @@ defmodule ConsensusWeb.GroupLive.New do
   def handle_event("validate", %{"group" => group_params}, socket) do
     changeset =
       socket.assigns.scope
-      |> Activities.change_group(socket.assigns.group, group_params)
+      |> Activities.change_group(
+        socket.assigns.group,
+        keep_selected_deadline(group_params, socket)
+      )
       |> Map.put(:action, :validate)
 
     {:noreply, assign_form(socket, changeset)}
@@ -140,7 +145,27 @@ defmodule ConsensusWeb.GroupLive.New do
   end
 
   def handle_event("save", %{"group" => group_params}, socket) do
-    save_group(socket, socket.assigns.live_action, group_params)
+    save_group(socket, socket.assigns.live_action, keep_selected_deadline(group_params, socket))
+  end
+
+  # The chips write `deadline_at` into a hidden input by patching the DOM from the server.
+  # A `phx-change="validate"` fired *before* that patch lands — pick a chip, then type in the
+  # title within the same tick, which is one gesture on a phone — serialises the still-empty
+  # hidden field, and the server took the browser's blank over the selection it had just
+  # made. Reproduced: chip click and title `input` in the same tick left `deadline_at`
+  # empty and all three chips at `aria-pressed="false"`, and the subsequent submit failed
+  # with "Pick when voting closes"; with 2.5s between them both survived. Self-correcting
+  # (the chip visibly deselects) but the reaction is "I did pick one", and the window widens
+  # on a slow connection.
+  #
+  # A blank `deadline_at` can never mean "the organizer cleared it": the only controls that
+  # write it are the three chips, and `Custom…` is disabled. So a blank always means "the
+  # form went out before the patch came back", and the server's own selection wins.
+  defp keep_selected_deadline(group_params, socket) do
+    case {deadline_blank?(group_params), socket.assigns.selected_at} do
+      {true, %DateTime{} = at} -> Map.put(group_params, "deadline_at", DateTime.to_iso8601(at))
+      _ -> group_params
+    end
   end
 
   # Re-resolved fresh at click time (never the value computed at mount) — see
@@ -179,6 +204,7 @@ defmodule ConsensusWeb.GroupLive.New do
 
     socket
     |> assign(:selected_key, key)
+    |> assign(:selected_at, at)
     |> assign_form(changeset)
   end
 
@@ -210,6 +236,32 @@ defmodule ConsensusWeb.GroupLive.New do
   defp perform_save(:edit, scope, group, params),
     do: Activities.update_group(scope, group, params)
 
+  # -- the unsaved-draft guard (D-045) -------------------------------------------------
+
+  # Nothing on this step is written until "Add the options →". The global footer and the
+  # header `‹` are both `navigate`s, so a tap on either remounts this LiveView and the
+  # title is gone with no confirm and no undo. Measured: typing a title, tapping the
+  # footer's About us and pressing back returned an empty field.
+  #
+  # `:new` and `:edit` are both covered by comparing against what is *stored* rather than
+  # by testing for emptiness — on `:edit` the form arrives pre-filled, so "non-empty"
+  # would arm the prompt on a form nobody has touched.
+  defp draft?(assigns) do
+    typed_title(assigns.form) != stored_title(assigns.group) or
+      deadline_moved?(assigns.selected_at, assigns.group.deadline_at)
+  end
+
+  defp typed_title(form), do: form[:title].value |> to_string() |> String.trim()
+  defp stored_title(group), do: group.title |> to_string() |> String.trim()
+
+  defp deadline_moved?(nil, nil), do: false
+  defp deadline_moved?(nil, _stored), do: false
+  defp deadline_moved?(_selected, nil), do: true
+  defp deadline_moved?(selected, stored), do: DateTime.compare(selected, stored) != :eq
+
+  defp discard_prompt,
+    do: "Leave without saving this session? The title and deadline aren't stored yet."
+
   defp deadline_error_message(form) do
     case form[:deadline_at].errors do
       [] -> nil
@@ -220,9 +272,19 @@ defmodule ConsensusWeb.GroupLive.New do
   @impl true
   def render(assigns) do
     ~H"""
-    <Layouts.app flash={@flash} current_scope={@current_scope}>
+    <%!-- The route this step's `‹` used to carry moved into the global header (plan
+          ruling 1); `step_progress/1` keeps only the bar and the counter. --%>
+    <Layouts.app
+      flash={@flash}
+      current_path={@current_path}
+      current_scope={@current_scope}
+      back={~p"/"}
+      back_confirm={draft?(assigns) && discard_prompt()}
+      footer_confirm={draft?(assigns) && discard_prompt()}
+      context="STEP 1 OF 3"
+    >
       <div class="flex flex-1 flex-col gap-5 px-5 pb-6 pt-4">
-        <.step_progress total={3} current={1} back={~p"/"} />
+        <.step_progress total={3} current={1} />
 
         <h1 class="text-[31px] font-bold leading-[1.08] tracking-[-0.025em]">
           What's the<br />plan?
