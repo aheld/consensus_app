@@ -26,6 +26,11 @@ defmodule ConsensusWeb.AboutLive do
     {:ok,
      socket
      |> assign(:page_title, "About")
+     |> assign(:og_title, "About Consensus")
+     |> assign(
+       :og_description,
+       "A small tool for settling where a group is eating. Built in Philadelphia."
+     )
      |> assign(:return_to, safe_back(params))}
   end
 

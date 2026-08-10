@@ -144,6 +144,8 @@ defmodule ConsensusWeb.FeedbackLive do
     {:ok,
      socket
      |> assign(:page_title, "Feedback")
+     |> assign(:og_title, "Send feedback · Consensus")
+     |> assign(:og_description, "Something broken, confusing, or missing? Tell us here.")
      |> assign(:sent?, false)
      |> assign(:sent_entry, nil)}
   end

@@ -105,17 +105,40 @@ defmodule ConsensusWeb.JoinLive.Entry do
 
   defp assign_entry(socket, group) do
     voted_participants = group |> Voting.participants() |> Enum.filter(& &1.voted?)
+    organizer = Accounts.get_user!(group.organizer_id)
+    activity_count = length(group.activities)
 
     socket
     |> assign(:page_title, group.title)
-    |> assign(:organizer, Accounts.get_user!(group.organizer_id))
-    |> assign(:activity_count, length(group.activities))
+    |> assign_social_preview(group, organizer, activity_count)
+    |> assign(:organizer, organizer)
+    |> assign(:activity_count, activity_count)
     |> assign(:voted_participants, voted_participants)
     |> assign(:voted_count, length(voted_participants))
     |> assign(:now, DateTime.utc_now())
     |> assign_tz_offset()
     |> assign(:form, join_form(%{"display_name" => "", "kind" => "guest"}))
     |> assign(:trigger_submit, false)
+  end
+
+  # This is the link that actually gets pasted into a group chat, so it is the one screen
+  # whose card must carry the group's own words rather than the app-wide default. The shape
+  # is frame `1d-0`'s chat card verbatim: "<title> · N spots" over one line about who called
+  # the vote and what it costs to answer.
+  #
+  # No deadline, deliberately — `ConsensusWeb.SocialPreview`'s moduledoc has the two
+  # reasons (there is no timezone on a dead render, and unfurl caches outlive a countdown).
+  # `closes_pill_text/3` below still renders it on the page itself, where the socket has a
+  # real `tz_offset` and the value is recomputed on every mount.
+  defp assign_social_preview(socket, group, organizer, activity_count) do
+    socket
+    |> assign(:og_title, "#{group.title} · #{spots_pill_text(activity_count)}")
+    |> assign(
+      :og_description,
+      "#{organizer.username} set up a vote. #{activity_count} #{pluralize(activity_count, "spot")}, " <>
+        "one tap each, and your picks stay anonymous. No app, no account."
+    )
+    |> assign(:og_url, ConsensusWeb.Endpoint.url() <> ~p"/join/#{group.slug}")
   end
 
   # Same connect-params idiom `ConsensusWeb.GroupLive.Share` uses: `assets/js/app.js` sends

@@ -2031,6 +2031,53 @@ D-048 §3 corrected the card and left the footer. `finished_headline/1` had no t
 - **One tangerine remains unresolved and is recorded rather than fixed:** a completed session whose winner carries a `source_url` renders `View {name} →` inside the winner card *and* `Start another session →`/`Create your own →` in the footer, both tangerine. Both are genuinely forward actions — one is PRD product invariant 5's booking CTA, the other the product's own next step — and picking between them is a product decision, not a colour cleanup. It was not reachable on the sessions measured here (their winners had no link).
 - 944 tests. `README.md`, `CLAUDE.md` and the `elixir` skill carry the count and move with it.
 
+## D-050 — Social previews: one static `og:image` for the whole app, per-group detail in the text, and no clock in the card
+
+**Date:** 2026-08-09
+**Status:** settled
+
+**Context.** The product's entire distribution model is one link pasted into a group chat — `04 share` exists to produce it, `POST /join/:slug/enter` exists to receive whoever taps it, and PRD product invariant 1 (voter friction is zero) is measured on what happens next. Design frame `1d-0` (`docs/design/screens/1d-0-in-app-preview-paste-ready-copy.html`) draws that paste under the heading "HOW IT LOOKS IN CHAT": a card with an image band, the group's title, and the site name.
+
+**The app emitted no `og:` tags at all.** Not a wrong card — no card. `root.html.heex` carried `charset`, `viewport`, `csrf-token`, `theme-color`, a `<title>` and a favicon, and nothing else; every paste of a Consensus link into Slack, iMessage, WhatsApp or a DM rendered as a bare blue URL. There was not even a `<meta name="description">`. The one screen in the app whose sole job is "send this link" promised a card the document could not produce.
+
+**Decision.**
+
+### 1. The image is one static asset, and per-group detail rides in the text
+
+`og:image` is a single pre-rendered **1200×630** PNG for the whole app, `priv/static/images/og/consensus-og.png`, rendered from the "Consensus - Social Preview" file in the linked Claude Design project (`867b0685-278c-4ce4-ae2c-bce2135705af`) via headless Chrome at exact pixel dimensions. Two companion sizes from the same file ship beside it and are referenced by nothing: `consensus-square.png` (1200×1200, feed posts) and `consensus-story.png` (1080×1920, stories). They are marketing assets, checked in so the next person does not re-render them from a design file they have to find first.
+
+The alternative was a `GET /join/:slug/og.png` that burns the group's title, spot count and deadline into the pixels. Rejected: it needs an SVG rasterizer in the release image and a cache, on the single Fly machine that already serialises every write behind one SQLite lock (invariant 15) — and it buys nothing a chat client does not already render, because **every unfurler draws `og:title` and `og:description` as text beside the image**, which is exactly where frame `1d-0` puts the group's own words. The frame's own chat card shows a plain gradient band with "Dinner Friday? · 5 spots" as text *below* it; the design had already made this decision and the implementation had only to read it.
+
+`og:image` is emitted **absolute** (`Endpoint.url() <> ~p"..."`, the idiom `GroupLive.Share.join_url/1` already uses). A root-relative path is not resolved by unfurlers, it is dropped, and the card renders imageless — a failure that looks exactly like having shipped nothing. `og:image:width`/`:height` are declared because Facebook and LinkedIn otherwise render the first fetch as a thumbnail and only upgrade once their own crawler has measured the file. `twitter:card` is `summary_large_image`, which is what makes 1200×630 render full-bleed rather than as a 120px square.
+
+### 2. The card carries no clock, on any screen
+
+`06`'s pill and `04`'s invite card both say "closes thu 6pm" and it was tempting to repeat it in `og:description`. Two independent reasons not to, and either alone is sufficient:
+
+- **There is no timezone on a dead render.** This app carries no timezone database (D-031); local time arrives as a `tz_offset` LiveView connect param, and **a crawler never opens a websocket**. The clock would be computed at UTC, so a Thursday 6pm ET deadline unfurls as "closes fri 10pm" — wrong, in the artifact whose whole job is to be trusted at a glance.
+- **Unfurl caches are sticky and the tags are not live.** Slack, iMessage and WhatsApp cache a card for hours to days, keyed on the URL. A countdown written into that cache is wrong shortly after and cannot be corrected; the page itself is live over PubSub, and the card must not pretend to be.
+
+The same rule kills the tally on `/join/:slug/results`: the card names the vote and its organizer, never the leader. A leader that changes with the next ballot would be pinned wrong in a cache with no way to correct it. **Anything that changes faster than a chat client's cache does not go in a meta tag.**
+
+### 3. One component, defaults that make silence correct, and a canonical that drops the query
+
+`ConsensusWeb.SocialPreview.meta_tags/1` renders the whole block and is called once, from `root.html.heex`, reading `assigns[:og_title]`, `assigns[:og_description]`, `assigns[:og_url]` and `assigns[:current_path]` by **bracket access** — the same layout renders for `HealthController` and the two error pages, none of which assign anything. Every attribute falls back to the app-wide card (the design's own "Decide and Dine" headline and sub-line, so the card's text and its image say the same thing), so a screen that says nothing still unfurls correctly, and a new screen inherits a correct card by doing nothing.
+
+The canonical URL defaults to `@current_path` **with the query string stripped**. `ConsensusWeb.CurrentPath` deliberately keeps the query (the chrome's `?return_to=` depends on it), but every standing page is reachable as `/about?return_to=<wherever the footer was tapped>`, so honouring it would mint one canonical — and one sticky unfurl-cache entry — per originating screen for a page with a single identity.
+
+Title and description are **clamped in the component** (70 and 200 characters, whitespace collapsed) rather than left to the platform. Group titles are free text and, per invariant 11, the changeset is the only length limit and it is generous; clamping here means the ellipsis lands where we chose and a pathological title cannot push the rest of the card out of the render.
+
+Screens that set their own: `JoinLive.Entry` (frame `1d-0`'s shape verbatim — `"<title> · N spots"` over who called the vote and what answering costs), `JoinLive.Results`, and the four standing pages. `HomeLive` sets nothing on purpose — the app-wide default *is* the splash, and duplicating it would be two sources for one string.
+
+**Consequences.**
+
+- **`og:image` must stay absolute.** A relative path does not degrade, it disappears. Pinned by `social_preview_test.exs`, which asserts the tag matches `image_url/0` and starts with a scheme.
+- **The tags exist only on the dead render**, which is correct and load-bearing: no crawler opens a websocket, so a LiveView assigning them in `mount/3` is sufficient and none of them need to survive a `live_patch`. A future screen that sets `og_title` from `handle_params` alone would be invisible to every unfurler.
+- **`social_preview_test.exs` asserts the image is actually served** (`GET` on the path from `image_url/0` returns 200 and `image/png`), because a meta tag pointing at a 404 is the failure mode that leaves the whole feature looking shipped. It also pins the tags route by route rather than only as a component — the component can be perfectly correct while no screen passes it anything, which is the same reason `chrome_test.exs` tests both halves.
+- **Nothing added `noindex`, and the join slug is still a capability URL.** Making a share link unfurl and making it uncrawlable are opposite pressures — `facebookexternalhit` and `Twitterbot` read `robots.txt`, so the obvious defence also suppresses the previews this entry exists to add. Whether `/join/:slug` should be excluded from search engines, and by what mechanism, is a real question and is **not** answered here; it is recorded in `open-questions.md` as F-9.
+- **The render is reproducible, checked in, and deterministic.** `bash docs/design/social-preview/render.sh` rewrites all three PNGs from the three transcribed HTML panels beside it; re-running it against an unchanged source produces byte-identical files, which is what makes an accidental re-render a no-op in `git status` rather than a diff nobody can review. It is a script rather than a mix task on purpose — it needs Chrome and the network, so it must not sit anywhere `mix precommit` or CI could reach it. The icon is read from `priv/static/images/icon.svg` at render time rather than duplicated, and inlined as a `data:` URI because Chrome refuses `file://` subresources. Re-render only when the design file changes, and re-check the `og:image:width`/`:height` pair if an aspect ratio does.
+- 964 tests. `README.md`, `CLAUDE.md` and the `elixir` skill carry the count and move with it.
+
 ---
 
 ## Still open

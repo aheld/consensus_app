@@ -569,7 +569,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 944 tests, 0 failures (~7s warm) — the one count in this file
+mix test                        # 964 tests, 0 failures (~7s warm) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
@@ -752,7 +752,7 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 ├── config/                      # config, dev, test, prod, runtime
 ├── docs/
 │   ├── PRD.md                   # product north star (voting, ranking, results are not built)
-│   ├── decisions.md             # ADR-lite technical log, D-001 through D-046
+│   ├── decisions.md             # ADR-lite technical log, D-001 through D-050
 │   ├── open-questions.md
 │   ├── design/                  # DESIGN-SPEC.md (visual source of truth) + per-screen extracts
 │   ├── plans/                   # per-feature implementation plans, incl. creation-flow.md

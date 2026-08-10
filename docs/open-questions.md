@@ -246,6 +246,25 @@ Each was reproduced, each has a known shape, none blocks anything.
   nothing on screen. The sentence is true of both and the distinction has never been asked for; if
   it is, the tally already carries the approvals to compute it.
 
+### F-9. A join link unfurls, and is still a capability URL (D-050)
+
+D-050 gave `/join/:slug` real OpenGraph tags so a pasted link renders as a card. It deliberately did
+**not** add `noindex` or a `robots.txt` rule, because the two pressures are opposite: `facebookexternalhit`
+and `Twitterbot` read `robots.txt`, so the obvious defence against a search engine also suppresses the
+preview the entry exists to add, and `<meta name="robots" content="noindex">` is honoured inconsistently
+across unfurlers.
+
+The underlying exposure is not new and is not created by the meta tags — the slug has always been the
+only thing standing between a stranger and a ballot, and `JoinLive.Results` already renders the guest
+list to anyone holding the link (D-049 §1). What the tags change is that a leaked link now looks
+inviting rather than opaque. Nothing measured suggests these URLs are being crawled; there is no
+`robots.txt` in `priv/static/` at all, though `ConsensusWeb.static_paths/0` already lists one.
+
+Open: whether `/join/:slug` should be excluded from search indexing, and by what mechanism —
+a `robots.txt` with an explicit allow-list for the known unfurler user agents, an `X-Robots-Tag`
+on that route only, or nothing at all on the grounds that a link handed to a group chat is meant to be
+followed. It is a product call about how private a session is, not a bug.
+
 ### F-5. Deferred by explicit decision, listed so they are not rediscovered as bugs
 
 - **The admin sudo window is computed once, at mount.** A long-open `/admin/users` renders enabled
