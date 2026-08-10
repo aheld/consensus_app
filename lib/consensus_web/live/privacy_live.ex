@@ -59,6 +59,11 @@ defmodule ConsensusWeb.PrivacyLive do
     {:ok,
      socket
      |> assign(:page_title, "Privacy")
+     |> assign(:og_title, "Privacy · Consensus")
+     |> assign(
+       :og_description,
+       "What Consensus stores, what it doesn't, and who can see your votes. Voting needs no account."
+     )
      |> assign(:return_to, safe_back(params))}
   end
 

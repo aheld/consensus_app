@@ -100,6 +100,16 @@ defmodule ConsensusWeb.JoinLive.Results do
     {:ok,
      socket
      |> assign(:page_title, "Results · #{group.title}")
+     # The card names the vote but never the tally, for the reason
+     # `ConsensusWeb.SocialPreview` gives for leaving the deadline out of `06`'s: a chat
+     # client caches an unfurl for hours, and a leader that changes with the next ballot
+     # would be pinned wrong in that cache with no way to correct it. The page itself is
+     # live over PubSub; the card is not, and must not pretend to be.
+     |> assign(:og_title, "#{group.title} · results")
+     |> assign(
+       :og_description,
+       "#{organizer.username} called this vote on Consensus. Open the link to see where it landed."
+     )
      |> assign(:now, DateTime.utc_now())
      |> assign(:slug, slug)
      |> assign(:organizer_username, organizer.username)

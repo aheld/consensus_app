@@ -159,6 +159,12 @@ defmodule ConsensusWeb.HowItWorksLive do
     {:ok,
      socket
      |> assign(:page_title, "How it works")
+     |> assign(:og_title, "How Consensus works")
+     |> assign(
+       :og_description,
+       "Put the options up, share one link, everyone taps what they'd be happy with. " <>
+         "The deadline picks the winner. No app, no account to vote."
+     )
      |> assign(:steps, @steps)
      |> assign(:good_to_know, @good_to_know)
      |> assign(:honesty, @honesty)

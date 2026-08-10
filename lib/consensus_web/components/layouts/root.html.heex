@@ -7,6 +7,18 @@
     <meta name="theme-color" content="#DDF0E2" />
     <.live_title default="Consensus" suffix=" · Consensus" phx-no-format>{assigns[:page_title]}</.live_title>
     <link rel="icon" href={~p"/images/icon.svg"} type="image/svg+xml" />
+    <%!-- What a Consensus link looks like pasted into a group chat (D-050). Bracket access
+          on all three, because this layout also renders for the health controller and the
+          two error pages, none of which assign anything: `ConsensusWeb.SocialPreview` falls
+          back to the app-wide card whenever a screen says nothing. Only the *dead* render
+          reaches an unfurler — no crawler opens a websocket — so a LiveView setting these
+          in `mount/3` is enough, and none of them need to survive a `live_patch`. --%>
+    <ConsensusWeb.SocialPreview.meta_tags
+      title={assigns[:og_title]}
+      description={assigns[:og_description]}
+      url={assigns[:og_url]}
+      current_path={assigns[:current_path]}
+    />
     <%!-- Instrument Sans carries every surface; DM Mono carries time, counts, urls and the
           uppercase section labels. Both are named in docs/design/DESIGN-SPEC.md and the
           family names have to match what assets/css/app.css asks for. --%>
