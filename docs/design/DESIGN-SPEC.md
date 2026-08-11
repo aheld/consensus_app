@@ -392,6 +392,87 @@ question rather than a metric one:
 > results screens and here. The counter inside it is `font-medium text-ink-soft` — DM Mono
 > 11px/500 `#3B4A42`, exactly what the frame computes for that line.
 
+### endgame · all vetoed — a takeover *state* of `/groups/:id/results` and `/join/:slug/results`
+
+Ground truth is [all-vetoed.dc.html](all-vetoed.dc.html) (a dc-runtime doc — serve the
+directory and open it over HTTP; the scene animates and the poke logic runs; the copy
+lives in the `DCLogic` script at the bottom). Built as `ConsensusWeb.Endgame.AllVetoed`
+over the shared `ConsensusWeb.EndgameComponents` skeleton; renders only for a
+`:completed` group whose every option was vetoed with no resolution recorded (D-051).
+The doc's surfaces draw at radius 18/14/13 and the app renders all of them
+`rounded-2xl`, the sticker system's one surface radius — the same flattening every other
+imported frame got. The scene keyframes (`flick`, `flick2`, `bob`, `ember`, `buzz`) live
+in `assets/css/app.css`. Two deviations are recorded here because they are deliberate,
+not drift:
+
+> **THE CARNAGE's right-hand mono slot shows veto counts, never names (D-051 §4).** The
+> doc's sample rows attribute each veto to a person (`MAYA`, `DEV`, `PRIYA`). D-035 makes
+> attribution structurally impossible — `Voting.tally/1` returns totals only and no query
+> in the app can say who vetoed what — so the same slot, same DM Mono treatment, carries
+> `1 VETO` / `2 VETOES`. Do not "fix" this back toward the mockup; the mockup's data is
+> sample copy, and the app's is the only honest value that slot can hold.
+
+> **The fire scene is a fixed-aspect box, not a full-bleed fill.** The doc's hero is
+> 346px wide, so its `xMidYMax slice` renders the 350×250 viewBox at scale ≈ 1, leaving
+> a band of clear night sky above the figure's fists. At the app's wider column a
+> full-bleed slice would let the width govern the scale, blow the figure up ~1.15× and
+> crop the sky — so the SVG is pinned to the design's own 350:250 aspect at the card's
+> height, bottom-centered, `overflow-visible` so the edge flames still bleed. This
+> reproduces the doc's framing at every width.
+
+> **The takeover lives in the app's full-bleed column, not the doc's tight card — and
+> the slack that opens on a tall viewport is accepted, not drift.** (Applies to both
+> takeovers.) The doc draws a floating phone card that hugs its content: its footer sits
+> directly under the caption and the card ends. In the app every screen is the 440px
+> column with the global footer pinned to the viewport bottom by `<main>`'s `flex-1`
+> (`Layouts.app`, D-041), so a viewport taller than a short pool's content opens a band
+> of bare surface between the caption and the footer. At the phone heights this product
+> is designed for the content fills the viewport and the band does not exist; un-pinning
+> the footer for the takeover states alone would break the one chrome rule every screen
+> shares, and would make the footer jump mid-session when a rescue or a lock flips the
+> takeover to the winner ending live over PubSub. Deliberately left; do not "fix" it by
+> special-casing the endgame screens' layout.
+
+### endgame · tie — the second takeover state of the same two routes
+
+Ground truth is [tie.dc.html](tie.dc.html) (dc-runtime again — render it over HTTP; the
+spin logic and the state-dependent copy live in its `DCLogic` script). Built as
+`ConsensusWeb.Endgame.Tie` over the same `EndgameComponents` skeleton; renders only for
+a `:completed` group with an unresolved dead heat at the top (`Voting.outcome/2`
+returning `{:tie, rows}` — D-051 §2). Same radius flattening as its sibling; the scene
+keyframes (`tug`, `strainL`, `strainR`, `drip`, `pulseline`) and the scene's one-off
+paints (the violet radial, the `#E9DCC0` rope, the `#EDE6DC` idle lock button and
+friends) live in `assets/css/app.css` as scene/UI paint the rest of the app never
+reuses. Deviations, all deliberate:
+
+> **The hero card carries the scene's aspect instead of the doc's fixed 250px.** The
+> tug-of-war SVG is the doc's own full-bleed `xMidYMax slice` fill, and at the app's
+> wider column a fixed height makes `slice` crop the sky — so `endgame_hero/1` gets
+> `height_class="aspect-[7/5]"`, the 350×250 viewBox's own ratio, at which a `slice`
+> fill is exact at any width. The opposite lever from the fire scene's fixed-aspect
+> box; both mean "the card, not the viewport width, decides the scene's scale".
+
+> **The sample data is corrected, not copied.** The caption "or run a second round with
+> just these two" counts the actual tied set ("these three" on a 3-way) — and stays the
+> inert mono line the doc draws, not a control. The doc's `short` row names have no
+> equivalent on `Consensus.Activities.Activity`, so the full option name appears in the
+> status line and the lock label. And the shuffle is server-driven state
+> (`send_update_after/3` ticks), not the doc's client `setInterval` — same ~1.9s clock,
+> but testable and refusal-safe mid-spin.
+
+> **The sweat beads are invisible when their animation is not driving them**
+> (`.endgame-drip { opacity: 0 }` in `app.css`) — a bead's resting position straddles
+> its head's ink outline, a frame the doc's running `drip` (opacity 0 at cycle start)
+> never shows but a delay window, reduced motion or any frozen frame otherwise would.
+> The scene geometry itself is the source's, coordinate for coordinate — the right
+> figure is the left's exact mirror in the source too, and the "asymmetric right-cheek
+> mark" a steady-state still of the doc shows is the second bead mid-drip, 0.9s behind
+> the first, ghosted over the cheek.
+
+> **The full-bleed-column-versus-tight-card note in the all-vetoed section above applies
+> here unchanged** — on a tall viewport the slack sits between the faint results URL and
+> the pinned footer; accepted for the same reasons.
+
 ## What "matches the design" means for a critic
 
 Compare at a 390px-wide viewport, ours beside the reference file. Judge, in order:

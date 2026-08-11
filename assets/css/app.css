@@ -487,3 +487,286 @@
     transition: none;
   }
 }
+
+/* ── The endgame takeover scenes (docs/plans/endgame-screens.md) ──────────────────────
+ *
+ * Keyframes transcribed verbatim from the imported design docs
+ * (docs/design/all-vetoed.dc.html, docs/design/tie.dc.html): `flick`/`flick2` are the
+ * flame lick, `bob` is the guy bouncing in the fire, `ember` floats a spark up and out,
+ * `buzz` is the counter chip's two-step jitter. Each scene element carries its own
+ * `animation:` inline (nine flames, four embers — every one a different duration and
+ * delay, which is what keeps the fire from reading as a loop), so the classes below hold
+ * only what is shared: the transform box/origin every flame scales from, and the chips'
+ * buzz. Unlayered, like the deck-card rules above, so no utility can out-cascade them. */
+@keyframes flick {
+  0%,
+  100% {
+    transform: scaleY(1) scaleX(1) skewX(0deg);
+  }
+  35% {
+    transform: scaleY(1.16) scaleX(0.94) skewX(4deg);
+  }
+  70% {
+    transform: scaleY(0.93) scaleX(1.05) skewX(-3deg);
+  }
+}
+
+@keyframes flick2 {
+  0%,
+  100% {
+    transform: scaleY(1.08) skewX(-3deg);
+  }
+  45% {
+    transform: scaleY(0.9) scaleX(1.06) skewX(5deg);
+  }
+}
+
+@keyframes bob {
+  0%,
+  100% {
+    transform: translateY(0) rotate(-2.5deg);
+  }
+  50% {
+    transform: translateY(-10px) rotate(2.5deg);
+  }
+}
+
+@keyframes ember {
+  0% {
+    transform: translateY(0) scale(1);
+    opacity: 0;
+  }
+  18% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(-130px) scale(0.3);
+    opacity: 0;
+  }
+}
+
+@keyframes buzz {
+  0%,
+  100% {
+    transform: translate(0, 0);
+  }
+  25% {
+    transform: translate(-1px, 1px);
+  }
+  75% {
+    transform: translate(1px, -1px);
+  }
+}
+
+/* The tie scene's clocks (docs/design/tie.dc.html): `tug` rocks the whole standoff
+ * side to side, `strainL`/`strainR` lean each figure into the pull, `drip` is the
+ * sweat bead, `pulseline` breathes the dashed centre line. Durations/delays ride
+ * inline on the elements, same as the fire scene's. */
+@keyframes tug {
+  0%,
+  100% {
+    transform: translateX(-6px);
+  }
+  50% {
+    transform: translateX(6px);
+  }
+}
+
+@keyframes strainL {
+  0%,
+  100% {
+    transform: rotate(-2deg);
+  }
+  50% {
+    transform: rotate(1.5deg);
+  }
+}
+
+@keyframes strainR {
+  0%,
+  100% {
+    transform: rotate(2deg);
+  }
+  50% {
+    transform: rotate(-1.5deg);
+  }
+}
+
+@keyframes drip {
+  0% {
+    transform: translateY(0) scale(0.7);
+    opacity: 0;
+  }
+  20% {
+    opacity: 1;
+  }
+  100% {
+    transform: translateY(30px) scale(1);
+    opacity: 0;
+  }
+}
+
+@keyframes pulseline {
+  0%,
+  100% {
+    opacity: 0.35;
+  }
+  50% {
+    opacity: 0.9;
+  }
+}
+
+/* A flame (or the bobbing guy) scales/skews from its own bottom centre, not the SVG's
+ * origin — without `transform-box: fill-box` every lick would swing the path around the
+ * viewBox corner instead of licking upward from its base. */
+.endgame-scene-part {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+}
+
+.endgame-bob {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: bob 1.5s ease-in-out infinite;
+}
+
+.endgame-buzz {
+  animation: buzz 0.18s steps(2) infinite;
+}
+
+/* The tug-of-war's moving parts (docs/design/tie.dc.html). Each figure leans from the
+ * end of its own base nearest the rope — 80%/20%, the design's numbers — and the whole
+ * standoff rocks from its own bottom centre; `fill-box` for the same reason as
+ * `.endgame-scene-part` above. */
+.endgame-tug {
+  transform-box: fill-box;
+  transform-origin: 50% 100%;
+  animation: tug 0.9s ease-in-out infinite;
+}
+
+.endgame-strain-left {
+  transform-box: fill-box;
+  transform-origin: 80% 100%;
+  animation: strainL 0.9s ease-in-out infinite;
+}
+
+.endgame-strain-right {
+  transform-box: fill-box;
+  transform-origin: 20% 100%;
+  animation: strainR 0.9s ease-in-out infinite;
+}
+
+/* `opacity: 0` at rest, deliberately — the one place this scene departs from the doc's
+ * literal CSS, to honour what the doc actually shows. A bead's resting position
+ * ((40,112) / (310,112)) straddles its head's ink outline: distance from head centre
+ * ≈ 26.1 against an outline band of 26.5–31.5, so an *unanimated* bead renders as an
+ * opaque disc breaking the head's outline. The doc never shows that frame — `drip`
+ * starts at opacity 0, so a running bead only ever appears mid-fall, already clear of
+ * the outline or ghosted over the cheek (the right one, .9s behind, is the asymmetric
+ * cheek mark in any steady-state still). But the unanimated state IS shown whenever the
+ * animation is not driving: the right bead's first .9s of delay (fill-mode none), and
+ * the whole scene under reduced motion below. Base opacity 0 makes "not animating"
+ * render as "no bead" instead of "bead through the outline"; while `drip` runs, its
+ * keyframes own the opacity and nothing changes. */
+.endgame-drip {
+  transform-box: fill-box;
+  transform-origin: 50% 0;
+  animation: drip 1.8s ease-in infinite;
+  opacity: 0;
+}
+
+.endgame-pulseline {
+  animation: pulseline 1.1s ease-in-out infinite;
+}
+
+/* The back row of flames — the same deep ember red as the backdrop's 42% stop, a scene
+ * paint that is deliberately not a token (see `.endgame-fire-bg` below). A class rather
+ * than a `fill=` attribute so no raw hex lands in a template. */
+.endgame-flame-back {
+  fill: #b4331a;
+}
+
+/* The fire scene's night-sky-over-embers backdrop. The two mid stops are scene paint,
+ * not palette — #b4331a (deep ember red, also the back flames' fill) and #3a1508 (the
+ * char above the glow) appear nowhere else in the app, so they stay literals here rather
+ * than becoming tokens nothing else would ever use; the rim and the void are the real
+ * tokens. Transcribed from the design doc's inline gradient. */
+.endgame-fire-bg {
+  background: radial-gradient(
+    120% 80% at 50% 108%,
+    var(--color-tangerine) 0%,
+    #b4331a 42%,
+    #3a1508 70%,
+    var(--color-ink) 100%
+  );
+}
+
+/* The tie scene's night backdrop — the violet radial from the design doc. The rim
+ * (#8C6BFF), the dusk (#3B2A85) and the void (#241A4D) are scene paint, not palette —
+ * they appear nowhere else in the app — while the 34% stop is the real violet token.
+ * Transcribed from the design doc's inline gradient. */
+.endgame-tie-bg {
+  background: radial-gradient(
+    105% 78% at 50% 104%,
+    #8c6bff 0%,
+    var(--color-violet) 34%,
+    #3b2a85 66%,
+    #241a4d 100%
+  );
+}
+
+/* Scene paints for the tie scene, classes so no raw hex lands in a template (same rule
+ * as `.endgame-flame-back`): the rope's cream core, the sweat beads' pale blue, and the
+ * `NOBODY'S WINNING` chip's moonlit lavender — all one-offs on the dark hero, none of
+ * them a colour the light UI could reuse. */
+.endgame-rope {
+  stroke: #e9dcc0;
+}
+
+.endgame-sweat {
+  fill: #bfe6ff;
+}
+
+.endgame-tie-chip {
+  border-color: #c8b8ff;
+  color: #c8b8ff;
+}
+
+/* The tie list's violet header band and the lock button's "pick one first" resting
+ * state, both the design doc's own values: the band is a shade deeper than
+ * `--color-violet-tint` with its own dark-violet ink, and the idle button is the one
+ * "disabled-look" beige in the app — UI paint the design draws exactly once, kept
+ * literal here rather than minted as tokens nothing else would use. */
+.endgame-tie-band {
+  background: #efeaff;
+  color: #4a3a8c;
+}
+
+.endgame-tie-row-active {
+  background: #efeaff;
+}
+
+.endgame-lock-idle {
+  background: #ede6dc;
+}
+
+/* The scene is decoration on a poke toy; a reader who asked for less motion gets a still
+ * campfire (and a still tug-of-war) and loses nothing the screen says in words. (SMIL —
+ * the fire guy's waving arms — is not covered by CSS animation rules; the arms keep
+ * waving. Accepted: they are the smallest motion in the scene.) The tug-of-war's sweat
+ * beads vanish from the still entirely — `.endgame-drip`'s base `opacity: 0` above —
+ * because their frozen resting position clips the heads' ink outlines, a frame the
+ * design never shows; a still standoff simply doesn't sweat. */
+@media (prefers-reduced-motion: reduce) {
+  .endgame-scene-part,
+  .endgame-bob,
+  .endgame-buzz,
+  .endgame-ember,
+  .endgame-tug,
+  .endgame-strain-left,
+  .endgame-strain-right,
+  .endgame-drip,
+  .endgame-pulseline {
+    animation: none !important;
+  }
+}

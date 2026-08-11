@@ -376,6 +376,7 @@ defmodule Consensus.Voting do
         approvals: 3,
         vetoes: 0,
         vetoed?: false,
+        rescued?: false,
         leader?: true,
         winner?: false,
         bar_percent: 100
@@ -394,6 +395,20 @@ defmodule Consensus.Voting do
 
   `bar_percent` is `approvals / max(1, highest_approval_count) * 100`, rounded, so the
   template does not have to find the maximum itself.
+
+  ## A recorded resolution changes the reading, never the votes
+
+  `Consensus.Activities.resolve_group/4` stamps `resolution` /
+  `resolved_activity_id` / `resolved_at` on a `:completed` group whose endgame could
+  not settle itself, and this function honours the stamp:
+
+    * An `"app_rescue"`'s resolved activity reports `vetoed?: false, rescued?: true`
+      and ranks among the survivors — with its `vetoes` count intact, because the
+      vote rows are untouched and the totals stay honest. `rescued?` is present on
+      every row, `false` everywhere else.
+    * `winner?`/`leader?` go to `resolved_activity_id` whenever it is set and the
+      group is `:completed`, whatever the position tiebreak would have said — a tie
+      settled by a human (or the app) is no longer settled by pool order.
   """
   def tally(%Group{} = group) do
     activities =
@@ -403,15 +418,19 @@ defmodule Consensus.Voting do
     approvals = count_votes(group.id, :approve)
     vetoes = count_votes(group.id, :veto)
 
+    rescued_id = if group.resolution == "app_rescue", do: group.resolved_activity_id
+
     rows =
       Enum.map(activities, fn activity ->
         veto_count = Map.get(vetoes, activity.id, 0)
+        rescued? = not is_nil(rescued_id) and activity.id == rescued_id
 
         %{
           activity: activity,
           approvals: Map.get(approvals, activity.id, 0),
           vetoes: veto_count,
-          vetoed?: veto_count > 0
+          vetoed?: veto_count > 0 and not rescued?,
+          rescued?: rescued?
         }
       end)
 
@@ -421,8 +440,9 @@ defmodule Consensus.Voting do
       Enum.sort_by(survivors, &{-&1.approvals, &1.activity.position})
 
     highest = survivors |> Enum.map(& &1.approvals) |> Enum.max(fn -> 0 end)
-    leader_id = leader_id(survivors, highest)
     completed? = group.status == :completed
+    resolved_id = if completed?, do: group.resolved_activity_id
+    leader_id = resolved_id || leader_id(survivors, highest)
 
     Enum.map(survivors ++ eliminated, fn row ->
       leader? = not row.vetoed? and row.activity.id == leader_id
@@ -464,6 +484,14 @@ defmodule Consensus.Voting do
 
   The runner-up failsafe CLAUDE.md product invariant 5 asks for is the second element of
   the tally itself; `outcome/1` names the top, not the list.
+
+  **`outcome/1` is status-blind**: it reads only the tally, so it cannot tell a
+  `:completed` dead heat from a mid-vote one — for a completed, tied, unresolved
+  group it answers `{:winner, row}` for the position-tiebroken top, exactly as the
+  `winner?` flag says. `outcome/2` is the status-aware reading a results screen
+  should prefer: it takes the group as well and answers `{:tie, tied_rows}` for a
+  completed, unresolved dead heat. This arity is kept for compatibility and for
+  callers that genuinely want the flags-only reading.
   """
   def outcome([]), do: :no_votes
 
@@ -478,6 +506,62 @@ defmodule Consensus.Voting do
       # on options that were then vetoed — get one sentence that is true of both.
       Enum.any?(tally, & &1.vetoed?) -> :vetoes_only
       true -> :no_votes
+    end
+  end
+
+  @doc """
+  The status-aware outcome: everything `outcome/1` answers, plus the one thing a
+  bare tally cannot express — `{:tie, tied_rows}` for a **completed, unresolved dead
+  heat**, meaning two-plus survivors sharing the top nonzero approval count with no
+  resolution recorded on the group.
+
+  `tally` must be `tally/1`'s answer for the same `group`. Three readings, in order:
+
+    * The group is `:completed` and carries a resolution — `{:winner, row}` for the
+      resolved activity, whose flags `tally/1` already set: a broken tie names the
+      row the organizer (or the app) picked, and an `"app_rescue"` names the rescued
+      row, un-struck, vetoes intact.
+    * The group is `:completed`, unresolved, and the survivors dead-heat at the top —
+      `{:tie, tied_rows}`, the tied rows in tally order. This is the tie takeover's
+      trigger, and it fires however the group completed (deadline or Close now). A
+      mid-vote dead heat is deliberately **not** a tie — the vote is still open, so
+      `outcome/1`'s `{:leader, row}` reading stands.
+    * Anything else falls through to `outcome/1` — `:no_consensus` stays the
+      all-vetoed answer while unresolved, which is the all-vetoed takeover's trigger.
+  """
+  def outcome(%Group{status: :completed, resolution: resolution} = _group, tally)
+      when is_binary(resolution) do
+    case Enum.find(tally, & &1.winner?) do
+      # The resolved activity can only vanish under a cascade destroying the whole
+      # group (the pool is frozen for anything :completed — D-037), but a nilified
+      # resolved_activity_id must degrade to the flags-only reading, not crash.
+      nil -> outcome(tally)
+      row -> {:winner, row}
+    end
+  end
+
+  def outcome(%Group{status: :completed}, tally) when is_list(tally) do
+    case tied_top_rows(tally) do
+      [_, _ | _] = tied_rows -> {:tie, tied_rows}
+      _fewer_than_two -> outcome(tally)
+    end
+  end
+
+  def outcome(%Group{}, tally) when is_list(tally), do: outcome(tally)
+
+  # The tied-at-top survivors: every un-vetoed row sharing the highest approval
+  # count, provided that count is nonzero — an untouched pool is :no_votes, not an
+  # every-way tie. Relies on tally/1's ordering (survivors first, ranked), so the
+  # head of the survivor list carries the top count.
+  defp tied_top_rows(tally) do
+    survivors = Enum.reject(tally, & &1.vetoed?)
+
+    case survivors do
+      [%{approvals: top} | _rest] when top > 0 ->
+        Enum.filter(survivors, &(&1.approvals == top))
+
+      _no_approved_survivor ->
+        []
     end
   end
 

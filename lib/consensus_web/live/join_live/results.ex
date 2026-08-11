@@ -40,6 +40,13 @@ defmodule ConsensusWeb.JoinLive.Results do
   *missing* combination and a table cannot hide one.
   `test/consensus_web/live/join_live/results_test.exs` has a case per cell.
 
+  The table does not cover the D-051 takeover states, and that is not a missing cell: an
+  unresolved all-vetoed pool or dead heat on a `:completed` group replaces the whole
+  panel — this footer included — with `ConsensusWeb.Endgame.AllVetoed` /
+  `ConsensusWeb.Endgame.Tie`, which carry their own exits (here, the guest half: a
+  waiting line naming the organizer and `Create your own →`). Every cell the takeovers
+  do not intercept renders exactly as before.
+
   Enumerating the cells is not the same as getting each one right, and the same mistake has
   now been made twice in the same corner of the table. `{:completed, :joined}` first shipped
   pointing at `:closed_missed` — "Voting closed before you got here." — for a browser that
@@ -81,7 +88,9 @@ defmodule ConsensusWeb.JoinLive.Results do
   alias Consensus.Activities
   alias Consensus.Deadlines
   alias Consensus.Voting
+  alias ConsensusWeb.Endgame
 
+  import ConsensusWeb.EndgameComponents, only: [takeover: 2]
   import ConsensusWeb.ResultsComponents
 
   @tick_interval :timer.seconds(30)
@@ -158,10 +167,26 @@ defmodule ConsensusWeb.JoinLive.Results do
   def handle_info({:activity_updated, _activity}, socket), do: {:noreply, reload(socket)}
   def handle_info({:activities_changed, _activities}, socket), do: {:noreply, reload(socket)}
 
+  # `:draft` is reachable under an open tab now: `Consensus.Activities.reopen_group/2`
+  # (the All Vetoed takeover's "Add new options" exit) puts the group back in the wizard
+  # and broadcasts. The `/join` tree never renders a draft (`ConsensusWeb.JoinAuth`
+  # halts them at mount), so this reload mirrors that guard instead of crashing in
+  # `results_header/1` — and the copy tells the guest the one thing that matters: the
+  # link in their chat is not dead, it works again the moment round 2 is published
+  # (participants and tokens survive a reopen by design).
   defp reload(socket) do
     case Activities.get_group_by_slug(socket.assigns.slug) do
       nil ->
         socket
+
+      %{status: :draft} ->
+        socket
+        |> put_flash(
+          :info,
+          "#{socket.assigns.organizer_username} reopened the option pool, so voting is " <>
+            "paused. Keep your link — it works again the moment round 2 is published."
+        )
+        |> push_navigate(to: ~p"/")
 
       group ->
         socket
@@ -185,13 +210,19 @@ defmodule ConsensusWeb.JoinLive.Results do
   # `tally_bar/1` paints a ★ from them, so this screen showed a starred front-runner under
   # **Final tally** while the panel above it said the session was cancelled before a winner
   # was chosen.
+  # `Voting.outcome/2`, not `outcome/1`: only the status-aware arity answers
+  # `{:tie, tied_rows}` for a completed, unresolved dead heat — the flags-only reading
+  # reports the position tie-break as a `{:winner, row}` and this screen then announces
+  # an unqualified win over a draw to the very people whose votes drew.
   defp load_tally(socket) do
     group = socket.assigns.group
     tally = presentable_tally(group, Voting.tally(group))
+    outcome = Voting.outcome(group, tally)
 
     socket
     |> assign(:tally, tally)
-    |> assign(:outcome, Voting.outcome(tally))
+    |> assign(:outcome, outcome)
+    |> assign(:takeover, takeover(group, outcome))
     |> assign(:participants, Voting.participants(group))
   end
 
@@ -253,6 +284,23 @@ defmodule ConsensusWeb.JoinLive.Results do
   defp own_cta_variant(:can_vote), do: nil
   defp own_cta_variant(_footer_state), do: "primary"
 
+  # The header context names the takeover state in its design's accent — tangerine
+  # "ALL VETOED", violet "DEAD HEAT". The `:public` header renders the slot only when a
+  # context is passed, and this screen's pill is already `false`, so the slot has the
+  # right edge to itself.
+  defp takeover_context(:all_vetoed), do: "ALL VETOED"
+  defp takeover_context(:tie), do: "DEAD HEAT"
+  defp takeover_context(nil), do: nil
+
+  defp takeover_context_class(:all_vetoed), do: "text-tangerine"
+  defp takeover_context_class(:tie), do: "text-violet"
+  defp takeover_context_class(nil), do: nil
+
+  # The tied-at-top rows the tie takeover renders; only read under
+  # `:if={@takeover == :tie}`, whose trigger only answers for a `{:tie, rows}` outcome.
+  defp tie_rows({:tie, rows}), do: rows
+  defp tie_rows(_outcome), do: []
+
   defp closes_at_text(%{deadline_at: nil}, _now, _offset), do: nil
 
   defp closes_at_text(%{deadline_at: at}, now, offset),
@@ -276,18 +324,53 @@ defmodule ConsensusWeb.JoinLive.Results do
     <%!-- `:public` — this is still the `/join` tree, reached by someone who may have no
           account. The screen's own status lives in the violet countdown block below, so
           there is nothing the `:app` context slot would add. --%>
+    <%!-- The context slot names the takeover state (the design's tangerine "ALL VETOED");
+          the `:public` header renders it only when a context is passed, and this screen's
+          pill is already `false`, so the slot has the right edge to itself. --%>
     <Layouts.app
       flash={@flash}
       current_path={@current_path}
       current_scope={@current_scope}
       variant={:public}
       pill={false}
+      context={takeover_context(@takeover)}
+      context_class={takeover_context_class(@takeover)}
     >
+      <%!-- The guest's half of the All Vetoed takeover: same scene, headline and carnage
+            as the organizer's, a waiting line naming the organizer (the only person who
+            can fix it), the standing `Create your own →` exit — and never the organizer's
+            two write buttons. Replaces the whole panel, banner and footer table included;
+            the PubSub reload flips it back the moment the organizer acts. --%>
+      <.live_component
+        :if={@takeover == :all_vetoed}
+        module={Endgame.AllVetoed}
+        id="endgame-all-vetoed"
+        group={@group}
+        tally={@tally}
+        role={:guest}
+        organizer_username={@organizer_username}
+      />
+      <%!-- The guest's half of the Tie takeover: the same tug-of-war scene and TIED FOR
+            FIRST list as the organizer's, with no tap affordance and no buttons — a
+            waiting line naming the organizer (the only one who can break it) and the
+            standing `Create your own →` exit. Replaces the whole panel, banner and
+            footer table included; the PubSub reload flips it to the winner ending the
+            moment the organizer locks a pick in. --%>
+      <.live_component
+        :if={@takeover == :tie}
+        module={Endgame.Tie}
+        id="endgame-tie"
+        group={@group}
+        rows={tie_rows(@outcome)}
+        role={:guest}
+        organizer_username={@organizer_username}
+      />
       <%!-- `WHO'S VOTED`, not `ORGANIZER NUDGES`. The organizer's identical component was
             corrected for exactly this and the participant's half was left behind: there is
             no nudge path in `lib/` at all, and `/about` says this app sends no
             notifications. See the moduledoc. --%>
       <.results_panel
+        :if={@takeover == nil}
         group={@group}
         tally={@tally}
         outcome={@outcome}
@@ -295,6 +378,7 @@ defmodule ConsensusWeb.JoinLive.Results do
         current_participant_id={@participant && @participant.id}
         avatar_caption="WHO'S VOTED"
         countdown_text={Deadlines.countdown(@group.deadline_at, @now)}
+        organizer_username={@organizer_username}
       >
         <:banner :if={voted?(@participant)}>
           <.sticker_card tone={:mint} depth={2} radius={:sm} class="flex items-center gap-2.5 p-3">

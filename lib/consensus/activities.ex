@@ -45,6 +45,9 @@ defmodule Consensus.Activities do
   alias Consensus.Activities.Activity
   alias Consensus.Activities.Group
   alias Consensus.Repo
+  alias Consensus.Voting
+  alias Consensus.Voting.Participant
+  alias Consensus.Voting.Vote
 
   @topic_prefix "activity_group:"
 
@@ -251,6 +254,227 @@ defmodule Consensus.Activities do
     |> Repo.update()
     |> broadcast_group_update()
   end
+
+  ## Groups — endgame resolution
+
+  @doc """
+  Records how a `:completed` group's endgame was settled, when the tally alone could
+  not settle it — a dead heat, or an all-vetoed pool.
+
+  `resolution` is one of `Consensus.Activities.Group.resolutions/0`:
+
+    * `"organizer_pick"` — tie: the organizer tapped a tied row and locked it in.
+    * `"app_pick"` — tie: the app shuffled the tied set and the organizer locked the
+      result in.
+    * `"app_rescue"` — all-vetoed: the app picked one option at random; its veto is
+      undone in *interpretation* only (see below).
+
+  **No vote rows are written or deleted.** Resolution stamps `:resolution`,
+  `:resolved_activity_id` and `:resolved_at` on the group and nothing else;
+  `Consensus.Voting.tally/1` then reads them — an `"app_rescue"`'s activity reports
+  `vetoed?: false, rescued?: true` with its veto count intact, and `winner?`/`leader?`
+  go to the resolved activity. The votes stay true; only the reading of them is
+  recorded.
+
+  ### Refusals, in the order they are checked
+
+    * `{:error, :invalid_resolution}` — a string outside `Group.resolutions/0`.
+    * `{:error, :not_completed}` — the group is not `:completed`. A mid-vote dead heat
+      is not an endgame; the deadline can still break it.
+    * `{:error, :already_resolved}` — a resolution is already recorded. There is no
+      re-resolve path: the whole point of the stamp is that every open results screen
+      settled on the same answer.
+    * `{:error, :not_a_candidate}` — the activity is not in the resolution's valid
+      candidate set. For the two tie resolutions that set is the tied-at-top
+      survivors (so a clear-winner group cannot be "resolved" onto something else);
+      for `"app_rescue"` it is the whole pool, and only when **every** option is
+      vetoed (`Consensus.Voting.outcome/2` answers `:no_consensus`) — a pool with a
+      survivor has nothing to rescue. An id from another group, a deleted id, or
+      non-numeric garbage all land here too.
+
+  Broadcasts `{:group_updated, group}` on success, so every open results screen —
+  the organizer's and every guest's — flips at once.
+
+  `activity_id` may be an integer or the string a client event delivers; anything
+  else is refused, never raised. The random half of `"app_rescue"` lives in
+  `rescue_group/2`, which picks server-side and delegates here — so tests (and the
+  tie screen, whose app-pick animation lands on a server-chosen row *before* the
+  organizer locks it) can call this function deterministically.
+
+  Everything after the pure `resolution` check runs inside `Repo.transact/1` on a
+  **fresh primary-key re-read of the group** — the struct in hand came from a socket
+  assign and may predate a resolution committed in another tab (the window between
+  that commit and PubSub delivery). The stale struct's `resolution: nil` would
+  otherwise sail past `:already_resolved` and overwrite a result people have already
+  seen. Same "don't trust the struct in hand, re-read from storage" idiom as
+  `Consensus.Accounts.set_admin/3` and `Voting.cast_ballot/3`'s in-transaction group
+  re-read (CLAUDE.md invariants 1 and 17); the broadcast fires after commit.
+  """
+  def resolve_group(
+        %Scope{user: %User{id: user_id}},
+        %Group{organizer_id: user_id} = group,
+        activity_id,
+        resolution
+      ) do
+    activity_id = cast_activity_id(activity_id)
+
+    if resolution not in Group.resolutions() do
+      {:error, :invalid_resolution}
+    else
+      Repo.transact(fn ->
+        group = Repo.get!(Group, group.id)
+
+        cond do
+          group.status != :completed ->
+            {:error, :not_completed}
+
+          not is_nil(group.resolution) ->
+            {:error, :already_resolved}
+
+          is_nil(activity_id) or activity_id not in resolution_candidate_ids(group, resolution) ->
+            {:error, :not_a_candidate}
+
+          true ->
+            group
+            |> Group.resolution_changeset(%{
+              resolution: resolution,
+              resolved_activity_id: activity_id,
+              resolved_at: DateTime.utc_now(:second)
+            })
+            |> Repo.update()
+        end
+      end)
+      |> broadcast_group_update()
+    end
+  end
+
+  @doc """
+  The all-vetoed rescue: picks one of the group's vetoed options at random
+  (server-side, `:rand` via `Enum.random/1`) and records it through
+  `resolve_group/4` as an `"app_rescue"`.
+
+  Every refusal is `resolve_group/4`'s own — a group that is not `:completed`, is
+  already resolved, or is not fully vetoed refuses there, so the two functions cannot
+  disagree about when a rescue is legal. Broadcasts `{:group_updated, group}` on
+  success, which is what flips every open results screen from the all-vetoed takeover
+  to the ordinary winner ending at once.
+  """
+  def rescue_group(
+        %Scope{user: %User{id: user_id}} = scope,
+        %Group{organizer_id: user_id} = group
+      ) do
+    candidate =
+      group
+      |> Voting.tally()
+      |> Enum.filter(& &1.vetoed?)
+      |> Enum.map(& &1.activity.id)
+      |> case do
+        [] -> nil
+        ids -> Enum.random(ids)
+      end
+
+    resolve_group(scope, group, candidate, "app_rescue")
+  end
+
+  @doc """
+  The all-vetoed "Add new options" exit: reopens a fully-vetoed `:completed` group as
+  a `:draft` so the organizer can grow the pool and run round 2 on the same share
+  link.
+
+  Refuses with `{:error, :not_completed}` unless the group is `:completed`, with
+  `{:error, :already_resolved}` when a resolution is recorded (a rescued group has a
+  winner; reopening it would un-declare a result people have already seen), and with
+  `{:error, :not_all_vetoed}` unless **every** option is vetoed — a tie, a winner, or
+  an untouched pool is not this exit's case.
+
+  Then, in one transaction:
+
+    * every vote row in the group is deleted, and every participant's `voted_at` is
+      reset to `nil` — round 1's votes are gone **by design**: its outcome was
+      "everything vetoed", the screen the organizer is leaving said exactly that, and
+      a locked ballot (D-036) would otherwise pin every returning voter to a pool
+      they have already fully rejected;
+    * the participants themselves and their tokens survive — the share link keeps
+      working and nobody re-enters a name;
+    * status goes back to `:draft` with `completed_at`, the resolution columns, and
+      **`deadline_at`** cleared (see `Group.reopen_changeset/1` — the old deadline has
+      passed, and leaving it set would let round 2 re-complete itself on the first
+      read after publish). Publishing again requires a fresh deadline;
+      `publish_group/2` already refuses `:no_deadline`.
+
+  Broadcasts `{:group_updated, group}` on success.
+
+  Every guard runs inside the same transaction as the deletes, against a **fresh
+  primary-key re-read of the group** — not the caller's struct, which came from a
+  socket assign and may predate a rescue committed in another tab (the window
+  between that commit and PubSub delivery). Guarding on the stale struct let
+  exactly that race destroy a declared result: the stale `resolution: nil` sailed
+  past `:already_resolved`, the votes were deleted, and — because a stale struct
+  also made `change/2` drop the resolution clears as no-ops — the reopened `:draft`
+  kept its `"app_rescue"` stamp, silently pre-deciding round 2. Same idiom as
+  `resolve_group/4` above; the broadcast fires after commit.
+  """
+  def reopen_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group) do
+    Repo.transact(fn ->
+      group = Repo.get!(Group, group.id)
+
+      cond do
+        group.status != :completed ->
+          {:error, :not_completed}
+
+        not is_nil(group.resolution) ->
+          {:error, :already_resolved}
+
+        Voting.outcome(group, Voting.tally(group)) != :no_consensus ->
+          {:error, :not_all_vetoed}
+
+        true ->
+          now = DateTime.utc_now(:second)
+          participant_ids = from(p in Participant, where: p.group_id == ^group.id, select: p.id)
+
+          {_, _} =
+            Repo.delete_all(from(v in Vote, where: v.participant_id in subquery(participant_ids)))
+
+          {_, _} =
+            Repo.update_all(from(p in Participant, where: p.group_id == ^group.id),
+              set: [voted_at: nil, updated_at: now]
+            )
+
+          group |> Group.reopen_changeset() |> Repo.update()
+      end
+    end)
+    |> broadcast_group_update()
+  end
+
+  # The set of activities a given resolution may legally land on, derived from the
+  # same reading every results screen uses (`Consensus.Voting.outcome/2`) so the two
+  # cannot drift: the tie resolutions may only pick among the tied-at-top survivors,
+  # and a rescue may only pick from a pool in which everything is vetoed.
+  defp resolution_candidate_ids(%Group{} = group, resolution) do
+    tally = Voting.tally(group)
+
+    case {resolution, Voting.outcome(group, tally)} do
+      {"app_rescue", :no_consensus} ->
+        Enum.map(tally, & &1.activity.id)
+
+      {pick, {:tie, rows}} when pick in ["organizer_pick", "app_pick"] ->
+        Enum.map(rows, & &1.activity.id)
+
+      _other ->
+        []
+    end
+  end
+
+  defp cast_activity_id(id) when is_integer(id), do: id
+
+  defp cast_activity_id(id) when is_binary(id) do
+    case Integer.parse(id) do
+      {int, ""} -> int
+      _ -> nil
+    end
+  end
+
+  defp cast_activity_id(_id), do: nil
 
   ## Activities — reads
 

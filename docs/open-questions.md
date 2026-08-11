@@ -185,16 +185,19 @@ Each was reproduced, each has a known shape, none blocks anything.
   address can be sent per hour across sockets. Closing that properly needs a store (the rate limit
   itself, plus the counter's key) and a decision about what a refusal renders — which must not become
   address-dependent, or it is the enumeration oracle D-045 §1 exists to prevent.
-- ~~**A genuine tie at completion still crowns one option silently.**~~ **The *silently* half is
-  closed by D-048; the product question is still open.** `Voting.tally/1` is untouched, so `winner?`
-  still goes to whichever tied option the organizer happened to place higher on `03 review` — but
-  the screen no longer asserts an unqualified win over a dead heat: every tied survivor keeps its
-  star, the legend reads `TIED AT THE TOP`, the card says "Tied at the top" over a note naming the
-  count and the rule that settled it, the row beneath is captioned "Also tied" rather than
-  "Runner-up", and the paste-to-chat summary carries the qualification into the group chat. What is
-  still open is the product question — **does a tie have a winner, a runoff, or an explicit "no
-  consensus"?** — and it belongs with Q-8's veto floor. Nothing in D-048 answers it or forecloses
-  any of the three.
+- ~~**A genuine tie at completion still crowns one option silently.**~~ **Closed in two steps:
+  D-048 closed the *silently* half, and D-051 answered the product question.** A completed,
+  unresolved dead heat is now its own outcome — `Voting.outcome/2` returns `{:tie, rows}` — and
+  both results screens render the designed Tie takeover, which declares **no winner at all** until
+  the organizer breaks the tie: tap a tied row and lock it in (`"organizer_pick"`) or let the app
+  shuffle (`"app_pick"`), the resolution recorded on the group (`resolution` /
+  `resolved_activity_id` / `resolved_at`) and the winner card then naming the recorded tie-breaker
+  rather than pool position. `Voting.tally/1`'s position tie-break survives only as the flags'
+  status-blind fallback; no screen reads it as a verdict any more. Of the three options the old
+  question posed — a winner, a runoff, or an explicit "no consensus" — what shipped is *explicit
+  no-winner until a human (or the app, at the organizer's press) picks one*. The **runoff** is the
+  one branch still unbuilt: the design draws "or run a second round with just these two" as an
+  inert mono caption, deliberately not a control, and building it would be a new decision.
 - **The one primary button matches none of the three frames that draw it** — it renders at the
   app-wide 60px / 16px radius / `700 16px` / `shadow-sticker-4` against `00c`'s 48 / 15 / `700
   14.5px`, `1c-1`'s `Send my votes` at 51 / 15 / `700 15px`, and `00b`'s CTA at `700 15.5px`.
@@ -362,12 +365,22 @@ Four of the five bullets are answered by the shipped engine and recorded in
 - *What happens to votes already cast for a now-vetoed option?* Nothing is deleted. `tally/1`
   splits the pool into survivors and eliminated; a vetoed row keeps its approval count and is
   rendered struck through with `bar_percent: 0`.
-- *Can a veto be withdrawn?* No — the whole ballot is locked once cast (**D-036**).
+- *Can a veto be withdrawn?* Not by the voter — the whole ballot is locked once cast (**D-036**).
+  **D-051** added two *organizer-level* ways out of an all-vetoed ending, and neither is a
+  withdrawal: `"app_rescue"` undoes one veto **at the outcome level only** (`Voting.tally/1` reads
+  the rescued option as un-vetoed; no vote row is deleted or rewritten), and
+  `Activities.reopen_group/2` starts a new round (round 1's ballots deleted, participants and
+  tokens kept) — D-036's lock binds *within* a round.
 - *Is the veto anonymous?* Yes, like every other mark: the context cannot produce per-participant
-  choices in any mode (**D-035**).
+  choices in any mode (**D-035**). The All Vetoed takeover's carnage list honours this
+  structurally — veto *counts* in the slot the design drew names in (**D-051 §4**).
 - *What if vetoes eliminate every option?* `outcome/1` returns `:no_consensus`, distinguishable
   from "nobody has voted yet", and deliberately does **not** crown the least-vetoed option
-  (**D-034**).
+  (**D-034**). Since **D-051** that answer is no longer a dead end: a `:completed`, unresolved
+  all-vetoed group renders the designed All Vetoed takeover on both results screens, with two
+  organizer exits — reopen the pool for a second round, or let the app pick one at random
+  (recorded as `"app_rescue"`, announced honestly as a coin flip). Still nothing automatic:
+  neither exit fires without the organizer pressing a button that says what it does.
 
 **Still open — the floor.** Nothing caps total vetoes across the pool: one per participant,
 unlimited in aggregate, so any group with as many participants as options can veto everything and

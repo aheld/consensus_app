@@ -4,11 +4,15 @@ defmodule Consensus.ActivitiesTest do
   import Ecto.Query
   import Consensus.AccountsFixtures
   import Consensus.ActivitiesFixtures
+  import Consensus.VotingFixtures
 
   alias Consensus.Activities
   alias Consensus.Activities.Activity
   alias Consensus.Activities.Group
   alias Consensus.Repo
+  alias Consensus.Voting
+  alias Consensus.Voting.Participant
+  alias Consensus.Voting.Vote
 
   describe "slugs" do
     test "are generated automatically and are unique" do
@@ -411,6 +415,387 @@ defmodule Consensus.ActivitiesTest do
 
       assert Activities.count_activities(group) == 2
       assert Activities.count_activities(group.id) == 2
+    end
+  end
+
+  # The two endgame states the plan calls takeovers: a completed pool in which every
+  # option was vetoed, and a completed pool whose survivors dead-heat at the top.
+  # Resolution stamps an interpretation on the group; it never touches a vote row.
+  defp all_vetoed_group(scope) do
+    {group, activities} = voting_group_fixture(scope)
+
+    for activity <- activities do
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], activity.id)
+    end
+
+    {:ok, completed} = Activities.complete_group(scope, group)
+    {completed, activities}
+  end
+
+  defp tied_group(scope) do
+    {group, [a, b, c]} = voting_group_fixture(scope)
+    {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+    {:ok, completed} = Activities.complete_group(scope, group)
+    {completed, [a, b, c]}
+  end
+
+  defp group_votes(activities) do
+    ids = Enum.map(activities, & &1.id)
+    Repo.all(from(v in Vote, where: v.activity_id in ^ids))
+  end
+
+  describe "resolve_group/4" do
+    test "breaks a tie for the organizer's chosen row, stamps all three columns and broadcasts" do
+      scope = user_scope_fixture()
+      {completed, [_a, b, _c]} = tied_group(scope)
+      :ok = Activities.subscribe_group(completed.id)
+
+      assert {:ok, resolved} = Activities.resolve_group(scope, completed, b.id, "organizer_pick")
+      assert resolved.resolution == "organizer_pick"
+      assert resolved.resolved_activity_id == b.id
+      assert %DateTime{} = resolved.resolved_at
+      assert_receive {:group_updated, ^resolved}
+
+      assert Repo.get!(Group, completed.id).resolution == "organizer_pick"
+    end
+
+    test "accepts the activity id as a string, the way a client event delivers it" do
+      scope = user_scope_fixture()
+      {completed, [a | _]} = tied_group(scope)
+
+      assert {:ok, resolved} =
+               Activities.resolve_group(scope, completed, to_string(a.id), "app_pick")
+
+      assert resolved.resolution == "app_pick"
+      assert resolved.resolved_activity_id == a.id
+    end
+
+    test "refuses a second resolution, and writes nothing" do
+      scope = user_scope_fixture()
+      {completed, [a, b | _]} = tied_group(scope)
+      {:ok, resolved} = Activities.resolve_group(scope, completed, a.id, "organizer_pick")
+
+      assert {:error, :already_resolved} =
+               Activities.resolve_group(scope, resolved, b.id, "organizer_pick")
+
+      persisted = Repo.get!(Group, completed.id)
+      assert persisted.resolved_activity_id == a.id
+      assert persisted.resolution == "organizer_pick"
+    end
+
+    test "refuses a stale struct that predates a resolution committed in another tab" do
+      scope = user_scope_fixture()
+      {completed, [a, b | _]} = tied_group(scope)
+
+      # Tab A resolves; tab B still holds the pre-resolve struct (resolution: nil)
+      # — the window between that commit and PubSub delivery. The in-transaction
+      # re-read, not the struct, must answer, or two tabs are last-write-wins.
+      {:ok, _resolved} = Activities.resolve_group(scope, completed, a.id, "organizer_pick")
+      assert completed.resolution == nil
+
+      assert {:error, :already_resolved} =
+               Activities.resolve_group(scope, completed, b.id, "app_pick")
+
+      persisted = Repo.get!(Group, completed.id)
+      assert persisted.resolution == "organizer_pick"
+      assert persisted.resolved_activity_id == a.id
+    end
+
+    test "refuses a group that is not completed" do
+      scope = user_scope_fixture()
+
+      {voting, [a, b | _]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(voting), [a.id, b.id])
+      assert {:error, :not_completed} = Activities.resolve_group(scope, voting, a.id, "app_pick")
+
+      draft = group_fixture(scope)
+      option = activity_fixture(draft)
+
+      assert {:error, :not_completed} =
+               Activities.resolve_group(scope, draft, option.id, "organizer_pick")
+    end
+
+    test "refuses an unknown resolution kind" do
+      scope = user_scope_fixture()
+      {completed, [a | _]} = tied_group(scope)
+
+      assert {:error, :invalid_resolution} =
+               Activities.resolve_group(scope, completed, a.id, "coin_flip")
+    end
+
+    test "refuses an activity outside the tied-at-top candidate set" do
+      scope = user_scope_fixture()
+      {completed, [_a, _b, c]} = tied_group(scope)
+
+      # c survived but is not tied at the top.
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, c.id, "organizer_pick")
+
+      # A foreign group's activity, a deleted id, and garbage all land the same way.
+      {_other, [foreign | _]} = voting_group_fixture(scope)
+
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, foreign.id, "organizer_pick")
+
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, -1, "app_pick")
+
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, "12abc", "app_pick")
+
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, nil, "organizer_pick")
+    end
+
+    test "refuses a tie pick on a group that is not actually tied" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id])
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      # a won outright; there is no tie for anyone to break — not even onto the winner.
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, b.id, "organizer_pick")
+
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, a.id, "organizer_pick")
+    end
+
+    test "refuses an app_rescue unless every option is vetoed" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [b.id], a.id)
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      # a is vetoed, but b survived with an approval — there is nothing to rescue.
+      assert {:error, :not_a_candidate} =
+               Activities.resolve_group(scope, completed, a.id, "app_rescue")
+    end
+
+    test "raises for someone else's group" do
+      scope = user_scope_fixture()
+      stranger = user_scope_fixture()
+      {completed, [a | _]} = tied_group(scope)
+
+      assert_raise FunctionClauseError, fn ->
+        Activities.resolve_group(stranger, completed, a.id, "organizer_pick")
+      end
+    end
+  end
+
+  describe "rescue_group/2" do
+    test "picks one of the vetoed options, records an app_rescue and broadcasts" do
+      scope = user_scope_fixture()
+      {completed, activities} = all_vetoed_group(scope)
+      :ok = Activities.subscribe_group(completed.id)
+
+      assert {:ok, rescued} = Activities.rescue_group(scope, completed)
+      assert rescued.resolution == "app_rescue"
+      assert rescued.resolved_activity_id in Enum.map(activities, & &1.id)
+      assert %DateTime{} = rescued.resolved_at
+      assert_receive {:group_updated, ^rescued}
+
+      # The rescue is an interpretation: every vote row survives it.
+      assert length(group_votes(activities)) == 3
+    end
+
+    test "refuses when the pool is not fully vetoed" do
+      scope = user_scope_fixture()
+
+      # A tie has nothing vetoed at all.
+      {tied, _activities} = tied_group(scope)
+      assert {:error, :not_a_candidate} = Activities.rescue_group(scope, tied)
+
+      # A partial veto still has a survivor; there is nothing to rescue.
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [b.id], a.id)
+      {:ok, completed} = Activities.complete_group(scope, group)
+      assert {:error, :not_a_candidate} = Activities.rescue_group(scope, completed)
+    end
+
+    test "refuses while the vote is still open, even with everything vetoed" do
+      scope = user_scope_fixture()
+      {group, activities} = voting_group_fixture(scope)
+
+      for activity <- activities do
+        {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], activity.id)
+      end
+
+      assert {:error, :not_completed} = Activities.rescue_group(scope, group)
+    end
+
+    test "refuses a group that was already rescued" do
+      scope = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+      {:ok, rescued} = Activities.rescue_group(scope, completed)
+
+      assert {:error, :already_resolved} = Activities.rescue_group(scope, rescued)
+    end
+
+    test "raises for someone else's group" do
+      scope = user_scope_fixture()
+      stranger = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+
+      assert_raise FunctionClauseError, fn ->
+        Activities.rescue_group(stranger, completed)
+      end
+    end
+  end
+
+  describe "reopen_group/2" do
+    test "reopens an all-vetoed group: votes gone, ballots unlocked, deadline cleared, participants and tokens survive" do
+      scope = user_scope_fixture()
+      {completed, activities} = all_vetoed_group(scope)
+
+      before =
+        Repo.all(
+          from(p in Participant, where: p.group_id == ^completed.id, order_by: [asc: p.id])
+        )
+
+      assert length(before) == 3
+      assert Enum.all?(before, & &1.voted_at)
+
+      :ok = Activities.subscribe_group(completed.id)
+
+      assert {:ok, reopened} = Activities.reopen_group(scope, completed)
+      assert reopened.status == :draft
+      assert reopened.deadline_at == nil
+      assert reopened.completed_at == nil
+      assert reopened.resolution == nil
+      assert reopened.resolved_activity_id == nil
+      assert reopened.resolved_at == nil
+      assert_receive {:group_updated, ^reopened}
+
+      # Round 1's votes are gone by design — its outcome was "everything vetoed".
+      assert group_votes(activities) == []
+
+      # The participants and their tokens survive: the share link keeps working and
+      # nobody re-enters a name. Every ballot is unlocked.
+      after_reopen =
+        Repo.all(
+          from(p in Participant, where: p.group_id == ^completed.id, order_by: [asc: p.id])
+        )
+
+      assert Enum.map(after_reopen, & &1.id) == Enum.map(before, & &1.id)
+      assert Enum.map(after_reopen, & &1.token) == Enum.map(before, & &1.token)
+      assert Enum.all?(after_reopen, &is_nil(&1.voted_at))
+    end
+
+    test "leaves another group's votes and participants alone" do
+      scope = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+
+      {other, [x | _]} = voting_group_fixture(scope)
+      bystander = participant_fixture(other)
+      {:ok, _} = Voting.cast_ballot(bystander, [x.id])
+
+      assert {:ok, _reopened} = Activities.reopen_group(scope, completed)
+
+      assert [%Vote{}] = Repo.all(from(v in Vote, where: v.activity_id == ^x.id))
+      assert Repo.get!(Participant, bystander.id).voted_at
+    end
+
+    test "the reopened pool is editable again, and publishing needs a fresh deadline" do
+      scope = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+      {:ok, reopened} = Activities.reopen_group(scope, completed)
+
+      assert {:ok, _added} = Activities.add_activity(scope, reopened, %{name: "Round 2"})
+      assert {:error, :no_deadline} = Activities.publish_group(scope, reopened)
+    end
+
+    test "refuses a group that is not completed" do
+      scope = user_scope_fixture()
+      {voting, _activities} = voting_group_fixture(scope)
+
+      assert {:error, :not_completed} = Activities.reopen_group(scope, voting)
+      assert {:error, :not_completed} = Activities.reopen_group(scope, group_fixture(scope))
+    end
+
+    test "refuses a completed group that is not fully vetoed" do
+      scope = user_scope_fixture()
+
+      # A dead heat is the tie takeover's case, not this exit's.
+      {tied, _activities} = tied_group(scope)
+      assert {:error, :not_all_vetoed} = Activities.reopen_group(scope, tied)
+
+      # An untouched pool completed without a single ballot.
+      {group, _activities} = voting_group_fixture(scope)
+      {:ok, untouched} = Activities.complete_group(scope, group)
+      assert {:error, :not_all_vetoed} = Activities.reopen_group(scope, untouched)
+    end
+
+    test "refuses a rescued group — its result is already declared" do
+      scope = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+      {:ok, rescued} = Activities.rescue_group(scope, completed)
+
+      assert {:error, :already_resolved} = Activities.reopen_group(scope, rescued)
+    end
+
+    test "refuses a stale struct that predates a rescue committed in another tab, deleting nothing" do
+      scope = user_scope_fixture()
+      {completed, activities} = all_vetoed_group(scope)
+
+      # Tab A rescues; tab B still holds the pre-rescue struct (resolution: nil) —
+      # the window between that commit and PubSub delivery. Guarding on the stale
+      # struct once let this reopen "succeed": votes deleted, status :draft, and
+      # the "app_rescue" stamp left in place, silently pre-deciding round 2.
+      {:ok, rescued} = Activities.rescue_group(scope, completed)
+      assert completed.resolution == nil
+
+      assert {:error, :already_resolved} = Activities.reopen_group(scope, completed)
+
+      # The declared result stands whole: still completed, still stamped, every
+      # vote row and every locked ballot intact.
+      persisted = Repo.get!(Group, completed.id)
+      assert persisted.status == :completed
+      assert persisted.resolution == "app_rescue"
+      assert persisted.resolved_activity_id == rescued.resolved_activity_id
+      assert length(group_votes(activities)) == 3
+
+      participants = Repo.all(from(p in Participant, where: p.group_id == ^completed.id))
+      assert Enum.all?(participants, & &1.voted_at)
+    end
+
+    test "refuses a stale struct whose group was already reopened in another tab" do
+      scope = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+      {:ok, _reopened} = Activities.reopen_group(scope, completed)
+
+      # The stale struct still reads :completed; the in-transaction re-read sees
+      # the :draft the first reopen left behind.
+      assert {:error, :not_completed} = Activities.reopen_group(scope, completed)
+      assert Repo.get!(Group, completed.id).status == :draft
+    end
+
+    test "Group.reopen_changeset/1 forces every clear, even when the struct already reads cleared" do
+      # change/2 drops a change equal to the struct's current value, so a stale
+      # struct still reading nil for a column the database has since set would
+      # silently keep that column. The changeset must emit all six writes
+      # unconditionally — it cannot know how fresh its struct is.
+      changeset = Group.reopen_changeset(%Group{status: :draft, resolution: nil})
+
+      assert changeset.changes == %{
+               status: :draft,
+               completed_at: nil,
+               deadline_at: nil,
+               resolution: nil,
+               resolved_activity_id: nil,
+               resolved_at: nil
+             }
+    end
+
+    test "raises for someone else's group" do
+      scope = user_scope_fixture()
+      stranger = user_scope_fixture()
+      {completed, _activities} = all_vetoed_group(scope)
+
+      assert_raise FunctionClauseError, fn ->
+        Activities.reopen_group(stranger, completed)
+      end
     end
   end
 end

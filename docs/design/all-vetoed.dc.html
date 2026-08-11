@@ -1,0 +1,162 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"><style>
+body{margin:0;background:#F0F5F1}
+a{color:#6B46F0}a:hover{color:#FF6A2B}
+@keyframes flick{0%,100%{transform:scaleY(1) scaleX(1) skewX(0deg)}35%{transform:scaleY(1.16) scaleX(.94) skewX(4deg)}70%{transform:scaleY(.93) scaleX(1.05) skewX(-3deg)}}
+@keyframes flick2{0%,100%{transform:scaleY(1.08) skewX(-3deg)}45%{transform:scaleY(.9) scaleX(1.06) skewX(5deg)}}
+@keyframes bob{0%,100%{transform:translateY(0) rotate(-2.5deg)}50%{transform:translateY(-10px) rotate(2.5deg)}}
+@keyframes ember{0%{transform:translateY(0) scale(1);opacity:0}18%{opacity:1}100%{transform:translateY(-130px) scale(.3);opacity:0}}
+@keyframes buzz{0%,100%{transform:translate(0,0)}25%{transform:translate(-1px,1px)}75%{transform:translate(1px,-1px)}}
+</style></helmet>
+
+<div style="min-height:100vh;display:grid;place-items:center;padding:44px 20px;font-family:'Instrument Sans',sans-serif">
+<div style="display:flex;flex-direction:column;align-items:center;gap:16px">
+
+<div style="font:500 11px 'DM Mono',monospace;color:#5E6D64;letter-spacing:.08em">EDGE CASE · EVERY OPTION VETOED</div>
+
+<div style="width:390px;border:2px solid #17211C;border-radius:26px;overflow:hidden;box-shadow:7px 7px 0 #17211C;background:#F7FBF8">
+
+  <div style="display:flex;align-items:center;gap:10px;padding:11px 15px 12px;border-bottom:2px solid #17211C;background:#fff">
+    <div style="width:31px;height:31px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:600 16px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">‹</div>
+    <span style="display:flex;align-items:center;gap:6px"><img src="./icon.svg" width="20" height="20" alt=""><span style="font:700 14px 'Instrument Sans',sans-serif">Consensus</span></span>
+    <span style="flex:1;text-align:right;font:500 10.5px 'DM Mono',monospace;color:#FF6A2B">ALL VETOED</span>
+    <div style="width:31px;height:31px;flex:none;border:2px solid #17211C;border-radius:50%;display:grid;place-items:center;font:700 14px/1 'Instrument Sans',sans-serif;cursor:pointer" style-hover="background:#FFD84D">⋯</div>
+  </div>
+
+  <div style="padding:22px 20px 24px;display:flex;flex-direction:column;gap:18px">
+
+    <div onClick="{{ onPoke }}" style="position:relative;height:250px;border:2px solid #17211C;border-radius:18px;overflow:hidden;background:#17211C;cursor:pointer;box-shadow:4px 4px 0 #17211C">
+      <div style="position:absolute;inset:0;background:radial-gradient(120% 80% at 50% 108%,#FF6A2B 0%,#B4331A 42%,#3A1508 70%,#17211C 100%)"></div>
+
+      <svg viewBox="0 0 350 250" preserveAspectRatio="xMidYMax slice" style="position:absolute;inset:0;width:100%;height:100%">
+
+        <g opacity=".55">
+          <g transform="translate(38,256) scale(1.05)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick2 1.5s ease-in-out infinite"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#B4331A"></path></g></g>
+          <g transform="translate(132,258) scale(1.35)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick 1.9s ease-in-out infinite .4s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#B4331A"></path></g></g>
+          <g transform="translate(238,256) scale(1.15)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick2 1.7s ease-in-out infinite .9s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#B4331A"></path></g></g>
+          <g transform="translate(320,258) scale(1.25)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick 2.1s ease-in-out infinite .2s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#B4331A"></path></g></g>
+        </g>
+
+        <g style="transform-box:fill-box;transform-origin:50% 100%;animation:bob 1.5s ease-in-out infinite">
+          <g transform="translate(175,214)">
+            <path d="M-30,10 C-34,-22 -30,-46 -25,-58 L25,-58 C30,-46 34,-22 30,10 Z" fill="#FF6A2B" stroke="#17211C" stroke-width="5" stroke-linejoin="round"></path>
+            <g>
+              <path d="M-25,-56 C-48,-70 -63,-96 -70,-124" fill="none" stroke="#17211C" stroke-width="16" stroke-linecap="round"></path>
+              <path d="M-25,-56 C-48,-70 -63,-96 -70,-124" fill="none" stroke="#FF6A2B" stroke-width="8" stroke-linecap="round"></path>
+              <circle cx="-70" cy="-124" r="12" fill="#FFD84D" stroke="#17211C" stroke-width="5"></circle>
+              <animateTransform attributeName="transform" type="rotate" values="-12 -25 -56;9 -25 -56;-12 -25 -56" dur="0.62s" repeatCount="indefinite"></animateTransform>
+            </g>
+            <g>
+              <path d="M25,-56 C48,-70 63,-96 70,-124" fill="none" stroke="#17211C" stroke-width="16" stroke-linecap="round"></path>
+              <path d="M25,-56 C48,-70 63,-96 70,-124" fill="none" stroke="#FF6A2B" stroke-width="8" stroke-linecap="round"></path>
+              <circle cx="70" cy="-124" r="12" fill="#FFD84D" stroke="#17211C" stroke-width="5"></circle>
+              <animateTransform attributeName="transform" type="rotate" values="10 25 -56;-11 25 -56;10 25 -56" dur="0.62s" repeatCount="indefinite"></animateTransform>
+            </g>
+            <circle cx="0" cy="-96" r="46" fill="#FF6A2B" stroke="#17211C" stroke-width="5"></circle>
+            <circle cx="-18" cy="-104" r="15" fill="#fff" stroke="#17211C" stroke-width="4.5"></circle>
+            <circle cx="18" cy="-104" r="15" fill="#fff" stroke="#17211C" stroke-width="4.5"></circle>
+            <circle cx="-14" cy="-101" r="6" fill="#17211C"></circle>
+            <circle cx="22" cy="-101" r="6" fill="#17211C"></circle>
+            <path d="M-36,-124 L-22,-128" stroke="#17211C" stroke-width="5" stroke-linecap="round"></path>
+            <path d="M36,-124 L22,-128" stroke="#17211C" stroke-width="5" stroke-linecap="round"></path>
+            <path d="M-17,-80 C-13,-60 13,-60 17,-80 C 7,-73 -7,-73 -17,-80 Z" fill="#17211C"></path>
+          </g>
+        </g>
+
+        <g transform="translate(20,254) scale(1.1)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick 1.05s ease-in-out infinite"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#FF6A2B"></path><path d="M-14,4 C-19,-18 -10,-38 -4,-56 C 0,-46 8,-36 12,-24 C 16,-13 16,-4 14,4 Z" fill="#FFD84D"></path></g></g>
+        <g transform="translate(92,256) scale(1.5)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick2 .86s ease-in-out infinite .2s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#FF6A2B"></path><path d="M-14,4 C-19,-18 -10,-38 -4,-56 C 0,-46 8,-36 12,-24 C 16,-13 16,-4 14,4 Z" fill="#FFD84D"></path></g></g>
+        <g transform="translate(175,254) scale(1.15)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick 1.25s ease-in-out infinite .5s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#FF6A2B"></path><path d="M-14,4 C-19,-18 -10,-38 -4,-56 C 0,-46 8,-36 12,-24 C 16,-13 16,-4 14,4 Z" fill="#FFD84D"></path></g></g>
+        <g transform="translate(258,256) scale(1.45)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick2 .96s ease-in-out infinite .35s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#FF6A2B"></path><path d="M-14,4 C-19,-18 -10,-38 -4,-56 C 0,-46 8,-36 12,-24 C 16,-13 16,-4 14,4 Z" fill="#FFD84D"></path></g></g>
+        <g transform="translate(334,254) scale(1.2)"><g style="transform-box:fill-box;transform-origin:50% 100%;animation:flick 1.15s ease-in-out infinite .7s"><path d="M-30,4 C-36,-26 -22,-50 -11,-71 C-6,-82 -3,-91 -1,-101 C 5,-87 14,-71 22,-57 C 31,-42 35,-16 30,4 Z" fill="#FF6A2B"></path><path d="M-14,4 C-19,-18 -10,-38 -4,-56 C 0,-46 8,-36 12,-24 C 16,-13 16,-4 14,4 Z" fill="#FFD84D"></path></g></g>
+
+        <circle cx="52" cy="168" r="4.5" fill="#FFD84D" style="animation:ember 2.6s linear infinite"></circle>
+        <circle cx="146" cy="164" r="3.5" fill="#FFC2A3" style="animation:ember 3.2s linear infinite .8s"></circle>
+        <circle cx="243" cy="166" r="5" fill="#FFD84D" style="animation:ember 2.9s linear infinite 1.5s"></circle>
+        <circle cx="308" cy="170" r="3" fill="#FFC2A3" style="animation:ember 3.5s linear infinite .4s"></circle>
+      </svg>
+
+      <div style="position:absolute;left:14px;top:14px;padding:5px 9px;border:2px solid #17211C;border-radius:8px;background:#FFD84D;font:500 10px 'DM Mono',monospace;animation:buzz .18s steps(2) infinite">{{ counter }}</div>
+      <div style="position:absolute;right:14px;top:14px;padding:5px 9px;border:2px solid #FFC2A3;border-radius:8px;font:500 9.5px 'DM Mono',monospace;color:#FFC2A3">TAP THE GUY</div>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:7px">
+      <h1 style="margin:0;font:700 30px/1.08 'Instrument Sans',sans-serif;color:#17211C;letter-spacing:-.02em;text-wrap:pretty">{{ headline }}</h1>
+      <p style="margin:0;font:400 14px/1.5 'Instrument Sans',sans-serif;color:#3B4A42;text-wrap:pretty">{{ subline }}</p>
+    </div>
+
+    <div style="border:2px solid #17211C;border-radius:14px;background:#fff;overflow:hidden">
+      <div style="padding:9px 13px;border-bottom:2px solid #17211C;background:#F0F5F1;font:500 10px 'DM Mono',monospace;color:#5E6D64;letter-spacing:.07em">THE CARNAGE</div>
+      <sc-for list="{{ vetoed }}" as="row" hint-placeholder-count="4">
+        <div style="display:flex;align-items:center;gap:10px;padding:9px 13px;border-bottom:1px solid #E3EBE5">
+          <span style="width:15px;height:15px;flex:none;border:2px solid #FF6A2B;border-radius:50%;display:grid;place-items:center;font:700 9px/1 'Instrument Sans',sans-serif;color:#FF6A2B">✕</span>
+          <span style="flex:1;font:500 13px 'Instrument Sans',sans-serif;color:#8A968E;text-decoration:line-through">{{ row.name }}</span>
+          <span style="font:500 10px 'DM Mono',monospace;color:#FF6A2B">{{ row.by }}</span>
+        </div>
+      </sc-for>
+    </div>
+
+    <div style="display:flex;flex-direction:column;gap:9px">
+      <button style="border:2px solid #17211C;border-radius:13px;background:#FF6A2B;color:#17211C;font:700 15px 'Instrument Sans',sans-serif;padding:14px;cursor:pointer;box-shadow:4px 4px 0 #17211C" style-hover="transform:translate(2px,2px);box-shadow:2px 2px 0 #17211C" style-active="transform:translate(4px,4px);box-shadow:0 0 0 #17211C">Add new options</button>
+      <button style="border:2px solid #17211C;border-radius:13px;background:#fff;color:#17211C;font:600 14px 'Instrument Sans',sans-serif;padding:12px;cursor:pointer" style-hover="background:#FFD84D">Let the app pick one at random</button>
+      <div style="text-align:center;font:400 11.5px 'DM Mono',monospace;color:#5E6D64">or accept that pizza was always the answer</div>
+    </div>
+
+  </div>
+
+  <div style="border-top:2px solid #17211C;background:#F7FBF8;padding:12px 16px 14px;display:flex;flex-direction:column;align-items:center;gap:9px">
+    <div style="display:flex;align-items:center;gap:9px">
+      <span style="font:600 11.5px 'Instrument Sans',sans-serif;color:#3B4A42">How's this going?</span>
+      <div style="width:29px;height:29px;border:2px solid #17211C;border-radius:50%;background:#B9EFC9;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 20 20"><circle cx="7" cy="8" r="1.3" fill="#17211C"/><circle cx="13" cy="8" r="1.3" fill="#17211C"/><path d="M6 12.2c1 1.5 2.4 2.2 4 2.2s3-.7 4-2.2" stroke="#17211C" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg></div>
+      <div style="width:29px;height:29px;border:2px solid #17211C;border-radius:50%;background:#FFC2A3;display:grid;place-items:center;cursor:pointer;box-shadow:2px 2px 0 #17211C" style-hover="transform:translate(1px,1px);box-shadow:1px 1px 0 #17211C"><svg width="15" height="15" viewBox="0 0 20 20"><circle cx="7" cy="8" r="1.3" fill="#17211C"/><circle cx="13" cy="8" r="1.3" fill="#17211C"/><path d="M6 14.4c1-1.5 2.4-2.2 4-2.2s3 .7 4 2.2" stroke="#17211C" stroke-width="1.7" fill="none" stroke-linecap="round"/></svg></div>
+    </div>
+    <div style="display:flex;align-items:center;gap:8px;font:600 11px 'Instrument Sans',sans-serif"><a href="#" style="color:#17211C;text-decoration:none">About us</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none">How it works</a><span style="color:#A9B7AE">·</span><a href="#" style="color:#17211C;text-decoration:none">Privacy</a></div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center"><a href="https://marketfinder.us" style="color:#6B46F0;text-decoration:none">also check out marketfinder.us</a></div>
+    <div style="font:400 9.5px 'DM Mono',monospace;color:#5E6D64;text-align:center">Made with ❤️ in Philadelphia</div>
+  </div>
+
+</div>
+
+<p style="margin:0;max-width:390px;font:400 12px/1.55 'Instrument Sans',sans-serif;color:rgba(23,33,28,.62);text-wrap:pretty">Triggers when every option in a session has been vetoed. Tapping the guy escalates the headline through four stages, then resets — nothing here blocks the two real exits.</p>
+
+</div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:460,&quot;height&quot;:1180},&quot;headline&quot;:{&quot;editor&quot;:&quot;text&quot;,&quot;default&quot;:&quot;&quot;,&quot;tsType&quot;:&quot;string&quot;},&quot;options&quot;:{&quot;editor&quot;:null,&quot;tsType&quot;:&quot;{name:string,by:string}[]&quot;}}">
+class Component extends DCLogic {
+  state = { pokes: 0 };
+  renderVals() {
+    const stages = [
+      { h: "Nobody wanted anything.", s: "Every single option got vetoed. That is genuinely hard to do." },
+      { h: "Still nothing.", s: "The group has now rejected more restaurants than most people visit in a year." },
+      { h: "This is fine.", s: "It is not fine. Somebody has to pick a place eventually." },
+      { h: "Total anarchy achieved.", s: "Congratulations. You have unlocked the worst possible outcome." }
+    ];
+    const p = this.state.pokes;
+    const st = stages[Math.min(p, stages.length - 1)];
+    return {
+      headline: this.props.headline || st.h,
+      subline: st.s,
+      counter: "VETOES " + (6 + p) + "/" + (6 + p),
+      vetoed: this.props.options ?? [
+        { name: "Ember & Rye", by: "MAYA" },
+        { name: "Little Saigon", by: "DEV" },
+        { name: "Pizzeria Vetri", by: "MAYA" },
+        { name: "The Green Room", by: "SAM" },
+        { name: "Tortas Don Julio", by: "DEV" },
+        { name: "Anywhere with a wait", by: "ALL 4" }
+      ],
+      onPoke: () => this.setState(s => ({ pokes: (s.pokes + 1) % 4 }))
+    };
+  }
+}
+</script>
+</body>
+</html>

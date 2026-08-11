@@ -216,10 +216,22 @@ defmodule ConsensusWeb.Chrome do
   attr :context, :string,
     default: nil,
     doc: """
-    the right-hand DM Mono slot — the frame's "LIVE SESSION". `:app` only, and it must
-    never repeat a string the screen's own body already shows: it is for session or step
-    state ("STEP 2 OF 3", "LIVE SESSION", "ADMIN"), not for the page's name, which the
-    body's `<.eyebrow>` and `<h1>` are already saying 40px lower.
+    the right-hand DM Mono slot — the frame's "LIVE SESSION". `:app`, plus `:public` when
+    a screen explicitly passes one (the endgame takeovers' "ALL VETOED", which the guest
+    results screen wears too — its pill is already `false` there, so the slot has the
+    right edge to itself). It must never repeat a string the screen's own body already
+    shows: it is for session or step state ("STEP 2 OF 3", "LIVE SESSION", "ADMIN"), not
+    for the page's name, which the body's `<.eyebrow>` and `<h1>` are already saying 40px
+    lower.
+    """
+
+  attr :context_class, :string,
+    default: nil,
+    doc: """
+    an accent for the context slot — `nil` (the default) keeps the muted grey every
+    ordinary screen uses. The endgame takeovers are the reason it exists (the designs
+    draw "ALL VETOED" in tangerine and "DEAD HEAT" in violet); pass a text colour class
+    and nothing else.
     """
 
   attr :current_scope, :map, default: nil, doc: "drives the ⋯ menu's contents"
@@ -337,10 +349,17 @@ defmodule ConsensusWeb.Chrome do
         <.wordmark variant={@variant} />
       </.link>
 
+      <%!-- On `:app` the span renders even with no context — its `flex-1` is what pushes
+            the `⋯` to the right edge. On `:public` it renders only when a screen passes a
+            context (today, the endgame takeovers on `/join/:slug/results`, whose pill is
+            already dropped), so the pill's `ml-auto` layout is untouched everywhere else. --%>
       <span
-        :if={@variant == :app}
+        :if={@variant == :app or (@variant == :public and @context)}
         id="chrome-context"
-        class="min-w-0 flex-1 truncate text-right font-mono text-[10.5px] font-medium text-muted"
+        class={[
+          "min-w-0 flex-1 truncate text-right font-mono text-[10.5px] font-medium",
+          @context_class || "text-muted"
+        ]}
       >
         {@context}
       </span>

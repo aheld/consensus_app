@@ -20,6 +20,19 @@ defmodule Consensus.VotingTest do
 
   defp reload(%Participant{id: id}), do: Repo.get!(Participant, id)
 
+  # A completed group in which every option was vetoed — the all-vetoed endgame.
+  # One veto per participant is the rule, so it takes one participant per option.
+  defp all_vetoed_completed_group(scope) do
+    {group, activities} = voting_group_fixture(scope)
+
+    for activity <- activities do
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], activity.id)
+    end
+
+    {:ok, completed} = Activities.complete_group(scope, group)
+    {completed, activities}
+  end
+
   describe "create_participant/2" do
     test "creates a named guest and mints a token" do
       scope = user_scope_fixture()
@@ -576,6 +589,103 @@ defmodule Consensus.VotingTest do
 
       assert {:error, :empty_ballot} = Voting.cast_ballot(participant_fixture(group), [], nil)
     end
+
+    # `outcome/1` reads only the flags, so a completed, tied, unresolved group answers
+    # {:winner, position-tiebroken top} — the status-blind reading it has always given.
+    # `outcome/2` below is what tells a dead heat apart; this pins that the old arity
+    # did not quietly change underneath its remaining callers.
+    test "outcome/1 stays status-blind: a completed dead heat still reads as a winner" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      assert {:winner, row} = completed |> Voting.tally() |> Voting.outcome()
+      assert row.activity.id == a.id
+    end
+  end
+
+  describe "outcome/2" do
+    test "answers {:tie, rows} for a completed, unresolved dead heat — and only a completed one" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+
+      # Mid-vote, a dead heat is not an endgame: the deadline can still break it.
+      assert {:leader, _row} = Voting.outcome(group, Voting.tally(group))
+
+      {:ok, completed} = Activities.complete_group(scope, group)
+      assert {:tie, rows} = Voting.outcome(completed, Voting.tally(completed))
+      assert Enum.map(rows, & &1.activity.id) == [a.id, b.id]
+    end
+
+    test "ties three ways when three survivors share the top" do
+      scope = user_scope_fixture()
+      {group, [a, b, c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id, c.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      assert {:tie, rows} = Voting.outcome(completed, Voting.tally(completed))
+      assert Enum.map(rows, & &1.activity.id) == [a.id, b.id, c.id]
+    end
+
+    test "a tie among survivors still ties when something else was vetoed" do
+      scope = user_scope_fixture()
+      {group, [a, b, c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], c.id)
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      assert {:tie, rows} = Voting.outcome(completed, Voting.tally(completed))
+      assert Enum.map(rows, & &1.activity.id) == [a.id, b.id]
+    end
+
+    test "a completed untouched pool is :no_votes, not an every-way tie at zero" do
+      scope = user_scope_fixture()
+      {group, _activities} = voting_group_fixture(scope)
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      assert :no_votes = Voting.outcome(completed, Voting.tally(completed))
+    end
+
+    test "a clear winner and the all-vetoed pool fall through to outcome/1's answers" do
+      scope = user_scope_fixture()
+
+      {group, [a, _b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+      assert {:winner, row} = Voting.outcome(completed, Voting.tally(completed))
+      assert row.activity.id == a.id
+
+      {vetoed_out, _activities} = all_vetoed_completed_group(scope)
+      assert :no_consensus = Voting.outcome(vetoed_out, Voting.tally(vetoed_out))
+    end
+
+    test "a resolved tie is {:winner, row} naming the picked activity, not the pool order" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      # b would lose the position tiebreak; the organizer's pick overrides it.
+      {:ok, resolved} = Activities.resolve_group(scope, completed, b.id, "organizer_pick")
+
+      assert {:winner, row} = Voting.outcome(resolved, Voting.tally(resolved))
+      assert row.activity.id == b.id
+    end
+
+    test "a rescued all-vetoed pool is {:winner, rescued row} with its vetoes intact" do
+      scope = user_scope_fixture()
+      {completed, [_a, b, _c]} = all_vetoed_completed_group(scope)
+      {:ok, rescued} = Activities.resolve_group(scope, completed, b.id, "app_rescue")
+
+      assert {:winner, row} = Voting.outcome(rescued, Voting.tally(rescued))
+      assert row.activity.id == b.id
+      assert row.rescued?
+      refute row.vetoed?
+      # The data stays true — the rescue is a reading, not a rewrite.
+      assert row.vetoes == 1
+    end
   end
 
   describe "tally/1" do
@@ -679,7 +789,16 @@ defmodule Consensus.VotingTest do
       tally = Voting.tally(group)
 
       expected_keys =
-        MapSet.new([:activity, :approvals, :vetoes, :vetoed?, :leader?, :winner?, :bar_percent])
+        MapSet.new([
+          :activity,
+          :approvals,
+          :vetoes,
+          :vetoed?,
+          :rescued?,
+          :leader?,
+          :winner?,
+          :bar_percent
+        ])
 
       for row <- tally do
         assert MapSet.new(Map.keys(row)) == expected_keys
@@ -706,6 +825,76 @@ defmodule Consensus.VotingTest do
       assert Enum.all?(Voting.tally(group), &(&1.approvals == 0))
       assert Enum.find(Voting.tally(other), &(&1.activity.id == x.id)).approvals == 1
       refute Enum.find(Voting.tally(group), &(&1.activity.id == a.id)).vetoed?
+    end
+
+    test "rescued? is present on every row and false without a resolution" do
+      scope = user_scope_fixture()
+      {group, [a, _b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], a.id)
+
+      tally = Voting.tally(group)
+      assert Enum.all?(tally, &Map.has_key?(&1, :rescued?))
+      refute Enum.any?(tally, & &1.rescued?)
+    end
+  end
+
+  # `Consensus.Activities.resolve_group/4` stamps an interpretation on the group and
+  # never touches a vote row; `tally/1` is where the stamp becomes visible. See the
+  # endgame-screens plan and D-034 (no silent fallback — a rescue is *recorded*, and
+  # the counts stay true).
+  describe "tally/1 honours a recorded resolution" do
+    test "an app_rescue un-vetoes the rescued row in interpretation, vetoes intact" do
+      scope = user_scope_fixture()
+      {completed, [a, b, c]} = all_vetoed_completed_group(scope)
+      {:ok, rescued_group} = Activities.resolve_group(scope, completed, b.id, "app_rescue")
+
+      tally = Voting.tally(rescued_group)
+      rescued_row = Enum.find(tally, &(&1.activity.id == b.id))
+
+      assert rescued_row.rescued?
+      refute rescued_row.vetoed?
+      assert rescued_row.vetoes == 1
+      assert rescued_row.leader?
+      assert rescued_row.winner?
+
+      # It ranks among the survivors — here, as the only one, first.
+      assert hd(tally).activity.id == b.id
+
+      for other_id <- [a.id, c.id] do
+        row = Enum.find(tally, &(&1.activity.id == other_id))
+        assert row.vetoed?
+        refute row.rescued?
+        refute row.leader?
+        refute row.winner?
+      end
+
+      # And the vote rows themselves are untouched: one veto per option, still there.
+      ids = [a.id, b.id, c.id]
+      assert Repo.aggregate(from(v in Vote, where: v.activity_id in ^ids), :count) == 3
+    end
+
+    test "winner?/leader? go to the resolved activity of a broken tie, overriding position" do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, completed} = Activities.complete_group(scope, group)
+
+      # Unresolved, the flags follow the position tiebreak: a leads.
+      assert [%{activity: %{id: top_id}, winner?: true} | _] = Voting.tally(completed)
+      assert top_id == a.id
+
+      {:ok, resolved} = Activities.resolve_group(scope, completed, b.id, "organizer_pick")
+      tally = Voting.tally(resolved)
+
+      chosen = Enum.find(tally, &(&1.activity.id == b.id))
+      passed_over = Enum.find(tally, &(&1.activity.id == a.id))
+
+      assert chosen.winner?
+      assert chosen.leader?
+      refute passed_over.winner?
+      refute passed_over.leader?
+      # A tie pick rescues nothing — nothing here was vetoed.
+      refute Enum.any?(tally, & &1.rescued?)
     end
   end
 
@@ -772,6 +961,7 @@ defmodule Consensus.VotingTest do
                    :approvals,
                    :vetoes,
                    :vetoed?,
+                   :rescued?,
                    :leader?,
                    :winner?,
                    :bar_percent

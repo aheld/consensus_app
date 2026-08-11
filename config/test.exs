@@ -44,6 +44,13 @@ config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Test
 # when `fetch/1` runs inside a `start_async` Task. See its moduledoc.
 config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreviewStub
 
+# The tie takeover's "Let the app break the tie" shuffle runs the design's clock in
+# dev/prod (a 110ms step landing at ~1.9s — `ConsensusWeb.Endgame.Tie`); the suite
+# shortens it so the tests that watch the spin land don't sleep through real seconds.
+# Not too short, though: the mid-spin refusal tests need a few synchronous clicks to
+# fit *inside* the spin, so the landing stays ~100ms out.
+config :consensus, endgame_tie_spin_interval_ms: 25, endgame_tie_spin_ticks: 4
+
 # Disable swoosh api client as it is only required for production adapters
 config :swoosh, :api_client, false
 

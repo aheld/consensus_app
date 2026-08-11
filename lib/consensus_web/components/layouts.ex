@@ -101,6 +101,10 @@ defmodule ConsensusWeb.Layouts do
 
   attr :context, :string, default: nil, doc: "the header's right-hand DM Mono slot"
 
+  attr :context_class, :string,
+    default: nil,
+    doc: "an accent for the context slot (the endgame takeovers); see `Chrome.header/1`"
+
   attr :pill, :boolean,
     default: true,
     doc:
@@ -165,6 +169,7 @@ defmodule ConsensusWeb.Layouts do
           back={@back}
           back_patch={@back_patch}
           context={@context}
+          context_class={@context_class}
           pill={@pill}
           pill_confirm={@pill_confirm}
           back_confirm={@back_confirm}

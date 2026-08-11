@@ -34,12 +34,16 @@ defmodule ConsensusWeb.ResultsComponents do
   happens once a group is `:completed` or `:cancelled` — that is this module's own
   extension, built to satisfy PRD product invariant 5 (the session ends in an action:
   a winner, a booking CTA, a runner-up failsafe, a paste-back-to-chat summary) and
-  `Consensus.Voting.outcome/1`'s four-way answer (`{:winner, row}`, `{:leader, row}`,
-  `:no_consensus`, `:no_votes`). `{:leader, _}` cannot reach a completed group in
-  practice (`outcome/1` reports `:winner` once `Consensus.Voting.tally/1`'s `winner?`
-  flags flip, which only happens after completion) — the private `outcome_section/1`
-  clause for it exists only so a caller that somehow reaches it renders nothing
-  instead of crashing.
+  `Consensus.Voting.outcome/2`'s five-way answer (`{:winner, row}`, `{:tie, rows}`,
+  `{:leader, row}`, `:no_consensus`, `:no_votes`, plus `:vetoes_only`). Both callers
+  pass the **status-aware** `outcome/2`, so a completed, unresolved dead heat arrives
+  here as `{:tie, rows}` — its own clause, which declares no winner — and `{:winner,
+  row}` with two rows still level on the tally means the tie **was resolved** (the
+  group carries `resolution` = `"organizer_pick"` or `"app_pick"`; see
+  `docs/plans/endgame-screens.md`), so the note under the winner card names the
+  tie-breaker, never the pool order. `{:leader, _}` cannot reach a completed group in
+  practice — the private `outcome_section/1` clause for it exists only so a caller
+  that somehow reaches it renders nothing instead of crashing.
 
   Q-5 and Q-7 in `docs/open-questions.md` are still open: there is no real booking API
   and no delivery channel for a winner notification. What is built here is the
@@ -77,32 +81,17 @@ defmodule ConsensusWeb.ResultsComponents do
   def presentable_tally(_group, tally), do: tally
 
   @doc """
-  True when two or more surviving options share the highest approval count.
-
-  Public because the *callers* have to say the same thing this module's winner card says.
-  `ConsensusWeb.GroupLive.Results` renders a footer headline under the panel, and
-  `finished_headline/2` had no tie branch — so on a dead heat the card at document y=263
-  read **Tied at the top** and explained that pool position, not votes, settled it, while
-  the footer at y=1030 read "Voting is closed and you have a winner." One scroll of one
-  page, opposite claims.
-
-  The tie itself is presentation-only, exactly as `mark_leaders/2` is: `Consensus.Voting`
-  is untouched, `tally/1` still breaks the tie by `activity.position` and one option still
-  wins. What this exposes is the *fact of* the dead heat, so nothing above the context can
-  announce an unqualified win over one.
-  """
-  def tie_at_top?(tally), do: length(tied_at_top(tally)) > 1
-
-  @doc """
   The shared results body: header, an optional banner, the avatar row, the outcome
   section (completed/cancelled groups only), the tally, the anonymity caption, and a
   caller-supplied footer.
 
   `group` needs `:activities` preloaded (every caller already has this —
   `Consensus.Activities.get_group!/2` and `get_group_by_slug/1` both preload it).
-  `tally` and `outcome` are `Consensus.Voting.tally/1` and `Consensus.Voting.outcome/1`
+  `tally` and `outcome` are `Consensus.Voting.tally/1` and `Consensus.Voting.outcome/2`
   applied to that same `group`, computed by the caller so this component does no
-  reads of its own. `participants` is `Consensus.Voting.participants/1`'s shape,
+  reads of its own — `outcome/2`, not `/1`, because only the status-aware arity can
+  report a completed, unresolved dead heat as `{:tie, rows}` instead of crowning the
+  position tie-break. `participants` is `Consensus.Voting.participants/1`'s shape,
   passed straight through to `Sticker.participant_avatar_row/1`.
 
   `countdown_text` is only shown while `group.status == :voting` — reuse
@@ -136,6 +125,18 @@ defmodule ConsensusWeb.ResultsComponents do
   attr :current_participant_id, :integer, default: nil
   attr :avatar_caption, :string, default: nil
   attr :countdown_text, :string, default: nil
+
+  attr :organizer_username, :string,
+    default: nil,
+    doc: """
+    who the tie-break note and the paste-to-chat summary name on an `"organizer_pick"`
+    resolution. The guest waiting copy already names the human ("Only <username> can
+    break this tie"), so the exit artifact must be at least as specific — "aheld picked
+    X to break the tie", not "The organizer picked X". Both callers have it cheap:
+    `JoinLive.Results` assigns it at mount and `GroupLive.Results` reads its own scope
+    (the group is organizer-scoped, so the viewer is the organizer). `nil` falls back
+    to "The organizer" for any caller that cannot say.
+    """
 
   slot :banner, doc: "e.g. the participant's mint \"Your votes are in.\" confirmation"
   slot :footer, required: true
@@ -173,6 +174,7 @@ defmodule ConsensusWeb.ResultsComponents do
           group={@group}
           outcome={@outcome}
           tally={@tally}
+          organizer_username={@organizer_username}
         />
 
         <div class="flex flex-col gap-[11px]">
@@ -347,8 +349,10 @@ defmodule ConsensusWeb.ResultsComponents do
       assigns
       |> assign(:row, row)
       |> assign(:runner_up, runner_up(assigns.tally, row))
-      |> assign(:summary, winner_summary(assigns.group, row, tied))
+      |> assign(:summary, winner_summary(assigns.group, row, tied, assigns.organizer_username))
       |> assign(:tied, if(length(tied) > 1, do: tied))
+      |> assign(:rescued, match?(%{rescued?: true}, row))
+      |> assign(:resolution, assigns.group.resolution)
 
     ~H"""
     <.sticker_card tone={:mint} depth={2} class="flex flex-col gap-3 p-4">
@@ -368,16 +372,15 @@ defmodule ConsensusWeb.ResultsComponents do
         >
           ★
         </span>
-        <%!-- **"We have a winner" over a dead heat is a false headline, not a rounding
-              error.** `Consensus.Voting.tally/1` breaks a tie by `activity.position` — the
-              order the organizer dragged the pool into on `03 review` — so on a 1–1 tie
-              this card named one option and the row beneath demoted the other to
-              "Runner-up" at the identical count, with a paste-to-chat button under it. The
-              group still gets one answer (a runoff is an open product question and this is
-              not the place to invent one), but it is told that it is a tie and told the
-              rule that settled it. --%>
+        <%!-- **"We have a winner" over an unbroken dead heat was a false headline**, and
+              since `Voting.outcome/2` landed it cannot happen here: the unresolved tie is
+              `{:tie, rows}` — its own clause below, which declares nothing — so `@tied`
+              inside *this* clause means the tie **was broken** (a recorded
+              `"organizer_pick"`/`"app_pick"` resolution, or the flags-only `outcome/1`
+              reading from a caller this module no longer has). There is a winner now; the
+              headline says so, and the note under it names the tie-breaker. --%>
         <span class="text-sm font-bold text-ink">
-          {if @tied, do: "Tied at the top", else: "We have a winner"}
+          {if @tied && is_nil(@resolution), do: "Tied at the top", else: "We have a winner"}
         </span>
       </div>
       <%!-- One interpolation, not five. HEEx puts the template's own newlines and
@@ -385,9 +388,22 @@ defmodule ConsensusWeb.ResultsComponents do
             inline renders as `…level on 1\n        approval.` — readable on screen, but
             un-assertable in a test without matching whitespace, which is the
             whitespace-significant-string trap of CLAUDE.md invariant 11 from the other
-            direction. `tie_note/2` returns the finished sentence. --%>
+            direction. `tie_note/4` returns the finished sentence. --%>
       <p :if={@tied} id="winner-tie-note" class="-mt-1 text-[12.5px] leading-[1.45] text-ink-soft">
-        {tie_note(@tied, @row)}
+        {tie_note(@tied, @row, @resolution, @organizer_username)}
+      </p>
+      <%!-- The honest line under an `"app_rescue"` winner (D-035's sibling rule for the
+            endgame, `docs/plans/endgame-screens.md`): every option was vetoed, the app
+            picked this one at random, and no vote was changed — `Voting.tally/1` only
+            reads the recorded resolution differently, so the veto count below stays
+            true. A rescue cannot coexist with the tie note above: the rescued row is the
+            only survivor, so `tied_at_top/1` can never return two. --%>
+      <p
+        :if={@rescued}
+        id="winner-rescue-note"
+        class="-mt-1 text-[12.5px] leading-[1.45] text-ink-soft"
+      >
+        {rescue_note(@row)}
       </p>
       <.photo_frame src={@row.activity.image_url} alt={@row.activity.name} height="h-[130px]" />
       <div>
@@ -441,6 +457,50 @@ defmodule ConsensusWeb.ResultsComponents do
     """
   end
 
+  # A completed, unresolved dead heat (`Voting.outcome/2`'s `{:tie, rows}`). **No winner
+  # is declared**: `tally/1` still breaks the tie by `activity.position` for its flags,
+  # but pool order is the order the organizer happened to drag the pool into on
+  # `03 review`, which no voter has seen — announcing it as the result was the
+  # position-broken "winner" copy this clause replaced. **Unreachable from this app's
+  # two results screens since the Tie takeover landed** (`ConsensusWeb.Endgame.Tie` —
+  # `EndgameComponents.takeover/2` answers `:tie` for exactly the state this clause
+  # renders, and both callers gate `results_panel/1` on `@takeover == nil`), kept as
+  # the defensive rendering for any future caller of this panel: it states the
+  # standoff and settles nothing, which is the one honest thing to say about it.
+  defp outcome_section(%{outcome: {:tie, rows}} = assigns) do
+    assigns =
+      assigns
+      |> assign(:rows, rows)
+      |> assign(:note, unresolved_tie_note(rows))
+      |> assign(:summary, tie_summary(assigns.group, rows))
+
+    ~H"""
+    <.sticker_card tone={:mint} depth={2} class="flex flex-col gap-3 p-4">
+      <div class="flex items-center gap-2">
+        <span
+          class="grid size-[26px] shrink-0 place-items-center rounded-full border-2 border-ink bg-violet text-white"
+          aria-hidden="true"
+        >
+          ★
+        </span>
+        <span class="text-sm font-bold text-ink">Tied at the top</span>
+      </div>
+      <p id="tie-note" class="-mt-1 text-[12.5px] leading-[1.45] text-ink-soft">
+        {@note}
+      </p>
+      <button
+        type="button"
+        id="copy-summary"
+        phx-hook="Clipboard"
+        data-copy={@summary}
+        class="rounded-2xl border-2 border-ink bg-white p-3 text-center text-sm font-bold text-ink shadow-sticker-2 press-2"
+      >
+        Copy summary for the group chat
+      </button>
+    </.sticker_card>
+    """
+  end
+
   defp outcome_section(%{outcome: :no_consensus} = assigns) do
     ~H"""
     <.sticker_card tone={:muted} class="p-4">
@@ -479,27 +539,90 @@ defmodule ConsensusWeb.ResultsComponents do
   # empty render beats a `FunctionClauseError` if that invariant is ever wrong.
   defp outcome_section(%{outcome: {:leader, _row}} = assigns), do: ~H""
 
-  defp tie_note(tied, row) do
-    approvals = row.approvals
-    unit = if approvals == 1, do: "approval", else: "approvals"
+  defp rescue_note(row) do
+    "Every option was vetoed, so the app picked #{row.activity.name} at random " <>
+      "after voting closed. No votes were changed — it won by chance, not approval."
+  end
 
-    "#{length(tied)} options finished level on #{approvals} #{unit}. " <>
+  # The note under a winner card that sits over a level tally. Which sentence depends on
+  # *how* the tie stopped mattering (`docs/plans/endgame-screens.md`): a recorded
+  # resolution names its own tie-breaker — the person, by username, or the app — and
+  # only the resolution-less fallback (unreachable from this app's two callers, both on
+  # `Voting.outcome/2`, but honest for any flags-only caller) still names the pool-order
+  # rule `tally/1` applied.
+  defp tie_note(tied, row, "organizer_pick", organizer_username) do
+    "#{level_sentence(tied, row)} " <>
+      "#{picker_name(organizer_username)} picked #{row.activity.name} to break the tie."
+  end
+
+  defp tie_note(tied, row, "app_pick", _organizer_username) do
+    "#{level_sentence(tied, row)} The app picked #{row.activity.name} at random to break the tie."
+  end
+
+  defp tie_note(tied, row, _no_resolution, _organizer_username) do
+    "#{level_sentence(tied, row)} " <>
       "#{row.activity.name} takes it because it was first in the pool — no vote separated them."
+  end
+
+  # The guest's waiting copy on the tie takeover names the human ("Only <username> can
+  # break this tie"), so the exit artifact — the winner card's note and the summary the
+  # group actually reads in the chat — must be at least as specific once they have.
+  # "The organizer" survives only as the fallback for a caller with no name to give.
+  defp picker_name(nil), do: "The organizer"
+  defp picker_name(username), do: username
+
+  defp level_sentence(rows, %{approvals: approvals}) do
+    unit = if approvals == 1, do: "approval", else: "approvals"
+    "#{length(rows)} options finished level on #{approvals} #{unit}."
+  end
+
+  # The unresolved dead heat's own note: the fact, the names, and — deliberately — no
+  # rule that settles it, because nothing has.
+  defp unresolved_tie_note([row | _rest] = rows) do
+    names = rows |> Enum.map(& &1.activity.name) |> Enum.join(", ")
+
+    "#{level_sentence(rows, row)} #{names} — no vote separated them, and nothing here " <>
+      "picks one over the other."
   end
 
   # The paste-to-chat string is the one artefact that leaves the app, so it is the last
   # place a tie may be rounded off to a clean win: the group reads this line in the chat
   # and never opens the screen that would have qualified it.
-  defp winner_summary(group, row, tied) when length(tied) > 1 do
-    names = tied |> Enum.map(& &1.activity.name) |> Enum.join(", ")
-
-    "🤝 \"#{group.title}\" ended in a tie at #{row.approvals} — #{names}. " <>
-      "#{row.activity.name} takes it as first in the list."
+  #
+  # The same rule binds a rescue, first: an `"app_rescue"` winner won by chance after a
+  # full veto, and a bare "X won!" pasted into the chat would launder that into an
+  # earned win. The clause matches before the tie one, though the two cannot collide —
+  # a rescued pool has exactly one survivor.
+  defp winner_summary(group, %{rescued?: true} = row, _tied, _organizer_username) do
+    "🎲 Every option in \"#{group.title}\" was vetoed, so the app picked " <>
+      "#{row.activity.name} at random."
   end
 
-  defp winner_summary(group, row, _tied) do
+  defp winner_summary(group, row, tied, organizer_username) when length(tied) > 1 do
+    "🤝 \"#{group.title}\" ended in a tie at #{row.approvals} — #{tied_names(tied)}. " <>
+      tie_break_tail(group.resolution, row, organizer_username)
+  end
+
+  defp winner_summary(group, row, _tied, _organizer_username) do
     "🎉 #{row.activity.name} won \"#{group.title}\"!"
   end
+
+  # The unresolved standoff, pasted whole: the count, the names, and no quiet crowning.
+  defp tie_summary(group, [row | _rest] = rows) do
+    "🤝 \"#{group.title}\" ended in a tie at #{row.approvals} — #{tied_names(rows)}. " <>
+      "Nothing separated them."
+  end
+
+  defp tied_names(rows), do: rows |> Enum.map(& &1.activity.name) |> Enum.join(", ")
+
+  defp tie_break_tail("organizer_pick", row, organizer_username),
+    do: "#{picker_name(organizer_username)} picked #{row.activity.name} to break the tie."
+
+  defp tie_break_tail("app_pick", row, _organizer_username),
+    do: "The app picked #{row.activity.name} at random to break the tie."
+
+  defp tie_break_tail(_no_resolution, row, _organizer_username),
+    do: "#{row.activity.name} takes it as first in the list."
 
   defp runner_up(tally, %{activity: %{id: winner_id}}) do
     tally

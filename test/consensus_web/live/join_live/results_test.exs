@@ -346,6 +346,10 @@ defmodule ConsensusWeb.JoinLive.ResultsTest do
       refute html =~ "Change my ranking"
     end
 
+    # Since the endgame screens landed, an unresolved all-vetoed completed group renders
+    # the guest half of the All Vetoed takeover instead of the muted "no consensus"
+    # card — the takeover itself is pinned in `endgame/all_vetoed_test.exs`. What this
+    # test keeps pinning is the honesty half: nothing claims a winner.
     test "no consensus is reported honestly", %{conn: conn} do
       scope = user_scope_fixture()
       {group, [a]} = voting_group_fixture(scope, 1)
@@ -356,8 +360,42 @@ defmodule ConsensusWeb.JoinLive.ResultsTest do
 
       {:ok, _lv, html} = live(conn, ~p"/join/#{group.slug}/results")
 
-      assert html =~ "no consensus"
+      assert html =~ "Every single option got vetoed."
       refute html =~ "We have a winner"
+    end
+
+    # The guest sees the same `{:tie, rows}` the organizer does — `Voting.outcome/2` is
+    # wired on both results LiveViews, so the two screens cannot disagree about whether
+    # a dead heat was settled. What renders now is the guest half of the designed tie
+    # takeover (`ConsensusWeb.Endgame.Tie`; its own acceptance script is
+    # `endgame/tie_test.exs`): the same scene and list as the organizer's with no tap
+    # affordance and none of the organizer's exits, a waiting line naming the
+    # organizer, and — the honesty rule this test has always pinned — no winner
+    # declared and no pool-order rule named, to the very people whose votes drew.
+    test "an unresolved dead heat declares no winner to a guest", %{conn: conn} do
+      scope = user_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope, 3)
+      participant = participant_fixture(group)
+      {:ok, participant} = Voting.cast_ballot(participant, [a.id, b.id])
+      {:ok, group} = Activities.complete_group(scope, group)
+      conn = with_participant(conn, group, participant)
+
+      {:ok, lv, html} = live(conn, ~p"/join/#{group.slug}/results")
+
+      assert html =~ "dead heat"
+      assert html =~ "TIED FOR FIRST"
+      assert has_element?(lv, "#endgame-tie-row-#{a.id}")
+      assert has_element?(lv, "#endgame-tie-row-#{b.id}")
+      assert has_element?(lv, "#endgame-waiting", "can break this tie")
+      refute html =~ "We have a winner"
+      refute html =~ "first in the pool"
+      refute html =~ "Runner-up"
+      # No organizer exits, no tally, no paste-to-chat summary — the takeover replaced
+      # the whole panel, and a guest is never handed the tie-break controls.
+      refute has_element?(lv, "#endgame-lock")
+      refute html =~ "Let the app break the tie"
+      refute html =~ "copy-summary"
+      refute html =~ "Final tally"
     end
   end
 

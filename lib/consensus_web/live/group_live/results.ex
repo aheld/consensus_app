@@ -22,7 +22,12 @@ defmodule ConsensusWeb.GroupLive.Results do
   when the outcome was `:no_consensus` or `:no_votes` there was no winner card above it
   either, leaving the organizer of a finished session with no control anywhere on the page.
   `:completed` now names the outcome and offers `Start another session`; `:cancelled` says
-  it cannot be reopened and offers the same.
+  it cannot be reopened and offers the same. Since D-051 the two unresolved endgames never
+  reach that footer at all: a `:completed` all-vetoed pool or dead heat replaces the whole
+  panel — footer included — with a takeover state (`ConsensusWeb.Endgame.AllVetoed` /
+  `ConsensusWeb.Endgame.Tie`) carrying its own exits, and this LiveView's part is the
+  `@takeover` assign, the two `:if` branches in `render/1`, and the
+  `{:endgame_flash, ...}` / `:endgame_refresh` plumbing the LiveComponents report through.
 
   Reached from `HomeLive`'s group list and from `GroupLive.Share`'s "session is live"
   preview — see `docs/plans/voting-loop.md`. Sits in the router's existing
@@ -55,7 +60,9 @@ defmodule ConsensusWeb.GroupLive.Results do
   alias Consensus.Activities
   alias Consensus.Deadlines
   alias Consensus.Voting
+  alias ConsensusWeb.Endgame
 
+  import ConsensusWeb.EndgameComponents, only: [takeover: 2]
   import ConsensusWeb.ResultsComponents
 
   @tick_interval :timer.seconds(30)
@@ -152,24 +159,57 @@ defmodule ConsensusWeb.GroupLive.Results do
   def handle_info({:activity_updated, _activity}, socket), do: {:noreply, reload(socket)}
   def handle_info({:activities_changed, _activities}, socket), do: {:noreply, reload(socket)}
 
+  # The endgame takeover's two writes live in `ConsensusWeb.Endgame.AllVetoed`, a
+  # LiveComponent — and a LiveComponent's own `put_flash` is discarded unless it rides a
+  # redirect, so refusals (and the rescue's success line) report through these two
+  # messages instead. `:endgame_refresh` is how a stale tab whose PubSub message was
+  # late or lost still flips to the state its refusal was about.
+  def handle_info({:endgame_flash, kind, message}, socket) do
+    {:noreply, put_flash(socket, kind, message)}
+  end
+
+  def handle_info(:endgame_refresh, socket), do: {:noreply, reload(socket)}
+
   # `presentable_tally/2` is what keeps a cancelled session from painting a ★. See its
   # docs in `ConsensusWeb.ResultsComponents`: `Voting.tally/1` still marks a `leader?` on
   # a cancelled group (only `winner?` is gated on `:completed`), so this screen rendered
   # "Alpha Diner ★ 1" under a **Final tally** heading while saying twice, in the panel and
   # in the footer, that the session was cancelled and nobody won.
+  # `Voting.outcome/2`, not `outcome/1`: the status-aware arity is the only one that can
+  # answer `{:tie, tied_rows}` for a completed, unresolved dead heat — the flags-only
+  # reading crowns `tally/1`'s position tie-break and this screen then asserts an
+  # unqualified win over a draw. A recorded resolution comes back `{:winner, row}` with
+  # the resolved activity flagged, so the ordinary winner ending needs nothing special.
   defp load_group(socket, group) do
     tally = presentable_tally(group, Voting.tally(group))
+    outcome = Voting.outcome(group, tally)
 
     socket
     |> assign(:group, group)
     |> assign(:tally, tally)
-    |> assign(:outcome, Voting.outcome(tally))
+    |> assign(:outcome, outcome)
+    |> assign(:takeover, takeover(group, outcome))
     |> assign(:participants, Voting.participants(group))
   end
 
+  # A group can return to `:draft` under an open results tab now:
+  # `Consensus.Activities.reopen_group/2` (the All Vetoed takeover's "Add new options"
+  # exit) broadcasts on the same topic every other write does, and a draft has no
+  # results — `results_header/1` has no `:draft` clause on purpose, and mount bounces
+  # drafts for the same reason. Follow the reopen to the wizard rather than crash on it.
   defp reload(socket) do
     group = Activities.get_group!(socket.assigns.current_scope, socket.assigns.group.id)
-    load_group(socket, group)
+
+    if group.status == :draft do
+      socket
+      |> put_flash(
+        :info,
+        "This pool was reopened — there are no results until it is published again."
+      )
+      |> push_navigate(to: ~p"/groups/#{group}/review")
+    else
+      load_group(socket, group)
+    end
   end
 
   defp waiting_count(participants), do: Enum.count(participants, &(!&1.voted?))
@@ -205,24 +245,19 @@ defmodule ConsensusWeb.GroupLive.Results do
   # and so `:no_consensus` and `:no_votes`, which have no winner card above them at all,
   # still get a heading rather than a bare paragraph.
   #
-  # **The `{:winner, _}` clause takes the tally as well, and that is the fix for a
-  # contradiction this screen carried in two places.** `ResultsComponents.outcome_section/1`
-  # was corrected to say "Tied at the top" over a dead heat and to explain that pool
-  # position settled it; this headline was not, so the same page read "Tied at the top" at
-  # document y=263 and "Voting is closed and you have a winner." at y=1030. The card was the
-  # half that got fixed and the footer is the half a reader reaches last.
-  defp finished_headline({:winner, _row}, tally) do
-    if tie_at_top?(tally) do
-      "Voting is closed, and it ended in a tie."
-    else
-      "Voting is closed and you have a winner."
-    end
-  end
-
-  defp finished_headline(:no_consensus, _tally), do: "Voting is closed with no winner."
-  defp finished_headline(:vetoes_only, _tally), do: "Voting is closed with no winner."
-  defp finished_headline(:no_votes, _tally), do: "Voting is closed and nobody voted."
-  defp finished_headline(_outcome, _tally), do: "Voting is closed."
+  # **The tie has its own clause because the outcome carries it now.** This used to take
+  # the tally as a second argument and re-derive the dead heat with `tie_at_top?/1` —
+  # the fix for the page reading "Tied at the top" at document y=263 and "Voting is
+  # closed and you have a winner." at y=1030. `Voting.outcome/2` moved that fact into
+  # the outcome itself: an unresolved dead heat arrives as `{:tie, rows}`, and a
+  # `{:winner, _}` over a still-level tally means the tie was *resolved* — there is a
+  # winner, and saying so is the truth, not the contradiction.
+  defp finished_headline({:winner, _row}), do: "Voting is closed and you have a winner."
+  defp finished_headline({:tie, _rows}), do: "Voting is closed, and it ended in a tie."
+  defp finished_headline(:no_consensus), do: "Voting is closed with no winner."
+  defp finished_headline(:vetoes_only), do: "Voting is closed with no winner."
+  defp finished_headline(:no_votes), do: "Voting is closed and nobody voted."
+  defp finished_headline(_outcome), do: "Voting is closed."
 
   # `:completed` is reached two ways — the lazy deadline sweep in
   # `Consensus.Activities.maybe_complete_group/1`, and the **Close now** button 300px up
@@ -235,15 +270,31 @@ defmodule ConsensusWeb.GroupLive.Results do
 
   defp closed_early?(_group), do: false
 
-  # True on a tie as well as on a clean win: `ResultsComponents.winner_summary/3` already
-  # writes the tie into the copied string ("ended in a tie at N — …"), so "copy the summary"
-  # is not an instruction to paste an unqualified win into the chat.
+  # True on a broken tie as well as on a clean win: `ResultsComponents.winner_summary/4`
+  # writes the tie and its tie-breaker into the copied string, so "copy the summary" is
+  # not an instruction to paste an unqualified win into the chat.
   defp finished_note(_group, {:winner, _row}),
     do: "Copy the summary above to paste it back into the group chat."
 
-  defp finished_note(_group, :no_consensus),
+  # Nearly unreachable since the tie takeover landed (D-051): an unresolved dead heat
+  # renders `Endgame.Tie` — the organizer's break-the-tie exits — instead of this
+  # footer, and a resolved one's outcome is `{:winner, row}`. Kept as the defensive
+  # rendering for the same reason `:no_consensus` below keeps its clause: it states the
+  # standoff honestly and promises no tiebreak, which beats a crash if the takeover
+  # trigger and the outcome ever disagree.
+  defp finished_note(_group, {:tie, _rows}),
     do:
-      "Every option in the pool was vetoed, so nothing could win. A new session with a different pool is the way forward."
+      "No winner is declared — no vote separated the tied options. Copy the summary above to hand the standoff back to the group chat."
+
+  # Almost unreachable since the endgame takeover landed: an unresolved all-vetoed
+  # `:completed` group renders `Endgame.AllVetoed` instead of this footer, and a resolved
+  # one's outcome is `{:winner, row}`. What remains is the degenerate case of a recorded
+  # resolution whose `resolved_activity_id` was nilified — so the copy states the fact
+  # and stops. The old tail ("a new session with a different pool is the way forward")
+  # is gone because it is no longer true: the takeover's own exits — reopen the pool, or
+  # let the app pick — are the way forward now.
+  defp finished_note(_group, :no_consensus),
+    do: "Every option in the pool was vetoed, so nothing could win."
 
   # Distinct from `:no_votes` above it and `:no_consensus` beside it: people did vote, and
   # part of the pool did survive — it just collected no approvals. Saying "nobody voted"
@@ -287,8 +338,24 @@ defmodule ConsensusWeb.GroupLive.Results do
   # 10.5px uppercase — so those two clauses printed the same string twice, 47px apart, in
   # one treatment. `:voting` keeps its string because the band says something else there
   # (a countdown, and `LIVE`), which is the case the slot was drawn for.
-  defp header_context(%{status: :voting}), do: "LIVE SESSION"
-  defp header_context(_group), do: nil
+  #
+  # The takeover clause does not break the rule: the takeover replaces the whole panel,
+  # violet band included, so nothing in the body prints "ALL VETOED" — the slot is the
+  # one place the state is named in the chrome, in the design's own tangerine.
+  defp header_context(_group, :all_vetoed), do: "ALL VETOED"
+  defp header_context(_group, :tie), do: "DEAD HEAT"
+  defp header_context(%{status: :voting}, _takeover), do: "LIVE SESSION"
+  defp header_context(_group, _takeover), do: nil
+
+  defp header_context_class(:all_vetoed), do: "text-tangerine"
+  defp header_context_class(:tie), do: "text-violet"
+  defp header_context_class(_takeover), do: nil
+
+  # The tied-at-top rows the tie takeover renders. Only read under
+  # `:if={@takeover == :tie}`, which `EndgameComponents.takeover/2` only answers for a
+  # `{:tie, rows}` outcome — the fallback keeps a mismatch a blank list, not a crash.
+  defp tie_rows({:tie, rows}), do: rows
+  defp tie_rows(_outcome), do: []
 
   @impl true
   def render(assigns) do
@@ -301,19 +368,56 @@ defmodule ConsensusWeb.GroupLive.Results do
       current_path={@current_path}
       current_scope={@current_scope}
       back={~p"/"}
-      context={header_context(@group)}
+      context={header_context(@group, @takeover)}
+      context_class={header_context_class(@takeover)}
     >
+      <%!-- The All Vetoed takeover (docs/plans/endgame-screens.md) replaces the whole
+            results panel — no violet band, no avatar row, no tally — when a completed
+            group's every option was vetoed and nothing has resolved it. The component
+            owns the poke toy and the two exits; the moment a rescue lands (this tab or
+            any other, over PubSub) `@takeover` goes nil on reload and the ordinary
+            winner ending below takes over again. --%>
+      <.live_component
+        :if={@takeover == :all_vetoed}
+        module={Endgame.AllVetoed}
+        id="endgame-all-vetoed"
+        group={@group}
+        tally={@tally}
+        role={:organizer}
+        scope={@current_scope}
+      />
+      <%!-- The Tie takeover — the tug-of-war scene with the organizer's two ways to
+            break the dead heat: tap a tied row (or let the app shuffle onto one) and
+            lock it in through `Activities.resolve_group/4`. The moment a resolution
+            lands (this tab or any other, over PubSub) the outcome flips to
+            `{:winner, row}`, `@takeover` goes nil on reload, and the ordinary winner
+            ending below names the tie-break and who made it. --%>
+      <.live_component
+        :if={@takeover == :tie}
+        module={Endgame.Tie}
+        id="endgame-tie"
+        group={@group}
+        rows={tie_rows(@outcome)}
+        role={:organizer}
+        scope={@current_scope}
+      />
       <%!-- `avatar_caption` is not "TAP TO NUDGE": the avatars are not tappable, and nudging
             does not exist at all (see the disabled control in `:footer`). A caption that
             instructs the reader to perform an action nothing on the screen performs is the
             plan's confusion class 1 twice over. --%>
+      <%!-- `organizer_username` is the viewer's own name: `Activities.get_group!/2`
+            scopes by organizer, so whoever mounted this screen is the organizer — and a
+            broken tie's note/summary name them ("aheld picked X to break the tie"),
+            matching the guest waiting copy that already names the human. --%>
       <.results_panel
+        :if={@takeover == nil}
         group={@group}
         tally={@tally}
         outcome={@outcome}
         participants={@participants}
         avatar_caption="WHO'S VOTED"
         countdown_text={Deadlines.countdown(@group.deadline_at, @now)}
+        organizer_username={@current_scope.user.username}
       >
         <:footer>
           <%!-- The one link back to `04 share`, and the reason this screen needs it: `/`
@@ -428,7 +532,7 @@ defmodule ConsensusWeb.GroupLive.Results do
               class="rounded-2xl border-2 border-ink-30 bg-white/65 p-3.5 text-[12px] leading-[1.45] text-ink-soft"
             >
               <span class="text-[13px] font-bold text-ink">
-                {finished_headline(@outcome, @tally)}
+                {finished_headline(@outcome)}
               </span>
               <span class="mt-1 block">
                 {finished_note(@group, @outcome)} {finished_tail(@outcome)}

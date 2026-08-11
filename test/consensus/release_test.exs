@@ -73,12 +73,17 @@ defmodule Consensus.ReleaseTest do
 
       assert {:ok, [^last], _} = Consensus.Release.rollback(TmpRepo, last)
 
-      # The newest migration creates the `feedback` table (D-042), so reversing exactly
-      # that one has to take it away — which is also the only assertion that its
-      # `down/0` runs — while leaving everything an earlier migration created in place,
-      # including the voting tables the migration before it added.
+      # The newest migration adds the resolution columns to `activity_groups` (the
+      # endgame screens), so reversing exactly that one has to take them away — which
+      # is also the only assertion that its `down` runs — while leaving everything an
+      # earlier migration created in place, the feedback and voting tables included.
+      columns = columns(database, "activity_groups")
+      refute "resolution" in columns
+      refute "resolved_activity_id" in columns
+      refute "resolved_at" in columns
+
       tables = tables(database)
-      refute "feedback" in tables
+      assert "feedback" in tables
       assert "participants" in tables
       assert "votes" in tables
       assert "activity_groups" in tables
@@ -220,6 +225,20 @@ defmodule Consensus.ReleaseTest do
     {:ok, statement} =
       Exqlite.Sqlite3.prepare(conn, "SELECT name FROM sqlite_master WHERE type = 'table'")
 
+    {:ok, rows} = Exqlite.Sqlite3.fetch_all(conn, statement)
+    :ok = Exqlite.Sqlite3.release(conn, statement)
+    :ok = Exqlite.Sqlite3.close(conn)
+
+    List.flatten(rows)
+  end
+
+  defp columns(database, table) do
+    {:ok, conn} = Exqlite.Sqlite3.open(database)
+
+    {:ok, statement} =
+      Exqlite.Sqlite3.prepare(conn, "SELECT name FROM pragma_table_info(?)")
+
+    :ok = Exqlite.Sqlite3.bind(statement, [table])
     {:ok, rows} = Exqlite.Sqlite3.fetch_all(conn, statement)
     :ok = Exqlite.Sqlite3.release(conn, statement)
     :ok = Exqlite.Sqlite3.close(conn)

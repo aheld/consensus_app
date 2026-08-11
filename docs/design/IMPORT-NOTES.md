@@ -1011,3 +1011,59 @@ footer is generic enough to apply everywhere; the header's context slot and `⋯
 into the left rail. At what viewport does the phone header/footer become the rail? DESIGN-SPEC
 already ranks the console lowest priority, so this can wait — but the responsive breakpoint is
 undefined.
+
+## 11. Second import — the endgame docs (2026-08-10)
+
+Two further design files arrived from the same Claude Design project
+(`867b0685-278c-4ce4-ae2c-bce2135705af`), committed beside this file as
+`all-vetoed.dc.html` and `tie.dc.html`. They are **dc-runtime documents**, not static
+frames: `support.js` (committed beside them) provides templating, `sc-for` and `DCLogic`
+state, so read them **rendered over HTTP** (`python3 -m http.server 4999 --directory
+docs/design`), not by eyeballing the source — the scenes animate, the poke/spin logic
+runs, and the exact stage copy lives in the `DCLogic` script at the bottom of each file.
+The build plan is `docs/plans/endgame-screens.md`; the decisions are D-051.
+
+One deviation from the docs' content is deliberate and must survive future imports:
+
+**The All Vetoed carnage list's right-hand mono slot shows veto *counts*, never names.**
+The doc's sample rows read `MAYA`, `DEV`, `PRIYA` — vetoes attributed to people. D-035
+makes that structurally impossible (`Voting.tally/1` returns totals only; no query in the
+app can attribute a veto), so the shipped slot carries `1 VETO` / `2 VETOES` in the same
+DM Mono treatment. This is the sample-data class of deviation (like live titles vs
+"Dinner Friday?"), not a craft gap: same slot, same type, honest data. An importer diffing
+the app against the doc should flag geometry, type, borders, shadows and animation —
+never this slot's data.
+
+Smaller notes now that both docs are imported: the endgame surfaces draw at radius
+18/14/13 and flatten to the sticker system's `rounded-2xl` like every other frame; the
+scene keyframes live in `assets/css/app.css` (`flick`, `flick2`, `bob`, `ember`, `buzz`
+for the fire; `tug`, `strainL`, `strainR`, `drip`, `pulseline` for the tug-of-war); and
+**both heroes reproduce the docs' 350:250 scene composition at the app's wider column,
+by different levers**: the fire scene is a bottom-centered fixed-aspect SVG inside the
+docs' fixed 250px card (`overflow-visible` so the edge flames still bleed — DESIGN-SPEC
+has the arithmetic), while the tie hero keeps the doc's own full-bleed
+`xMidYMax slice` SVG and instead lets the *card* carry the viewBox ratio
+(`aspect-[7/5]` in place of the fixed height), at which a `slice` fill is exact — no
+crop, no rescale, the figures keep the doc's headroom. Neither hero may be
+"simplified" to a fixed-height full-bleed slice: width then governs the scale and the
+sky crops off the top. The tie doc's own sample-data
+deviations, deliberate for the same reason as the carnage slot's: the caption "or run a
+second round with just these two" counts the actual tied set ("these three" on a 3-way),
+and the doc's `short` row names have no equivalent in `Consensus.Activities.Activity`,
+so the full option name appears in the status line and the lock label. The tie scene's
+one-off paints (`#C8B8FF` chip, `#E9DCC0` rope, `#BFE6FF` sweat, the violet radial's rim
+and void, the `#EFEAFF`/`#4A3A8C` list band, the `#EDE6DC` idle lock) are app.css
+classes, not tokens — scene/UI paint the rest of the app never reuses.
+
+**One transcription trap the dc docs carry that the first import's frames did not: they
+have no `box-sizing` reset.** A fixed `width` on a bordered element in these docs is
+*content-box*, so `width:20px` + `border:2px` renders a 24px circle — while the app's
+Tailwind preflight is border-box, and a literally-copied `size-5` renders 20px total. A
+blind judge measured exactly that 4px delta on the tie rows' dots as the one tell. The
+rule when transcribing from these docs: for a bordered element with a fixed width/height,
+copy the **rendered** size (doc's width + 2×border) into the border-box class — the tie
+dots are `size-6` (24px, the doc's `20px + 2×2`), the carnage ✕ badges `size-[19px]`
+(`15px + 2×2`) — which also keeps the content area identical for the centred glyph.
+Padding-and-text elements (chips, buttons, bands) are immune: their width is auto either
+way. Doc sizes that the app's committed chrome overrides anyway (the 31px back circle,
+the 29px feedback faces) stay with the chrome spec, D-041.

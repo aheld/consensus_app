@@ -185,19 +185,18 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
       assert Activities.get_group!(scope, group.id).status == :completed
     end
 
-    # **The same page, twenty seconds apart, contradicting itself.** With two options tied
-    # at one approval, `/groups/:id/results` renders both rows starred under
-    # `★ TIED FOR THE LEAD` for the whole vote — and pressing Close now used to replace
-    # that with "We have a winner — <first in the pool>", demote the other to **Runner-up**
-    # at the identical count, drop the legend, and offer "Copy summary for the group chat"
-    # under it. Nothing changed but the status: `mark_leaders/2` was `:voting`-only, so the
-    # star reverted to `tally/1`'s tie-break by `activity.position`, which is the order the
-    # organizer happened to drag the pool into and no voter has ever seen.
-    #
-    # This does **not** answer whether a tie should get a runoff — that is an open product
-    # question and `tally/1` is untouched, one option still wins. It stops the screen
-    # *asserting* an unqualified win over a dead heat.
-    test "closing on a tie says it is a tie, and says which rule settled it",
+    # **A completed, unresolved dead heat declares nothing** (`Voting.outcome/2`,
+    # `docs/plans/endgame-screens.md`). The first version of this screen crowned
+    # `tally/1`'s position tie-break as "We have a winner"; the second kept the card
+    # honest ("Tied at the top … takes it because it was first in the pool") but still
+    # *settled* the tie by a rule no voter has seen; the third named the standoff and
+    # picked nobody. What renders now is the designed tie takeover
+    # (`ConsensusWeb.Endgame.Tie` — its own acceptance script is
+    # `endgame/tie_test.exs`): the whole panel is replaced, no winner card, no tally,
+    # no summary to paste, and the organizer is handed the two ways to actually break
+    # it. This test pins the *screen-level* facts: the takeover renders on a Close-now
+    # tie exactly as on a deadline one, and nothing on the page asserts a winner.
+    test "closing on a tie flips to the dead-heat takeover, and picks nobody",
          %{conn: conn, scope: scope} do
       {group, [a, b, _c]} = voting_group_fixture(scope, 3)
 
@@ -209,31 +208,67 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
       html = lv |> element("button", "Close now") |> render_click()
 
       refute html =~ "We have a winner"
-      assert html =~ "Tied at the top"
+      assert html =~ "dead heat"
+      assert html =~ "TIED FOR FIRST"
+      assert has_element?(lv, "button#endgame-tie-row-#{a.id}")
+      assert has_element?(lv, "button#endgame-tie-row-#{b.id}")
+      assert has_element?(lv, "#endgame-lock", "Pick a winner above")
+      assert has_element?(lv, "#chrome-context.text-violet", "DEAD HEAT")
+
+      # The position rule no longer settles anything on an unresolved tie — nothing
+      # does, and nobody is demoted to a runner-up they never were.
+      refute html =~ "takes it because it was first in the pool"
+      refute html =~ "Also tied"
+      refute html =~ "Runner-up"
+
+      # The takeover replaces the whole panel: no tally, no paste-to-chat summary of a
+      # standoff the organizer is being asked to settle, no completed-footer under it.
+      refute html =~ "Final tally"
+      refute html =~ "copy-summary"
+      refute html =~ "Start another session"
+      refute html =~ "you have a winner"
+    end
+
+    # The other side of `Voting.outcome/2`'s split: a **resolved** tie is `{:winner, row}`
+    # again — `Consensus.Activities.resolve_group/4` recorded who broke it — and the card
+    # says there is a winner *and* names the tie-breaker (the organizer by username),
+    # never the pool order. This drives the context directly rather than through the tie
+    # takeover's Lock button; `ConsensusWeb.Endgame.TieTest` covers the button path.
+    test "a resolved tie names its tie-breaker, not the pool order",
+         %{conn: conn, scope: scope, user: user} do
+      {group, [a, b, _c]} = voting_group_fixture(scope, 3)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, group} = Activities.complete_group(scope, group)
+      {:ok, _group} = Activities.resolve_group(scope, group, b.id, "organizer_pick")
+
+      {:ok, lv, html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert html =~ "We have a winner"
+      refute html =~ "Tied at the top"
       assert has_element?(lv, "#winner-tie-note")
       assert html =~ "2 options finished level on 1 approval"
-      assert html =~ "takes it because it was first in the pool"
 
-      # The legend and the stars survive the close — the same glyph on the same rows.
-      assert has_element?(lv, "#tally-star-legend")
-      assert html =~ "TIED AT THE TOP"
+      # By username — the guest waiting copy names the human, so the exit artifact is
+      # at least as specific. "The organizer" survives only as the no-name fallback.
+      assert html =~ "#{user.username} picked #{b.name} to break the tie"
+      refute html =~ "The organizer picked"
+      refute html =~ "first in the pool"
 
-      # The row underneath drew; it did not come second.
+      # The row that drew is still "Also tied", not demoted to a runner-up it never was.
       assert html =~ "Also tied"
       refute html =~ "Runner-up"
 
-      # And the one artefact that leaves the app carries the qualification with it — the
-      # group reads this line in the chat and never opens the screen.
+      # The paste-to-chat string carries the tie and its breaker out of the app.
       assert has_element?(lv, ~s(#copy-summary[data-copy*="ended in a tie at 1"]))
 
-      # **The footer headline is the half that was left behind.** `finished_headline/1` had
-      # no tie branch, so this same page read "Tied at the top" in the card at document
-      # y=263 and "Voting is closed and you have a winner." at y=1030 — one scroll apart,
-      # opposite claims. It takes the tally now, and `#results-finished-note` is where it
-      # renders.
-      assert has_element?(lv, "#results-finished-note")
-      assert html =~ "it ended in a tie"
-      refute html =~ "you have a winner"
+      assert has_element?(
+               lv,
+               ~s(#copy-summary[data-copy*="#{user.username} picked #{b.name} to break the tie."])
+             )
+
+      # The footer agrees: the tie is settled, so there is a winner to announce.
+      assert html =~ "you have a winner"
+      refute html =~ "it ended in a tie"
     end
 
     test "a clear winner is still announced as one, with no tie language",
@@ -395,6 +430,11 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
       assert html =~ "Start another session"
     end
 
+    # This cell used to render the `:completed` footer's "no winner" note; since the
+    # endgame screens landed it renders the All Vetoed takeover, whose two exits — Add
+    # new options and Let the app pick one at random — are the controls. The takeover's
+    # own behaviour is pinned in `endgame/all_vetoed_test.exs`; this test keeps pinning
+    # that the organizer of this dead-end state is never left without a control.
     test "a completed group with no consensus still has a control on the page",
          %{conn: conn, scope: scope} do
       {group, [a]} = voting_group_fixture(scope, 1)
@@ -404,8 +444,9 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
 
       {:ok, lv, html} = live(conn, ~p"/groups/#{group}/results")
 
-      assert html =~ "Voting is closed with no winner."
-      assert has_element?(lv, "#results-start-another")
+      assert html =~ "Nobody wanted anything."
+      assert has_element?(lv, "#endgame-add-options")
+      assert has_element?(lv, "#endgame-rescue")
     end
 
     # The state that used to render as `:no_votes`: ballots really were cast, part of the
@@ -485,6 +526,11 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
   end
 
   describe "outcomes on a finished group" do
+    # Since the endgame screens landed, an unresolved all-vetoed completed group renders
+    # the All Vetoed takeover (`ConsensusWeb.Endgame.AllVetoed`) instead of the muted
+    # "no consensus this time" card — see `endgame/all_vetoed_test.exs` for the takeover
+    # itself. What this test keeps pinning is the honesty half: nothing on the screen
+    # claims a winner.
     test "everyone vetoing everything is reported honestly, not as an empty winner card",
          %{conn: conn, scope: scope} do
       {group, [a]} = voting_group_fixture(scope, 1)
@@ -494,7 +540,7 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
 
       {:ok, _lv, html} = live(conn, ~p"/groups/#{group}/results")
 
-      assert html =~ "no consensus"
+      assert html =~ "Every single option got vetoed."
       refute html =~ "We have a winner"
     end
 
