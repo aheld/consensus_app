@@ -134,7 +134,7 @@ defmodule ConsensusWeb.HomeLive do
               carries the wordmark on every screen now (D-041), and repeating it 20px
               below itself read as a duplicate rather than a brand. --%>
         <h1 class="text-pretty text-[40px] font-bold leading-[1.02] tracking-[-.035em]">
-          Decide<br />together,<br />in minutes.
+          Decide<br />and Dine
         </h1>
         <p class="max-w-[250px] text-[14.5px] leading-[1.45] text-ink-soft">
           <%!-- "let everyone rank" in frame `00a` is the same false promise as step 3 below;

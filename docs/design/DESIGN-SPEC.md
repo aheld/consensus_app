@@ -99,7 +99,8 @@ Section labels are `DM Mono`, 11px, 600, `letter-spacing:.06em`, `uppercase`, `-
 ### `00a` intro (public splash, signed out) — `/`
 Mint (`--canvas`) full-bleed. Vertically centred stack: `CONSENSUS` eyebrow (DM Mono, 11px,
 600, `letter-spacing:.1em`, uppercase) · `h1` 40px/1.02, 700, `letter-spacing:-.035em`,
-three lines "Decide / together, / in minutes." · a 14.5px paragraph capped at 250px:
+two lines "Decide / and Dine" (the frame said "Decide / together, / in minutes."; the
+shipped headline matches the social card's wordmark instead) · a 14.5px paragraph capped at 250px:
 "Stop the group chat spiral. Put the options up, let everyone rank, get an answer."
 
 Then three white sticker rows (3px shadow, 15px radius), each a numbered 30px rounded-square
