@@ -1,0 +1,173 @@
+<title>Consensus · Endgame build progress</title>
+<style>
+  :root {
+    --ink: #17211C; --surface: #F7FBF8; --card: #FFFFFF; --canvas: #DDF0E2;
+    --muted: #5E6D64; --ink-soft: #3B4A42;
+    --tangerine: #FF6A2B; --mint: #B9EFC9; --yellow: #FFD84D; --violet: #6B46F0;
+    --peach: #FFC2A3; --border: var(--ink); --shadow: var(--ink);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ink: #E8F1EB; --surface: #111814; --card: #1A231E; --canvas: #15201A;
+      --muted: #93A59A; --ink-soft: #C2D1C8;
+      --mint: #2E5C41; --yellow: #8A6D1A; --peach: #7A4A33;
+      --border: #E8F1EB; --shadow: #000000;
+    }
+  }
+  :root[data-theme="light"] {
+    --ink: #17211C; --surface: #F7FBF8; --card: #FFFFFF; --canvas: #DDF0E2;
+    --muted: #5E6D64; --ink-soft: #3B4A42;
+    --mint: #B9EFC9; --yellow: #FFD84D; --peach: #FFC2A3;
+    --border: #17211C; --shadow: #17211C;
+  }
+  :root[data-theme="dark"] {
+    --ink: #E8F1EB; --surface: #111814; --card: #1A231E; --canvas: #15201A;
+    --muted: #93A59A; --ink-soft: #C2D1C8;
+    --mint: #2E5C41; --yellow: #8A6D1A; --peach: #7A4A33;
+    --border: #E8F1EB; --shadow: #000000;
+  }
+  body {
+    background: var(--surface); color: var(--ink);
+    font-family: "Instrument Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+    line-height: 1.5; margin: 0; padding: 28px 16px 60px;
+  }
+  .wrap { max-width: 700px; margin: 0 auto; display: flex; flex-direction: column; gap: 18px; }
+  .eyebrow {
+    font-family: ui-monospace, "DM Mono", SFMono-Regular, Menlo, monospace;
+    font-size: 11px; font-weight: 600; letter-spacing: .07em; text-transform: uppercase;
+    color: var(--muted);
+  }
+  h1 { font-size: 27px; line-height: 1.08; letter-spacing: -.02em; margin: 4px 0 0; text-wrap: balance; }
+  .sub { color: var(--ink-soft); font-size: 14px; margin: 6px 0 0; }
+  .card {
+    background: var(--card); border: 2px solid var(--border); border-radius: 16px;
+    box-shadow: 3px 3px 0 var(--shadow); padding: 16px 18px;
+  }
+  .phase { display: flex; flex-direction: column; gap: 8px; }
+  .phase-head { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+  .phase-title { font-weight: 700; font-size: 15.5px; }
+  .pill {
+    font-family: ui-monospace, "DM Mono", Menlo, monospace; font-size: 10px; font-weight: 700;
+    letter-spacing: .06em; text-transform: uppercase; border: 2px solid var(--border);
+    border-radius: 99px; padding: 2px 9px; white-space: nowrap; color: var(--ink);
+  }
+  .pill.queued { background: transparent; border-style: dashed; color: var(--muted); border-color: color-mix(in srgb, var(--border) 40%, transparent); }
+  .pill.doing { background: var(--yellow); }
+  .pill.done { background: var(--mint); }
+  .pill.blocked { background: var(--peach); }
+  .phase-detail { font-size: 13px; color: var(--ink-soft); margin: 0; }
+  .loops { display: flex; flex-direction: column; gap: 6px; margin-top: 4px; }
+  .loop-row { display: flex; align-items: baseline; gap: 8px; font-size: 12.5px; }
+  .loop-name { font-weight: 600; min-width: 130px; }
+  .loop-verdict { color: var(--muted); font-family: ui-monospace, Menlo, monospace; font-size: 11px; }
+  .log { display: flex; flex-direction: column; gap: 7px; }
+  .log-row { display: flex; gap: 10px; font-size: 12.5px; align-items: baseline; }
+  .log-time {
+    font-family: ui-monospace, "DM Mono", Menlo, monospace; font-size: 10.5px;
+    color: var(--violet); white-space: nowrap; font-variant-numeric: tabular-nums;
+  }
+  @media (prefers-color-scheme: dark) { .log-time { color: #A78BFA; } }
+  :root[data-theme="dark"] .log-time { color: #A78BFA; }
+  :root[data-theme="light"] .log-time { color: #6B46F0; }
+  .log-msg { color: var(--ink-soft); }
+  a { color: inherit; }
+</style>
+<div class="wrap">
+  <header>
+    <p class="eyebrow">Consensus · ultracode build</p>
+    <h1>Endgame screens: All Vetoed &amp; Tie</h1>
+    <p class="sub">Two new completion screens matched pixel-for-pixel against the Claude Design
+    frames, with add-options, app-pick + veto-undo, and the return to the normal ending.
+    Builder/critic loops run until a blind judge can't tell ours from the design.</p>
+  </header>
+
+  <div id="phases" class="wrap" style="padding:0"></div>
+
+  <section class="card">
+    <p class="eyebrow" style="margin:0 0 8px">Build log</p>
+    <div id="log" class="log"></div>
+  </section>
+</div>
+<script>
+  const phases = [
+    { title: "Recon", status: "done",
+      detail: "Design docs imported and rendered as ground truth (fire scene + tug-of-war both animate through the local dc runtime). Voting/results code read. Dev DB seeded with an all-vetoed and a tied group; guest and organizer screenshot pipelines proven." },
+    { title: "Plan & decisions", status: "done",
+      detail: "docs/plans/endgame-screens.md written: one shared takeover structure, resolution recorded on the group (resolved_activity_id + how it was picked), rescue undoes the veto at the outcome level without deleting votes, reopen clears the passed deadline, anonymity keeps names out of THE CARNAGE (counts instead)." },
+    { title: "Build: foundation", status: "done",
+      detail: "Migration + Activities.resolve/rescue/reopen + Voting tally/outcome changes landed. 996 tests green (was 964).",
+      loops: [
+        ["Round 1", "builder green → critic found a stale-struct race in reopen_group's guards"],
+        ["Round 2", "race fixed inside the transaction → adversarial critic: pass, zero blockers"],
+      ] },
+    { title: "Build: All-Vetoed screen", status: "done",
+      detail: "Fire scene, poke stages, THE CARNAGE (veto counts, not names), add-options reopen, app-pick rescue, live revert to the winner ending — all behaviors verified by a fresh critic driving the real app.",
+      loops: [
+        ["Round 1", "behaviors green; judge accepted but named the fire-scene crop at wider viewports"],
+        ["Round 2", "critic caught outcome/2 not wired at either call site — sent back"],
+        ["Round 3", "wired + composition fixed; blind judge picked OURS as the design, confidently wrong"],
+      ] },
+    { title: "Build: Tie screen", status: "done",
+      detail: "Tug-of-war scene, tap-to-pick, app shuffle, Lock in, override after app pick, guest waiting state — all behaviors green after 4 rounds; final judge only 'likely' on the A/B.",
+      loops: [
+        ["Round 1–3", "behavior fixes and scene transcription tightened each round"],
+        ["Round 4", "behaviors green; judge accepted, gap narrowed to hero figure details + copy attribution"],
+      ] },
+    { title: "Full-suite gate", status: "done",
+      detail: "mix precommit exit 0 — 1034 tests, 0 failures (started at 964). D-051 recorded with cross-referenced amendments to D-036/D-047/D-048; tie open-question struck; CLAUDE.md, README, DESIGN-SPEC, IMPORT-NOTES all updated and grep-verified by an independent checker." },
+    { title: "Polish round", status: "done",
+      detail: "Tie-break copy now names the person who picked; tie hero geometry corrected against the design SVG; tie radio circles sized up to the design's 24px. Final blind judges measured token-exact colors, borders, shadows and type, scene geometry within 1–2% — both signed off.",
+      loops: [
+        ["Round 1", "judge accepted; last craft gap was 20px vs 24px radio circles — fixed"],
+        ["Round 2", "judge accepted; only remaining tells are the committed app chrome (D-041 header spec, pinned footer), recorded in D-051 — not gaps in these screens"],
+      ] },
+    { title: "Verdict", status: "done",
+      detail: "Done, honestly stated: both blind judges sign off on the screens as faithful implementations with every measurable craft dimension matched. They can still identify the app — but only by the global header/footer chrome the app deliberately standardizes across every screen (D-041), which these two mockups drew oversized. Beating that tell would mean breaking the app's own ratified chrome. Final gate: mix precommit exit 0, 1034 tests, 0 failures." },
+  ];
+  const log = [
+    ["12:05", "Kicked off: read Voting context — all-vetoed already detected as :no_consensus; ties currently resolved silently by pool position."],
+    ["12:10", "Design project located: Consensus - All Vetoed.dc.html, Consensus - Tie.dc.html, icon.svg, support.js."],
+    ["12:19", "Dev DB seeded: group 59 (all options vetoed), group 60 (1–1 tie), both completed. Baseline screenshots taken."],
+    ["12:26", "Both design docs saved to docs/design/ and rendered — the fire scene and tug-of-war animate correctly via the local dc runtime."],
+    ["12:28", "Found the reopen trap: a reopened group must clear its passed deadline or round 2 completes itself instantly on publish."],
+    ["12:29", "Anonymity ruling: the design's per-name veto attribution (MAYA, DEV) is structurally impossible here (D-035) — THE CARNAGE will show veto counts."],
+    ["12:30", "Organizer login-cookie + headless screenshot pipeline verified end to end. Writing the plan, then fanning out builder/critic loops."],
+    ["12:38", "Plan committed to docs/plans/endgame-screens.md. Workflow launched: foundation → All-Vetoed loop → Tie loop → gate, with fresh-context critics and a blind A/B judge per iteration."],
+    ["13:0x", "Foundation round 1: builder green, but the adversarial critic found reopen_group checking its guards on a possibly-stale struct — a race against a concurrent rescue."],
+    ["13:1x", "Foundation round 2: guards re-checked inside the transaction; critic passes with zero blockers. 996 tests, 0 failures."],
+    ["13:3x", "All-Vetoed round 1: every behavior passed on the first build — poke stages, rescue flipping organizer and guest tabs live, the full reopen → republish → revote loop. Judge accepted; named the fire-scene crop as the gap."],
+    ["13:5x", "All-Vetoed round 2: the harsh critic earned its keep — Voting.outcome/2 existed but neither results screen called it. Sent back."],
+    ["14:1x", "All-Vetoed round 3: wired and composition-fixed. The blind judge declared OUR screenshot the design with certainty — confidently wrong. Loop closed."],
+    ["14:28", "Tie round 1: builder finished the tug-of-war takeover (tap-to-pick, app shuffle, Lock in, guest waiting state). Fresh critic drives it next."],
+    ["18:44", "Main workflow complete: 29 agents, ~6.1 hours. Foundation green, both screens behavior-complete, gate green — 1034 tests, precommit exit 0, D-051 recorded and independently grep-verified."],
+    ["18:44", "Both blind judges would sign off ('accept') but could still identify ours at the cap — remaining tells: tie hero figure details, tie-break attribution wording, all-vetoed slack canvas at tall viewports."],
+    ["18:50", "Polish workflow launched to close exactly those three, with a re-judge at phone width (390px), where the app and the design card are the same size."],
+    ["19:5x", "Polish round 1: attribution copy, hero geometry and the composition record landed. Judge signed off; spotted 20px radio circles where the design draws 24px."],
+    ["19:5x", "Polish round 2: circles fixed. Judge signed off again — colors token-exact, geometry within 1–2%; the only remaining tells are the app's own committed chrome (D-041), documented in D-051."],
+    ["19:56", "Precommit re-verified by the orchestrator: 1034 tests, 0 failures. Build complete. Nothing committed to git — the whole feature sits in the working tree for review."],
+  ];
+  const el = (t, c, txt) => { const n = document.createElement(t); if (c) n.className = c; if (txt) n.textContent = txt; return n; };
+  const phaseRoot = document.getElementById("phases");
+  phases.forEach(p => {
+    const card = el("section", "card phase");
+    const head = el("div", "phase-head");
+    head.append(el("span", "phase-title", p.title), el("span", "pill " + p.status, {queued:"queued",doing:"in progress",done:"done",blocked:"blocked"}[p.status]));
+    card.append(head, el("p", "phase-detail", p.detail));
+    if (p.loops && p.loops.length) {
+      const loops = el("div", "loops");
+      p.loops.forEach(l => {
+        const row = el("div", "loop-row");
+        row.append(el("span", "loop-name", l[0]), el("span", "loop-verdict", l[1]));
+        loops.append(row);
+      });
+      card.append(loops);
+    }
+    phaseRoot.append(card);
+  });
+  const logRoot = document.getElementById("log");
+  log.forEach(([t, m]) => {
+    const row = el("div", "log-row");
+    row.append(el("span", "log-time", t), el("span", "log-msg", m));
+    logRoot.append(row);
+  });
+</script>
