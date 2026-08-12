@@ -581,7 +581,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1241 tests, 0 failures (~28s warm) — the one count in this file
+mix test                        # 1253 tests, 0 failures (~28s warm) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```

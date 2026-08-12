@@ -265,8 +265,13 @@ defmodule ConsensusWeb.GroupLive.Options do
         changeset = Group.search_area_changeset(socket.assigns.group, %{search_area: typed})
 
         if changeset.valid? do
+          group_id = socket.assigns.group.id
+          cid = lookup_cid()
+
           {:noreply,
            start_async(socket, :area_geocode, fn ->
+             # Same process boundary as the assist — see start_assist_lookup/2.
+             Logger.metadata(cid: cid, group_id: group_id)
              {typed, Consensus.Discovery.Geocoder.geocode(typed)}
            end)}
         else
@@ -594,10 +599,20 @@ defmodule ConsensusWeb.GroupLive.Options do
         activity_type = socket.assigns.group.activity_type
         query = activity.name
 
+        group_id = socket.assigns.group.id
+        cid = lookup_cid()
+
         socket
         |> assign(:assist_looking, MapSet.put(socket.assigns.assist_looking, activity.id))
         |> restream(activity.id)
         |> start_async({:assist, activity.id}, fn ->
+          # Logger metadata is process-local and start_async runs this in a
+          # Task, so the LiveView's metadata is NOT inherited — and there is no
+          # request_id either, because this arrived on a websocket rather than
+          # through the Plug pipeline. Setting it here is what lets every span
+          # in the chain below (search -> provider_request -> enrichment) share
+          # one id in the log. See `Consensus.Discovery.Telemetry`.
+          Logger.metadata(cid: cid, group_id: group_id, activity_id: activity.id)
           Discovery.search(activity_type, query, area)
         end)
 
@@ -605,6 +620,12 @@ defmodule ConsensusWeb.GroupLive.Options do
         socket
     end
   end
+
+  # Short, random, and meaningless on its own: it exists only to tie one
+  # organizer's geocode/search/enrich lines together in the log, so it is
+  # deliberately NOT derived from the group, the activity or the session — a
+  # log correlation id must not become a way to identify anything.
+  defp lookup_cid, do: Base.url_encode64(:crypto.strong_rand_bytes(3), padding: false)
 
   defp group_area(%Group{search_area: search_area, search_bbox: search_bbox}) do
     Area.decode(search_area, search_bbox)

@@ -7,7 +7,7 @@ Consensus is a Phoenix 1.8 / LiveView 1.2 application on Elixir 1.20 and SQLite,
 | Doc | Authority |
 |---|---|
 | [AGENTS.md](AGENTS.md) | **How to write code here.** Official Phoenix/LiveView/Ecto/HEEx usage rules injected by `phx.gen.auth`, plus a short Consensus-specific appendix. Read before touching `lib/`. This file does not restate it. |
-| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-054. Anything recorded here beats the drafts. |
+| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-056. Anything recorded here beats the drafts. |
 | [docs/PRD.md](docs/PRD.md) | **North star for product.** Personas, functional requirements, success metrics. Ratified. Contains no stack, schema, vendor, or algorithm decisions — by design. |
 | [docs/open-questions.md](docs/open-questions.md) | What still needs a product/technical decision. |
 | [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) | **Not ratified.** First-pass stack proposal (NestJS/Socket.io/Redis). Reference only — do not implement from it. |
@@ -99,6 +99,15 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
 │   │   │                         #   {:ok, []} for no-match AND no-provider alike, results
 │   │   │                         #   capped at 3; the provider registry is config DATA read
 │   │   │                         #   with Map.get/3 — never branched on (invariant 12)
+│   │   ├── discovery/telemetry.ex
+│   │   │                         #   the lookup chain as ONE log handler (D-056): :telemetry
+│   │   │                         #   spans emitted in the domain, rendered as `[lookup <cid>]`
+│   │   │                         #   lines. NOT OpenTelemetry (a span needs a collector; this
+│   │   │                         #   is one machine whose sink is `fly logs`), and spanned
+│   │   │                         #   around the CACHES, not the HTTP clients — a geocode is
+│   │   │                         #   cached ~a year, so a transport probe is blind to most of
+│   │   │                         #   what happens. The cid crosses start_async's process
+│   │   │                         #   boundary in Logger metadata set INSIDE the closure
 │   │   ├── discovery/{result,provider,area,cache,geocoder}.ex
 │   │   │                         #   result.ex: transient, URL-only retention (the licence
 │   │   │                         #   firewall) + display-only :address/:chips; provider.ex:
@@ -212,7 +221,7 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
 │                                 #   Preview" file in the linked Claude Design project via
 │                                 #   headless Chrome; see D-050 for the recipe.
 ├── rel/overlays/bin/             # server, migrate (+ .bat pairs; migrate is unused — see invariants)
-├── test/                         # 1241 tests; support/ has ConnCase, DataCase, fixtures
+├── test/                         # 1253 tests; support/ has ConnCase, DataCase, fixtures
 │   │                             #   (accounts, activities, voting, feedback),
 │   │                             #   link_preview_stub.ex (walks $callers so a stub installed
 │   │                             #   by a test survives into a start_async Task), and — same
@@ -438,7 +447,7 @@ MVP is the dining module only. Explicitly Post-MVP, do not build early: ranked-c
 | `mix ecto.setup` | `ecto.create`, `ecto.migrate`, `run priv/repo/seeds.exs`. |
 | `mix ecto.reset` | `ecto.drop` then `ecto.setup`. Destroys the dev database. |
 | `mix ecto.gen.migration name_with_underscores` | Always generate migrations this way (correct timestamp + conventions). |
-| `mix test` | Full suite. Verified 2026-08-11: **1241 tests, 0 failures**, ~28s warm (~18.3s async, ~9.4s sync — `max_cases: 1`, see invariant 15 / D-033); budget more on the first run after a cold `_build`. The alias prepends `ecto.create --quiet` and `ecto.migrate --quiet`. **Set `MIX_TEST_PARTITION=<n>` if another agent or process may be running the suite against the same checkout** — this is no longer just a convenience: a shared, unpartitioned `consensus_test.db` hit by two concurrent `mix test` runs produces real failures (row-count and ordering assertions off by exactly the other run's rows), not flakiness. `mix precommit` honours the variable too (the alias runs in one OS process and `config/test.exs` reads it with `System.get_env/1`), so a partitioned `precommit` never touches `consensus_test.db`. |
+| `mix test` | Full suite. Verified 2026-08-12: **1253 tests, 0 failures**, ~28s warm (~18.3s async, ~9.4s sync — `max_cases: 1`, see invariant 15 / D-033); budget more on the first run after a cold `_build`. The alias prepends `ecto.create --quiet` and `ecto.migrate --quiet`. **Set `MIX_TEST_PARTITION=<n>` if another agent or process may be running the suite against the same checkout** — this is no longer just a convenience: a shared, unpartitioned `consensus_test.db` hit by two concurrent `mix test` runs produces real failures (row-count and ordering assertions off by exactly the other run's rows), not flakiness. `mix precommit` honours the variable too (the alias runs in one OS process and `config/test.exs` reads it with `System.get_env/1`), so a partitioned `precommit` never touches `consensus_test.db`. |
 | `mix test test/path/to/file.exs` / `mix test --failed` | Narrow a failure. |
 | `mix format --check-formatted` | Verified clean. What CI runs. |
 | `mix compile --warnings-as-errors` | Verified clean. What CI runs. |

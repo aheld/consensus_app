@@ -75,6 +75,38 @@ defmodule ConsensusWeb.Telemetry do
           "The time the connection spent waiting before being checked out for the query"
       ),
 
+      # Assisted Add lookup metrics (D-052 / D-056). These make the assist's
+      # failure modes visible at /admin/dashboard without any external
+      # collector: `outcome` separates a genuine miss from a 429 or a 504, and
+      # `cache` is what says whether a lookup cost anybody a network request.
+      # Every tag below is guaranteed present on the stop event by
+      # Consensus.Discovery's own stop-metadata builders — a tag missing from
+      # metadata makes Telemetry.Metrics drop the measurement silently.
+      summary("consensus.discovery.search.stop.duration",
+        tags: [:outcome, :cache],
+        unit: {:native, :millisecond},
+        description: "Assisted Add lookup, cache hit or provider round trip"
+      ),
+      counter("consensus.discovery.search.stop.duration",
+        tags: [:outcome, :cache],
+        description: "Assisted Add lookups, by outcome"
+      ),
+      summary("consensus.discovery.geocode.stop.duration",
+        tags: [:outcome, :cache],
+        unit: {:native, :millisecond},
+        description: "Area geocode (Nominatim), cached ~a year on success"
+      ),
+      summary("consensus.discovery.provider_request.stop.duration",
+        tags: [:outcome],
+        unit: {:native, :millisecond},
+        description: "Overpass round trip alone, excluding our own work"
+      ),
+      summary("consensus.link_preview.fetch.stop.duration",
+        tags: [:outcome, :cache],
+        unit: {:native, :millisecond},
+        description: "Link enrichment, both the paste path and the assist"
+      ),
+
       # VM Metrics
       summary("vm.memory.total", unit: {:byte, :kilobyte}),
       summary("vm.total_run_queue_lengths.total"),

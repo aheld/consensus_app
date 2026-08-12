@@ -116,7 +116,13 @@ config :tailwind,
 # Configure Elixir's Logger
 config :logger, :default_formatter,
   format: "$time $metadata[$level] $message\n",
-  metadata: [:request_id]
+  metadata: [:request_id, :cid]
+
+# The Assisted Add's lookup chain, rendered by Consensus.Discovery.Telemetry.
+# `level: nil` attaches no handler at all; anything else is the level its lines
+# are logged at. The venue query and the typed area ARE logged — see that
+# module's moduledoc for why that is a deliberate call and not an oversight.
+config :consensus, Consensus.Discovery.Telemetry, level: :info
 
 # Use Jason for JSON parsing in Phoenix
 config :phoenix, :json_library, Jason

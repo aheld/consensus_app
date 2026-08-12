@@ -2350,6 +2350,45 @@ Three smaller rules fall out, each with a test: pressing a chip abandons the pic
 
 ---
 
+## D-056 — The lookup chain is `:telemetry` spans consumed by one log handler; not OpenTelemetry, and not instrumented at the HTTP client
+
+**Date:** 2026-08-12
+**Status:** settled
+
+**Context.** A successful Assisted Add logged *nothing*. Every `Logger` call in `Consensus.Discovery`, its Overpass adapter, the geocoder and `Consensus.LinkPreview` sat in a `rescue`/`catch`, so the only observable events were crashes. D-052 made failure render as silence *to the organizer* — deliberately, and that stands — but the operator inherited the same silence by accident. "Why did this lookup return nothing" had no answer short of reproducing it locally against a different backend.
+
+**Decision.**
+
+1. **Emit `:telemetry` spans in the domain; consume them in one handler.** `Consensus.Discovery.Telemetry` attaches at boot and renders `[lookup <cid>]` lines. The emit sites do not know it exists. This is the Elixir convention — Ecto, Phoenix, Req and Bandit already work this way, and `ConsensusWeb.Telemetry` already charts their events — and it keeps the transport decision out of the domain.
+
+2. **`:telemetry.span/3`, not OpenTelemetry.** The events already carry `telemetry_span_context`, start/stop/exception and a duration: the shape a tracer wants. But **a span is only worth exporting if something collects it**, and this deployment is one Fly machine whose only sink is `fly logs` (D-012). An exporter would add egress, a batch processor and a boot failure mode to a feature whose design principle is that failure is silence. `opentelemetry_telemetry` bridges these events into real spans later without touching an emit site, so the cost of deferring is zero.
+
+3. **Instrument the domain boundary, not the HTTP client.** Both lookups are cached — a geocode for ~a year, a search for the provider's TTL — so **the transport cannot see most of what happens**. A `Geocoder.HTTP.Req` probe shows nothing on a hit and invites the reading that nothing ran. The spans wrap `Discovery.search/3`, `Geocoder.geocode/1` and `LinkPreview.fetch/1` *including their caches*, each reporting `cache: :hit | :miss | :off`. `:off` is distinct from `:miss` on purpose: a provider whose policy disables caching never had a cache that could have answered.
+
+4. **The Overpass QL goes out on the request span's `:start`.** It is the one artifact in the chain that cannot be reconstructed from anything else — the bbox, the registered tag list and both escaping layers only ever combine there — and it is logged *before* the result because that is the order the question is asked in. The separate `provider_request` span also isolates Overpass's own latency from ours.
+
+5. **The correlation id travels in `Logger` metadata, set inside the `start_async` closure.** The assist runs in a Task, `Logger` metadata is process-local and is *not* inherited, and there is no `request_id` because the work originates on a websocket rather than through the Plug pipeline. A `:telemetry` handler runs synchronously in the emitting process, so the handler reads it back with `Logger.metadata/0`. **No function signature changes** — `search/3`'s arity, pinned by `activity_type_invariant_test.exs`, is untouched.
+
+6. **The query and the typed area are logged at `:info`.** A deliberate privacy call, not an oversight: the area can be a home neighbourhood or postcode. It is the only way to answer why a lookup returned nothing, and it is the same trade the `[audit]` lines in `Consensus.Accounts` already make (D-021). No token, slug, session or participant is ever logged, and the `cid` is random rather than derived, so it correlates lines without identifying anything. `config :consensus, Consensus.Discovery.Telemetry, level: nil` attaches no handler at all — turning it off is config, not a deploy.
+
+**Alternatives rejected.**
+
+- **Plain `Logger` calls at each step.** Simpler, and wrong at the seam: it hard-codes the transport into the domain, gives no duration, and cannot feed LiveDashboard. The spans cost the same at the call site and carry both.
+- **OpenTelemetry now.** See 2. Reconsider the moment a collector exists.
+- **Instrumenting the HTTP behaviours.** See 3 — it is the intuitive place and it is blind exactly where this feature spends most of its time.
+- **Threading a correlation id through `search/3`.** Would have widened the arity of the one function invariant 12's pin watches, to carry something no caller needs.
+
+**Consequences.**
+
+- Five metrics land in `ConsensusWeb.Telemetry.metrics/0`, so `/admin/dashboard` charts assist latency and outcome with **no external collector**. Every tag is guaranteed present by the stop-metadata builders — `Telemetry.Metrics` drops a measurement whose tag is missing from metadata, silently.
+- **`:telemetry.span/3` does not merge start metadata into the stop event.** Each stop builder repeats what its line needs. Assuming otherwise yields log lines with empty fields, and it is the single easiest mistake to make here.
+- `run_search/4` and the geocode/fetch cache branches now return `{result, cache_status}` internally. Contained; no public signature moved.
+- Driving the real backends immediately surfaced two things the silence had hidden: **Overpass at 4185ms cold** where the D-052 build log measured 690ms, and `surayaphilly.com` failing TLS — which that build log had noticed and excluded as "unrelated". Both are now one grep away rather than a local reproduction away.
+- `lib/consensus/discovery/telemetry.ex` joins invariant 12's mention allowlist (observability only — the value is copied into metadata and `to_string/1`'d, never compared). Its moduledoc example deliberately writes `type=<type>` rather than the real literal: the pin reserves that literal to the schema, and the pin is worth more than a more concrete example.
+- 1253 tests (from 1241), 0 failures.
+
+---
+
 ## Still open
 
 D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).

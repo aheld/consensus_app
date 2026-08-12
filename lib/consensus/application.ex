@@ -9,6 +9,13 @@ defmodule Consensus.Application do
   def start(_type, _args) do
     preflight!()
 
+    # Not a supervision child: attaching a :telemetry handler is registering a
+    # function in a shared table, not starting a process, so there is nothing to
+    # supervise and nothing that can crash a tree. Kept out of children/0 for
+    # that reason — invariant 2 asserts that list's exact shape, and a non-child
+    # in it would be a lie about what the supervisor is doing.
+    :ok = Consensus.Discovery.Telemetry.attach()
+
     # See https://elixir.hexdocs.pm/Supervisor.html
     # for other strategies and supported options
     opts = [strategy: :one_for_one, name: Consensus.Supervisor]

@@ -81,12 +81,38 @@ defmodule Consensus.LinkPreview do
          :ok <- check_host(uri.host) do
       normalized = normalize_url(uri)
 
-      case Cache.get(normalized) do
-        {:hit, result} -> result
-        :miss -> fetch_and_cache(normalized)
-      end
+      # Enrichment is the assist chain's last leg, and the paste path's only
+      # leg. Spanned around the cache for the same reason the other two are:
+      # a hit is an outcome, not an absence. See `Consensus.Discovery.Telemetry`.
+      :telemetry.span([:consensus, :link_preview, :fetch], %{url: normalized}, fn ->
+        case Cache.get(normalized) do
+          {:hit, result} ->
+            {result, fetch_stop_metadata(normalized, result, :hit)}
+
+          :miss ->
+            result = fetch_and_cache(normalized)
+            {result, fetch_stop_metadata(normalized, result, :miss)}
+        end
+      end)
     end
   end
+
+  ## Telemetry shaping (see Consensus.Discovery.Telemetry)
+
+  # span/3's stop event carries only what the function returns; start metadata
+  # is not merged in, so `url` is repeated rather than assumed.
+  defp fetch_stop_metadata(url, {:ok, %__MODULE__{} = preview}, cache) do
+    %{
+      url: url,
+      outcome: :ok,
+      cache: cache,
+      title: preview.title,
+      image?: not is_nil(preview.image_url)
+    }
+  end
+
+  defp fetch_stop_metadata(url, {:error, reason}, cache),
+    do: %{url: url, outcome: :error, reason: reason, cache: cache}
 
   ## Fetch + redirect loop
 

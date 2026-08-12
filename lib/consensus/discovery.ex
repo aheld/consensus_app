@@ -67,9 +67,28 @@ defmodule Consensus.Discovery do
     if trimmed == "" do
       {:ok, []}
     else
-      activity_type
-      |> provider_for()
-      |> run_search(activity_type, trimmed, area)
+      provider = provider_for(activity_type)
+
+      # The span wraps the CACHE too, not just the provider call: a hit is an
+      # outcome worth seeing, and an operator reading only HTTP-level events
+      # would conclude nothing ran. `run_search/4` therefore reports which it
+      # was. Nothing is threaded through this function's signature — the
+      # correlation id travels in Logger metadata (see
+      # `Consensus.Discovery.Telemetry`), so `search/3`'s arity, pinned by
+      # test/consensus/activity_type_invariant_test.exs, is untouched.
+      :telemetry.span(
+        [:consensus, :discovery, :search],
+        %{
+          activity_type: activity_type,
+          query: trimmed,
+          area: area_name(area),
+          provider: provider_module(provider)
+        },
+        fn ->
+          {result, cache} = run_search(provider, activity_type, trimmed, area)
+          {result, search_stop_metadata(result, cache)}
+        end
+      )
     end
   end
 
@@ -124,7 +143,7 @@ defmodule Consensus.Discovery do
 
   ## Search plumbing
 
-  defp run_search(:none, _type, _query, _area), do: {:ok, []}
+  defp run_search(:none, _type, _query, _area), do: {{:ok, []}, :none}
 
   defp run_search({module, provider_opts}, type, query, area)
        when is_atom(module) and is_list(provider_opts) do
@@ -135,7 +154,7 @@ defmodule Consensus.Discovery do
 
     case safe_cache_policy(module) do
       %{ttl_ms: :none} ->
-        do_search(module, provider_opts, query, area)
+        {do_search(module, provider_opts, query, area), :off}
 
       # may_store_results?: false marks a provider whose terms forbid
       # server-side storage (research §4.5). validate_registry!/0 refuses such
@@ -143,7 +162,7 @@ defmodule Consensus.Discovery do
       # this is the second enforcement, so a runtime-registered forbidden
       # provider still never gets written to Cache.
       %{may_store_results?: false} ->
-        do_search(module, provider_opts, query, area)
+        {do_search(module, provider_opts, query, area), :off}
 
       %{ttl_ms: ttl_ms, error_ttl_ms: error_ttl_ms, may_store_results?: true}
       when is_integer(ttl_ms) and is_integer(error_ttl_ms) ->
@@ -154,22 +173,39 @@ defmodule Consensus.Discovery do
 
         case Cache.get(cache_key) do
           {:hit, result} ->
-            result
+            {result, :hit}
 
           :miss ->
             result = do_search(module, provider_opts, query, area)
             Cache.put(cache_key, result, ttl_ms: ttl_ms, error_ttl_ms: error_ttl_ms)
-            result
+            {result, :miss}
         end
 
       _malformed ->
-        {:error, :search_failed}
+        {{:error, :search_failed}, :none}
     end
   end
 
   # A malformed registry entry (validate_registry!/1 would have refused it at
   # boot, but the application env is mutable at runtime): degrade, don't raise.
-  defp run_search(_malformed_entry, _type, _query, _area), do: {:error, :search_failed}
+  defp run_search(_malformed_entry, _type, _query, _area), do: {{:error, :search_failed}, :none}
+
+  ## Telemetry shaping (see Consensus.Discovery.Telemetry)
+
+  # :telemetry.span/3 does NOT merge start metadata into the stop event — the
+  # stop event carries only what the function returns. Everything the log line
+  # needs is therefore repeated here rather than assumed to have survived.
+  defp search_stop_metadata({:ok, results}, cache),
+    do: %{outcome: :ok, count: length(results), cache: cache}
+
+  defp search_stop_metadata({:error, reason}, cache),
+    do: %{outcome: :error, reason: reason, cache: cache}
+
+  defp area_name(%Area{name: name}), do: name
+  defp area_name(_area), do: nil
+
+  defp provider_module({module, _opts}) when is_atom(module), do: module
+  defp provider_module(_other), do: nil
 
   defp do_search(module, provider_opts, query, area) do
     case module.search(query, area, provider_opts) do

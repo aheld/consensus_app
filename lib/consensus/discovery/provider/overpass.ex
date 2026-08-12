@@ -204,14 +204,46 @@ defmodule Consensus.Discovery.Provider.Overpass do
       receive_timeout_ms: @receive_timeout_ms
     ]
 
-    case http_module().post(@endpoint, ql, request_opts) do
-      {:ok, %{status: 200, body: body}} -> parse_body(body)
-      {:ok, %{status: 429}} -> {:error, :rate_limited}
-      {:ok, %{status: 504}} -> {:error, :gateway_timeout}
-      {:ok, %{status: status}} -> {:error, {:http, status}}
-      {:error, reason} -> {:error, transport_error(reason)}
-    end
+    # The QL goes out on the span's :start, deliberately — it is the one thing
+    # in the chain that cannot be reconstructed from anything else (the bbox,
+    # the registered tag list and both escaping layers only ever combine here),
+    # and an operator wants to read the question before the answer. The :stop
+    # carries the HTTP status separately from Discovery's own timing, which is
+    # what tells "Overpass was slow" apart from "we were slow".
+    :telemetry.span(
+      [:consensus, :discovery, :provider_request],
+      %{provider: __MODULE__, ql: ql, bbox: bbox, tags: tags},
+      fn ->
+        result =
+          case http_module().post(@endpoint, ql, request_opts) do
+            {:ok, %{status: 200, body: body}} -> parse_body(body)
+            {:ok, %{status: 429}} -> {:error, :rate_limited}
+            {:ok, %{status: 504}} -> {:error, :gateway_timeout}
+            {:ok, %{status: status}} -> {:error, {:http, status}}
+            {:error, reason} -> {:error, transport_error(reason)}
+          end
+
+        {result, request_stop_metadata(result)}
+      end
+    )
   end
+
+  # span/3 does not merge start metadata into the stop event, so the status is
+  # derived from the outcome rather than carried forward from the request.
+  defp request_stop_metadata({:ok, results}) when is_list(results),
+    do: %{outcome: :ok, status: 200, count: length(results)}
+
+  defp request_stop_metadata({:error, :rate_limited}),
+    do: %{outcome: :error, status: 429, reason: :rate_limited}
+
+  defp request_stop_metadata({:error, :gateway_timeout}),
+    do: %{outcome: :error, status: 504, reason: :gateway_timeout}
+
+  defp request_stop_metadata({:error, {:http, status}}),
+    do: %{outcome: :error, status: status, reason: {:http, status}}
+
+  defp request_stop_metadata({:error, reason}),
+    do: %{outcome: :error, status: nil, reason: reason}
 
   # Req/Mint transport errors carry their cause in a :reason field; a bare
   # :timeout covers doubles and simpler transports.

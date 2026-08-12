@@ -45,7 +45,12 @@ defmodule Consensus.ActivityTypeInvariantTest do
         "matched or branched on",
     "lib/consensus_web/live/endgame/all_vetoed.ex" => "a comment citing the invariant",
     "lib/consensus/discovery.ex" =>
-      "the registry lookup itself: an opaque Map.get/3 key, per research §4.4"
+      "the registry lookup itself: an opaque Map.get/3 key, per research §4.4",
+    "lib/consensus/discovery/telemetry.ex" =>
+      "observability only: the value is copied verbatim into :telemetry span " <>
+        "metadata and rendered with to_string/1 into a log line — never compared, " <>
+        "matched or branched on. A log line about a value is the weakest possible " <>
+        "coupling to it"
   }
 
   # Files that may contain the string literal "restaurant". The column default

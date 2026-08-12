@@ -59,19 +59,42 @@ defmodule Consensus.Discovery.Geocoder do
       query ->
         cache_key = {:geocode, String.downcase(query)}
 
-        case Cache.get(cache_key) do
-          {:hit, result} ->
-            result
+        # Spanned around the cache, not around the HTTP call: a success is
+        # cached for ~a year, so the overwhelming majority of geocodes never
+        # reach the network and an HTTP-level event would show nothing at all.
+        # See `Consensus.Discovery.Telemetry`.
+        :telemetry.span([:consensus, :discovery, :geocode], %{query: query}, fn ->
+          case Cache.get(cache_key) do
+            {:hit, result} ->
+              {result, geocode_stop_metadata(query, result, :hit)}
 
-          :miss ->
-            result = safe_lookup(query)
-            Cache.put(cache_key, result, ttl_ms: @success_ttl_ms, error_ttl_ms: @error_ttl_ms)
-            result
-        end
+            :miss ->
+              result = safe_lookup(query)
+              Cache.put(cache_key, result, ttl_ms: @success_ttl_ms, error_ttl_ms: @error_ttl_ms)
+              {result, geocode_stop_metadata(query, result, :miss)}
+          end
+        end)
     end
   end
 
   def geocode(_area_string), do: {:error, :invalid_area}
+
+  ## Telemetry shaping (see Consensus.Discovery.Telemetry)
+
+  # span/3's stop event carries only what the function returns — start metadata
+  # is not merged in — so `query` is repeated rather than assumed.
+  defp geocode_stop_metadata(query, {:ok, %Area{} = area}, cache) do
+    %{
+      query: query,
+      outcome: :ok,
+      cache: cache,
+      name: area.name,
+      bbox: Area.encode_bbox(area)
+    }
+  end
+
+  defp geocode_stop_metadata(query, {:error, reason}, cache),
+    do: %{query: query, outcome: :error, reason: reason, cache: cache}
 
   ## Lookup
 
