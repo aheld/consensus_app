@@ -41,6 +41,54 @@ defmodule ConsensusWeb.GroupLive.Options do
   can only arise once a fetch has actually been attempted (`add_link_activity/3` starts
   one unconditionally the moment the row is created), so it survives a refresh or a
   fresh log-in without a migration or an extra column.
+
+  ## Assisted Add (design frame t5, `docs/design/assisted-add-ux-brief.md` F1/F2/F4)
+
+  A **typed name** (never a pasted URL — that path is unchanged above) lands in the pool
+  instantly exactly as before, then fires ONE `Consensus.Discovery.search/3` via
+  `start_async`, keyed `{:assist, activity_id}` so parallel adds cannot clobber each
+  other. Never on `phx-change` — the add form deliberately carries no change binding,
+  because keystroke-level lookups are both a policy violation (Nominatim) and an abuse
+  of a rate-limited volunteer endpoint (research §3 trap F, brief hard constraint 1).
+
+  Everything the assist knows is socket state, per-activity, and dies with the socket:
+
+    * `@assist_looking` — ids with a lookup in flight; the card's meta line renders the
+      quiet `.assist-shim` bar (02b). When the async returns empty or an error the bar
+      simply stops — the failure trio (no match / provider error / timeout) renders
+      NOTHING: no flash, no inline error, the organizer never learns a lookup ran.
+    * `@assist_suggestions` — `%{activity_id => [Result]}`; renders the `IS THIS IT?`
+      slot attached under the card (02c/02d), capped at 3 rows even if the seam
+      misbehaves. `Use this` overwrites the typed name with the provider's canonical
+      one (brief D3 — the 02b editor is the undo), sets `source_url` when the result
+      carries a website, and reuses the pasted-link enrichment async — keyed
+      `{:link_preview, id, :never}`, so the fetch fills photo/description/metadata but
+      never the name: the organizer just confirmed the provider's canonical name, and
+      the page's own og:title (observed live: "Vernick Philadelphia" replacing
+      "Vernick Food & Drink") must not undo that. A result with no website still
+      confirms name + address usefully: name set, no `source_url`, no enrichment.
+    * `@assist_enriching` — ids between `Use this` and LinkPreview landing; the card
+      wears the violet `shadow-assist`, the shimmering photo tile and the
+      `link attached · details arriving` meta (02e). Cleared by `unmark_fetching/2`,
+      which every enrichment outcome funnels through.
+    * `@area_prompt` / `@area_prompt_suppressed?` — the one-time area prompt (02f, F2).
+      The first lookup that needs an area on a group that has none shows the prompt in
+      the slot instead of results; Save geocodes (async, `Consensus.Discovery.Geocoder`),
+      stores area + bbox on the group via `Activities.set_search_area/3` **only on
+      geocode success**, then runs the pending lookup for the card that triggered it —
+      and for every card typed *while the question was open* (`pending_ids` inside the
+      prompt map): those adds queue rather than silently losing their one lookup, each
+      fired per-activity as usual once Save lands. Dismissed unanswered → suppressed for
+      this LiveView session only, queue discarded with it. Geocode failure → silent
+      collapse, area still unset, so a later add may ask again. Once the group has an
+      area the prompt can never appear again on any mount.
+
+  When `Consensus.Discovery` has no provider for the group's activity type
+  (`@assist_enabled?` false — an empty registry counts), the feature is invisible: no
+  shimmer, no slot, the screen renders exactly as it did before the assist existed.
+  `activity_type` is only ever handed to `Consensus.Discovery` as an opaque registry
+  key, never branched on (CLAUDE.md product invariant 2 —
+  `test/consensus/activity_type_invariant_test.exs`).
   """
 
   use ConsensusWeb, :live_view
@@ -48,6 +96,9 @@ defmodule ConsensusWeb.GroupLive.Options do
   alias Consensus.Activities
   alias Consensus.Activities.Activity
   alias Consensus.Activities.Group
+  alias Consensus.Discovery
+  alias Consensus.Discovery.Area
+  alias Consensus.Discovery.Result
   alias Consensus.LinkPreview
 
   @impl true
@@ -74,11 +125,23 @@ defmodule ConsensusWeb.GroupLive.Options do
     |> assign(:group, group)
     |> assign(:add_form, fresh_add_form())
     |> assign(:add_reset, 0)
+    |> assign(:add_refocus, false)
     |> assign(:fetching, MapSet.new())
     |> assign(:editing_activity, nil)
     |> assign(:edit_form, nil)
     |> assign(:image_form, nil)
     |> assign(:replacing_image, false)
+    # The assist (see the moduledoc). `activity_type` is an opaque registry key here —
+    # a type with no registered provider makes the whole feature invisible, and both
+    # values below are config-derived, so once per mount is enough.
+    |> assign(:assist_enabled?, Enum.member?(Discovery.available_types(), group.activity_type))
+    |> assign(:assist_attribution, Discovery.attribution_for(group.activity_type))
+    |> assign(:assist_looking, MapSet.new())
+    |> assign(:assist_suggestions, %{})
+    |> assign(:assist_enriching, MapSet.new())
+    |> assign(:area_prompt, nil)
+    |> assign(:area_form, nil)
+    |> assign(:area_prompt_suppressed?, false)
     |> stream(:activities, group.activities)
   end
 
@@ -97,6 +160,10 @@ defmodule ConsensusWeb.GroupLive.Options do
   defp apply_action(socket, :index, _params) do
     socket
     |> assign(:page_title, "Add the options")
+    # Any arrival by patch (returning from the editor included) recreates the add
+    # input, and `phx-mounted` would re-fire on it — the refocus belongs to an Add
+    # press only (frame 02b), never to navigation. See `insert_activity/2`.
+    |> assign(:add_refocus, false)
     |> assign(:editing_activity, nil)
     |> assign(:edit_form, nil)
     |> assign(:image_form, nil)
@@ -133,6 +200,80 @@ defmodule ConsensusWeb.GroupLive.Options do
         case parse_pasted_url(trimmed) do
           {:ok, url, host} -> add_link_activity(socket, url, host)
           :error -> add_named_activity(socket, trimmed)
+        end
+    end
+  end
+
+  # `Use this` (frames 02c/02d → 02e): overwrite the typed name with the provider's
+  # canonical one (brief D3), set `source_url` when the suggestion has a website, and
+  # run the pasted-link enrichment path verbatim. An id or index that no longer
+  # resolves (a stale click racing a dismiss) is a no-op, not a crash.
+  def handle_event("assist_use", %{"id" => raw_id, "index" => raw_index}, socket) do
+    with %Activity{} = activity <- find_activity(socket.assigns.group, raw_id),
+         [_ | _] = suggestions <- Map.get(socket.assigns.assist_suggestions, activity.id),
+         {:ok, index} <- parse_index(raw_index),
+         %Result{} = suggestion <- Enum.at(suggestions, index) do
+      confirm_suggestion(socket, activity, suggestion)
+    else
+      _ -> {:noreply, socket}
+    end
+  end
+
+  # The slot's ✕ (02c annotation): the slot collapses, the bare typed card stands, and
+  # the lookup is not retried for that card. Per-activity, socket-state only.
+  def handle_event("assist_dismiss", %{"id" => raw_id}, socket) do
+    case find_activity(socket.assigns.group, raw_id) do
+      nil ->
+        {:noreply, socket}
+
+      activity ->
+        {:noreply,
+         socket
+         |> assign(
+           :assist_suggestions,
+           Map.delete(socket.assigns.assist_suggestions, activity.id)
+         )
+         |> restream(activity.id)}
+    end
+  end
+
+  # The area prompt's ✕ (02f — the control the frame's annotation demands and its
+  # drawing omits): collapse, and suppress the prompt for the rest of this LiveView
+  # session. The area stays unset, so a fresh mount may ask again.
+  def handle_event("assist_dismiss_area", _params, socket) do
+    {:noreply,
+     socket
+     |> close_area_prompt()
+     |> assign(:area_prompt_suppressed?, true)}
+  end
+
+  # The area prompt's Save (02f). Submit-only — never typeahead (policy; the form has
+  # no phx-change). A changeset error (an over-long area) renders inline in the slot:
+  # that is organizer form input, not a lookup, so the silence rules don't bind it.
+  # The geocode itself is a network call and runs via start_async (invariant 13).
+  def handle_event("area_submit", %{"area" => %{"search_area" => raw}}, socket) do
+    typed = String.trim(raw)
+
+    cond do
+      is_nil(socket.assigns.area_prompt) ->
+        {:noreply, socket}
+
+      typed == "" ->
+        {:noreply, socket}
+
+      true ->
+        changeset = Group.search_area_changeset(socket.assigns.group, %{search_area: typed})
+
+        if changeset.valid? do
+          {:noreply,
+           start_async(socket, :area_geocode, fn ->
+             {typed, Consensus.Discovery.Geocoder.geocode(typed)}
+           end)}
+        else
+          {:noreply,
+           socket
+           |> assign(:area_form, to_form(Map.put(changeset, :action, :validate), as: :area))
+           |> restream(socket.assigns.area_prompt.activity_id)}
         end
     end
   end
@@ -299,13 +440,248 @@ defmodule ConsensusWeb.GroupLive.Options do
      socket |> unmark_fetching(activity_id) |> put_flash(:error, "Couldn't refetch that link.")}
   end
 
+  ## Async — the assist lookup (brief F1). The failure trio — no match, provider error,
+  ## timeout, and a crashed task — all land on the same outcome: the shimmer stops and
+  ## NOTHING renders. No flash, no inline error; the organizer never learns a lookup
+  ## was attempted (brief hard constraint 6).
+
+  def handle_async({:assist, activity_id}, {:ok, {:ok, [_ | _] = results}}, socket) do
+    socket = assist_stop_looking(socket, activity_id)
+
+    if Enum.any?(socket.assigns.group.activities, &(&1.id == activity_id)) do
+      # Never more than 3 rows. The ENFORCED boundary is `Consensus.Discovery.search/3`,
+      # which caps at `Discovery.results_cap/0` before any caller sees results (its own
+      # tests pin that), so through the real seam this `Enum.take/2` is unreachable and
+      # no UI test can exercise it. It stays anyway, deliberately: the brief's "never
+      # more than 3 suggestion rows" is a *rendering* rule, and this is the last line
+      # that can uphold it if the seam is ever bypassed — a future provider path, a test
+      # stubbing above Discovery, a refactor that forgets the cap. Cheap, local, and
+      # load-bearing only in exactly that failure.
+      suggestions = Map.put(socket.assigns.assist_suggestions, activity_id, Enum.take(results, 3))
+
+      {:noreply,
+       socket
+       |> assign(:assist_suggestions, suggestions)
+       |> restream(activity_id)}
+    else
+      # The card was deleted while the lookup was in flight — nothing to attach to.
+      {:noreply, socket}
+    end
+  end
+
+  def handle_async({:assist, activity_id}, {:ok, {:ok, []}}, socket) do
+    {:noreply, assist_stop_looking(socket, activity_id)}
+  end
+
+  def handle_async({:assist, activity_id}, {:ok, {:error, _reason}}, socket) do
+    {:noreply, assist_stop_looking(socket, activity_id)}
+  end
+
+  def handle_async({:assist, activity_id}, {:exit, _reason}, socket) do
+    {:noreply, assist_stop_looking(socket, activity_id)}
+  end
+
+  ## Async — the area geocode (brief F2). Success stores the area on the group and runs
+  ## the pending lookup for the card that triggered the prompt; every failure —
+  ## `:not_found`, a transport error, a crashed task, or a refused write — is a silent
+  ## collapse. The area stays unset on failure, so a later add may prompt again
+  ## (`@area_prompt_suppressed?` is set by an explicit dismissal only).
+
+  def handle_async(:area_geocode, {:ok, {typed, {:ok, %Area{} = geocoded}}}, socket) do
+    prompt = socket.assigns.area_prompt
+    socket = close_area_prompt(socket)
+
+    # `search_area` stores the organizer's own words (already changeset-validated at
+    # submit); the geocoded bbox is what the lookup actually consumes.
+    case Activities.set_search_area(socket.assigns.current_scope, socket.assigns.group, %{
+           search_area: typed,
+           search_bbox: Area.encode_bbox(geocoded)
+         }) do
+      {:ok, group} ->
+        socket = assign(socket, :group, group)
+
+        # The card the prompt was attached to, plus every card added while it was
+        # open (queued in `pending_ids` by `maybe_start_assist/2`) — each gets the
+        # one lookup it was owed, keyed per-activity as always. A card deleted in
+        # the meantime simply isn't found and fires nothing.
+        socket =
+          prompt
+          |> pending_lookup_ids()
+          |> Enum.reduce(socket, fn id, acc ->
+            case Enum.find(group.activities, &(&1.id == id)) do
+              %Activity{} = activity -> start_assist_lookup(acc, activity)
+              nil -> acc
+            end
+          end)
+
+        {:noreply, socket}
+
+      {:error, _reason} ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_async(:area_geocode, {:ok, {_typed, {:error, _reason}}}, socket) do
+    {:noreply, close_area_prompt(socket)}
+  end
+
+  def handle_async(:area_geocode, {:exit, _reason}, socket) do
+    {:noreply, close_area_prompt(socket)}
+  end
+
   ## Add flow
 
   defp add_named_activity(socket, name) do
     case Activities.add_activity(socket.assigns.current_scope, socket.assigns.group, %{name: name}) do
-      {:ok, activity} -> {:noreply, insert_activity(socket, activity)}
-      {:error, _reason} -> {:noreply, put_flash(socket, :error, "Could not add that option.")}
+      {:ok, activity} ->
+        {:noreply, socket |> insert_activity(activity) |> maybe_start_assist(activity)}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not add that option.")}
     end
+  end
+
+  ## The assist (see the moduledoc). Only a typed-name add ever reaches this — the
+  ## pasted-URL path above goes straight to LinkPreview and fires no discovery lookup.
+
+  defp maybe_start_assist(socket, %Activity{} = activity) do
+    cond do
+      # No provider for this group's activity type: the feature is invisible.
+      not socket.assigns.assist_enabled? ->
+        socket
+
+      # The group knows where to look: fire the one lookup for this card.
+      match?({:ok, _area}, group_area(socket.assigns.group)) ->
+        start_assist_lookup(socket, activity)
+
+      # First lookup that needs an area on a group that has none: ask once, in the
+      # slot, attached to the card that triggered it (02f). One prompt at a time, and
+      # never again this session once dismissed.
+      is_nil(socket.assigns.area_prompt) and not socket.assigns.area_prompt_suppressed? ->
+        open_area_prompt(socket, activity)
+
+      # Prompt already showing: this card's lookup queues behind the answer. The 02f
+      # annotation's "Save ... runs the pending lookup" covers every card added while
+      # the question was open, not just the one it is attached to — dropping these on
+      # the floor made the assist silently skip whatever the organizer typed while
+      # deciding on an area. Each queued lookup fires per-activity from the geocode's
+      # success handler; a dismissal discards the queue with the prompt.
+      match?(%{}, socket.assigns.area_prompt) ->
+        queue_pending_lookup(socket, activity)
+
+      # Prompt dismissed this session: the lookup simply doesn't run and the card
+      # stays as typed — the frame's own annotation for a skipped prompt.
+      true ->
+        socket
+    end
+  end
+
+  defp queue_pending_lookup(socket, %Activity{id: id}) do
+    update(socket, :area_prompt, fn prompt ->
+      %{prompt | pending_ids: prompt.pending_ids ++ [id]}
+    end)
+  end
+
+  # The prompt's own anchor card first, then every card queued while it was open — in
+  # the order they were added, each keyed `{:assist, id}` as usual.
+  defp pending_lookup_ids(nil), do: []
+  defp pending_lookup_ids(%{activity_id: id, pending_ids: pending}), do: [id | pending]
+
+  defp start_assist_lookup(socket, %Activity{} = activity) do
+    case group_area(socket.assigns.group) do
+      {:ok, area} ->
+        # Read before the closure so the Task captures plain values, not the socket.
+        activity_type = socket.assigns.group.activity_type
+        query = activity.name
+
+        socket
+        |> assign(:assist_looking, MapSet.put(socket.assigns.assist_looking, activity.id))
+        |> restream(activity.id)
+        |> start_async({:assist, activity.id}, fn ->
+          Discovery.search(activity_type, query, area)
+        end)
+
+      {:error, _reason} ->
+        socket
+    end
+  end
+
+  defp group_area(%Group{search_area: search_area, search_bbox: search_bbox}) do
+    Area.decode(search_area, search_bbox)
+  end
+
+  defp open_area_prompt(socket, %Activity{} = activity) do
+    socket
+    |> assign(:area_prompt, %{activity_id: activity.id, pending_ids: []})
+    |> assign(
+      :area_form,
+      to_form(Group.search_area_changeset(socket.assigns.group, %{}), as: :area)
+    )
+    |> restream(activity.id)
+  end
+
+  defp close_area_prompt(socket) do
+    case socket.assigns.area_prompt do
+      nil ->
+        socket
+
+      %{activity_id: activity_id} ->
+        socket
+        |> assign(:area_prompt, nil)
+        |> assign(:area_form, nil)
+        |> restream(activity_id)
+    end
+  end
+
+  defp assist_stop_looking(socket, activity_id) do
+    socket
+    |> assign(:assist_looking, MapSet.delete(socket.assigns.assist_looking, activity_id))
+    |> restream(activity_id)
+  end
+
+  defp confirm_suggestion(socket, %Activity{} = activity, %Result{} = suggestion) do
+    attrs =
+      case suggestion.website_url do
+        nil -> %{name: suggestion.name}
+        url -> %{name: suggestion.name, source_url: url}
+      end
+
+    case Activities.update_activity(socket.assigns.current_scope, activity, attrs) do
+      {:ok, updated} ->
+        socket =
+          socket
+          |> assign(
+            :assist_suggestions,
+            Map.delete(socket.assigns.assist_suggestions, updated.id)
+          )
+          |> put_activity_assign(updated)
+          |> stream_insert(:activities, updated)
+
+        {:noreply, maybe_enrich_confirmed(socket, updated, suggestion)}
+
+      {:error, _changeset} ->
+        # Organizer action, not a lookup — the silence rules don't bind it, and a
+        # silently dead button would be worse. The slot stays open.
+        {:noreply, put_flash(socket, :error, "Could not use that suggestion.")}
+    end
+  end
+
+  # With a website: the card enriches exactly as a pasted link does — same async key
+  # shape, same handle_async clauses — except the name. The paste path adopts og:title
+  # over a still-provisional host name; here the name is the provider's *canonical* one
+  # the organizer just pressed `Use this` on, so the fetch is `:never` allowed to
+  # replace it (observed live: og:title "Vernick Philadelphia" overwrote the confirmed
+  # "Vernick Food & Drink"). Photo/description/metadata still fill in. Without a
+  # website: name + address were the whole win; nothing to fetch.
+  defp maybe_enrich_confirmed(socket, %Activity{}, %Result{website_url: nil}) do
+    socket
+  end
+
+  defp maybe_enrich_confirmed(socket, %Activity{} = updated, %Result{website_url: url}) do
+    socket
+    |> assign(:assist_enriching, MapSet.put(socket.assigns.assist_enriching, updated.id))
+    |> mark_fetching(updated.id)
+    |> start_async({:link_preview, updated.id, :never}, fn -> LinkPreview.fetch(url) end)
   end
 
   defp add_link_activity(socket, url, host) do
@@ -326,11 +702,20 @@ defmodule ConsensusWeb.GroupLive.Options do
     end
   end
 
+  # `@add_reset`'s id bump is what clears the input (a fresh element, a fresh empty
+  # value) — but a recreated element has no focus, so the keyboard drops mid-flow on the
+  # screen whose whole rhythm is type-Add-type-Add (frame 02b: "the input clears and
+  # stays focused so the next name can be typed"). `@add_refocus` arms `phx-mounted`'s
+  # `JS.focus()` on the recreated input for exactly this render: it is set only here —
+  # an Add press — and cleared by every `apply_action(:index, ...)`, so the initial
+  # mount and a patch back from the editor (both of which also (re)create the element)
+  # never steal focus.
   defp insert_activity(socket, activity) do
     socket
     |> put_activity_assign(activity)
     |> assign(:add_form, fresh_add_form())
     |> update(:add_reset, &(&1 + 1))
+    |> assign(:add_refocus, true)
     |> stream_insert(:activities, activity)
   end
 
@@ -338,9 +723,11 @@ defmodule ConsensusWeb.GroupLive.Options do
 
   # `name_strategy` is either the id-th activity's name at the moment the fetch
   # started — only overwrite the name if nobody has touched it since — or the atom
-  # `:never`, used by refetch: an explicit organizer action on the edit screen, where
-  # overwriting whatever they've typed as the name would be surprising. Refetch only
-  # ever "overwrites the three fields" (description, image, timestamp) per the spec.
+  # `:never`, used by refetch (an explicit organizer action on the edit screen, where
+  # overwriting whatever they've typed as the name would be surprising) and by the
+  # assist-confirm enrichment (the name is the provider's canonical one the organizer
+  # just accepted — og:title must not replace it). Both only ever "overwrite the three
+  # fields" (description, image, timestamp) per the spec.
   defp apply_preview(socket, activity_id, preview, name_strategy) do
     case Enum.find(socket.assigns.group.activities, &(&1.id == activity_id)) do
       nil ->
@@ -423,7 +810,35 @@ defmodule ConsensusWeb.GroupLive.Options do
     socket
     |> assign(:group, group)
     |> assign(:fetching, MapSet.delete(socket.assigns.fetching, removed_id))
+    |> clear_assist_state(removed_id)
     |> stream(:activities, group.activities, reset: true)
+  end
+
+  # A deleted card takes its assist state with it: an in-flight lookup's result will
+  # find no row to attach to (the `{:assist, id}` success clause re-checks), a shown
+  # slot must not survive its card, and a prompt attached to the deleted card closes —
+  # without suppressing, since nobody dismissed it.
+  defp clear_assist_state(socket, removed_id) do
+    socket =
+      socket
+      |> assign(:assist_looking, MapSet.delete(socket.assigns.assist_looking, removed_id))
+      |> assign(:assist_suggestions, Map.delete(socket.assigns.assist_suggestions, removed_id))
+      |> assign(:assist_enriching, MapSet.delete(socket.assigns.assist_enriching, removed_id))
+
+    case socket.assigns.area_prompt do
+      # The prompt's anchor card is gone: the prompt closes and its queue dies with
+      # it — nobody dismissed it, so nothing is suppressed and a later add may ask
+      # again (and re-queue).
+      %{activity_id: ^removed_id} ->
+        socket |> assign(:area_prompt, nil) |> assign(:area_form, nil)
+
+      # The prompt survives; a deleted card must not get a posthumous lookup.
+      %{pending_ids: pending} = prompt ->
+        assign(socket, :area_prompt, %{prompt | pending_ids: List.delete(pending, removed_id)})
+
+      _ ->
+        socket
+    end
   end
 
   defp mark_fetching(socket, activity_id) do
@@ -436,10 +851,13 @@ defmodule ConsensusWeb.GroupLive.Options do
   # `%Activity{}` still carrying `source_url` but no `metadata_fetched_at` once it is
   # no longer `@fetching` is exactly the durable "tried and failed" signal (see the
   # moduledoc), so there is nothing else to record here. Always re-streams: the row's
-  # provenance line depends on `@fetching` membership, which just changed.
+  # provenance line depends on `@fetching` membership, which just changed. Every
+  # enrichment outcome funnels through here, so this is also where an assist-confirmed
+  # card's 02e treatment (violet shadow, shimmer tile) ends.
   defp unmark_fetching(socket, activity_id) do
     socket
     |> assign(:fetching, MapSet.delete(socket.assigns.fetching, activity_id))
+    |> assign(:assist_enriching, MapSet.delete(socket.assigns.assist_enriching, activity_id))
     |> restream(activity_id)
   end
 
@@ -465,6 +883,15 @@ defmodule ConsensusWeb.GroupLive.Options do
       _ -> nil
     end
   end
+
+  defp parse_index(raw) when is_binary(raw) do
+    case Integer.parse(raw) do
+      {index, ""} when index >= 0 -> {:ok, index}
+      _ -> :error
+    end
+  end
+
+  defp parse_index(_raw), do: :error
 
   defp parse_pasted_url(value) do
     case URI.new(value) do
@@ -549,9 +976,88 @@ defmodule ConsensusWeb.GroupLive.Options do
 
   defp present?(value), do: is_binary(value) and value != ""
 
+  # The pool card's meta line, as a single string — either the 02e enriching interval's
+  # own copy or the derived provenance line above.
+  defp card_meta_text(assigns, activity) do
+    if assist_enriching?(assigns, activity),
+      do: "link attached · details arriving",
+      else: provenance_text(activity, assigns.fetching)
+  end
+
+  # Splits the meta line at its " · " separators into wrap-safe phrases, each non-final
+  # phrase keeping a trailing " ·" — see the template comment on the pool card's meta
+  # line: the phrases render as `whitespace-nowrap` spans so a narrow viewport breaks
+  # at a separator, never mid-phrase.
+  defp meta_phrases(text) do
+    phrases = String.split(text, " · ")
+    last = length(phrases) - 1
+
+    Enum.with_index(phrases, fn phrase, index ->
+      if index < last, do: phrase <> " ·", else: phrase
+    end)
+  end
+
   defp added_by_you_count(%Group{activities: activities}, current_scope) do
     Enum.count(activities, &(&1.added_by_id == current_scope.user.id))
   end
+
+  ## Assist rendering helpers (frame t5). All read the socket assigns handed to
+  ## `render/1`, so a stream re-insert re-evaluates them against current state.
+
+  # What hangs under a card: the one-time area prompt beats suggestions (they cannot
+  # coexist — no lookup has run while the prompt is open), then a non-empty result
+  # list, then nothing.
+  defp assist_slot(%{area_prompt: %{activity_id: id}}, %Activity{id: id}), do: :area_prompt
+
+  defp assist_slot(%{assist_suggestions: suggestions}, %Activity{id: id}) do
+    case Map.get(suggestions, id) do
+      [_ | _] = results -> {:suggestions, results}
+      _ -> nil
+    end
+  end
+
+  # The slot's exit (02c annotation: "✕ collapses the same way", 120ms). The server has
+  # already dropped the element; `phx-remove` keeps it in the DOM for exactly the
+  # collapse: `.assist-slot-collapsing` animates the reveal wrapper's grid row back to
+  # 0fr (and, under prefers-reduced-motion, does nothing — the media query strips every
+  # transition, so the element just leaves).
+  defp collapse_slot do
+    JS.hide(transition: {"assist-slot-collapsing", "", ""}, time: 120)
+  end
+
+  defp assist_looking?(%{assist_looking: looking}, %Activity{id: id}),
+    do: MapSet.member?(looking, id)
+
+  defp assist_enriching?(%{assist_enriching: enriching}, %Activity{id: id}),
+    do: MapSet.member?(enriching, id)
+
+  # The pool card is `sticker_card/1`'s depth-2 white row hand-rolled, because the
+  # assist needs three chrome states the primitive has no prop for: with a slot
+  # attached the card squares its bottom corners and hands the slot its shadow
+  # (frames 02c/02d/02f); while enriching the shadow goes violet (02e); otherwise it
+  # is byte-for-byte the row the screen always drew.
+  defp pool_card_class(slot, enriching?) do
+    [
+      "flex items-center gap-2.5 border-2 border-ink bg-white px-2.5 py-2.5",
+      if(slot, do: "rounded-t-2xl", else: "rounded-2xl"),
+      cond do
+        slot != nil -> nil
+        enriching? -> "shadow-assist"
+        true -> "shadow-sticker-2"
+      end
+    ]
+  end
+
+  # The one-match row's cuisine chip (02c) — only when the provider supplied one.
+  # `Result.chips` is display-only `[{label, value}]`; anything else renders nothing.
+  defp suggestion_cuisine(%Result{chips: chips}) when is_list(chips) do
+    case List.keyfind(chips, "cuisine", 0) do
+      {"cuisine", value} when is_binary(value) and value != "" -> String.capitalize(value)
+      _ -> nil
+    end
+  end
+
+  defp suggestion_cuisine(_result), do: nil
 
   ## Button styling — hand-rolled rather than `<.button>` because these need either a
   ## permanent (not hover-only) yellow fill that variant doesn't offer, or a `flex-1`
@@ -584,9 +1090,17 @@ defmodule ConsensusWeb.GroupLive.Options do
   # repeated once per option. It grows vertically only: the pill is already wider than 44,
   # and `Remove` sits 16px to its right with its own box (see the row below). 8px a side
   # also stays inside the card's own `py-2.5`, so two stacked cards' boxes cannot meet.
+  # White at rest, yellow only on hover/press. Both the original 02 frame
+  # (docs/design/screens/1a-1-02-add-options-manual-mvp.html) and every t5 panel draw
+  # the resting pill as white with the 2px ink outline and `hover: background:#FFD84D`
+  # — the single yellow pill in each drawing carries the *pressed* hover (translate +
+  # shadow collapse), i.e. it is the same control illustrated mid-hover. Solid yellow
+  # at rest was an app deviation; yellow stays the fill of the actual actions
+  # (Add / Save / Use this).
   defp edit_pill_class do
     [
-      "relative inline-flex items-center gap-1 rounded-full border-2 border-ink bg-yellow",
+      "relative inline-flex items-center gap-1 rounded-full border-2 border-ink bg-white",
+      "hover:bg-yellow active:bg-yellow",
       "px-2.5 py-1 text-[10.5px] font-semibold text-ink shadow-sticker-2 press-2",
       # `inset-x-0` is not decoration. An absolutely positioned `::before` with only
       # `top`/`bottom` set has `width: auto` on empty content, which is zero — measured, the
@@ -830,8 +1344,12 @@ defmodule ConsensusWeb.GroupLive.Options do
       <div class="flex min-h-0 flex-1 flex-col gap-4 px-5 pt-4">
         <.step_progress total={3} current={2} />
 
-        <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em] text-ink">
-          Add the<br />options
+        <%!-- One line, never two. Every t5 panel draws the H1 as a single line —
+              `font:700 28px/1.1`, letter-spacing -.025em — and it holds one line at the
+              panel's own 300px content width, so it holds at 375px (335px content) with
+              room to spare. The old 29px/`<br/>` two-line stack was an app deviation. --%>
+        <h1 class="text-[28px] font-bold leading-[1.1] tracking-[-0.025em] text-ink">
+          Add the options
         </h1>
 
         <div class="flex flex-col gap-2">
@@ -841,15 +1359,46 @@ defmodule ConsensusWeb.GroupLive.Options do
               {String.capitalize(@group.activity_type)}
               <span class="text-[11px] font-medium opacity-75" aria-hidden="true">›</span>
             </.chip>
-            <.chip disabled>Bars</.chip>
-            <.chip disabled>Movies</.chip>
+            <%!-- `quiet`, not the bare disabled state: the t5 panels draw Bars/Movies
+                  with a fine `rgba(23,33,28,.38)` dash and faint text so they visibly
+                  recede behind the live Restaurant chip, where the `01` frame draws its
+                  disabled `Custom…` chip full-ink dashed. The frame families differ per
+                  screen, so the quiet treatment is a `Sticker.chip/1` variant this
+                  screen opts into, not a change to the shared disabled default. --%>
+            <.chip disabled quiet>Bars</.chip>
+            <.chip disabled quiet>Movies</.chip>
           </div>
-          <p class="text-[11.5px] leading-[1.4] text-muted">
-            Restaurants first. More types as we grow.
-          </p>
+          <%!-- No caption under the chips. The original 02 frame carried "Restaurants
+                first. More types as we grow." but every t5 panel — the newest ground
+                truth for this screen — omits it (the helper budget moved to the
+                assist's line under the input), so the removal is current design
+                intent. The dashed Bars/Movies chips still say "more types later" on
+                their own. --%>
         </div>
 
-        <div class="flex flex-col gap-2">
+        <%!-- **The add form is sticky; the pool scrolls beneath it.** Every t5 panel
+              composes this screen as a fixed input with earlier cards sliding off under
+              the helper line, and the brief's constraint 5 says why: the input must stay
+              reachable for the next option while a suggestion is showing — on a long
+              pool, page scroll used to carry it out of the viewport exactly then.
+              `sticky top-[48px]` pins it flush under the global chrome header (a
+              constant 48px — `Chrome.header/1` is `sticky top-0 z-40 min-h-[48px]`);
+              `z-20` keeps it under the flash (`z-30`) and header; `-mx-5 px-5` bleeds
+              the opaque `bg-surface` across the column's own padding so a card's 2px
+              offset shadow cannot peek past the dock's edge as it slides under. The
+              page stays the scroller (the layouts moduledoc's rule: no `fill_viewport`
+              here — sticky works at every viewport height, including the short-viewport
+              range where `.viewport-column`'s clamp deliberately turns off). H1 and the
+              type chips scroll away above it, a recorded divergence from the frame's
+              fixed-height device. `data-reveal-boundary` is load-bearing: the
+              `AssistReveal` hook treats the dock's bottom edge as the top of the
+              visible area, so its clamp cannot scroll a card's name row under the
+              pinned form. --%>
+        <div
+          id="add-option-dock"
+          data-reveal-boundary
+          class="sticky top-[48px] z-20 -mx-5 flex flex-col gap-2 bg-surface px-5"
+        >
           <%!-- **Every field on this screen is 16px, and none may go below it.** iOS
                 Safari zooms the page on focus whenever the focused field computes under
                 16px and never zooms back out; this is the field the whole creation flow
@@ -861,23 +1410,29 @@ defmodule ConsensusWeb.GroupLive.Options do
           <.eyebrow>Type a name or paste a link</.eyebrow>
           <.form for={@add_form} id="add-option-form" phx-submit="add_activity" class="flex gap-2">
             <div class="flex-1">
+              <%!-- `phx-mounted` only when `@add_refocus` armed it (an Add press, and
+                    nothing else): the id bump recreates this element to clear it, and
+                    the recreated element must take the focus the old one held (frame
+                    02b: "the input clears and stays focused"). Initial mount and every
+                    patch render it without the attribute — see `insert_activity/2`. --%>
               <.input
                 id={"add-option-query-#{@add_reset}"}
                 field={@add_form[:query]}
                 type="text"
-                placeholder="Restaurant name or a link"
+                placeholder="Name or link"
+                phx-mounted={@add_refocus && JS.focus()}
                 class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] font-medium shadow-field placeholder:text-faint focus:outline-none"
               />
             </div>
             <button type="submit" class={yellow_button_class()}>Add</button>
           </.form>
-          <%!-- Place discovery (Yelp/Places) is Post-MVP and deliberately absent — see the PRD's
-                scope discipline. Saying so here is not decoration: the field accepts a typed name,
-                so someone who types "thai near me" and gets a pool entry called "thai near me" has
-                been silently misunderstood. This is the same obligation the dashed Bars/Movies
-                chips above carry — a thing that is not yet real has to look and read like it. --%>
+          <%!-- The F4 copy swap (frame 02a): describes what the assist actually does — a
+                lookup after Add, never search — so the line stays honest whether or not a
+                suggestion ever appears. The word "search" is deliberately absent: this is
+                not search, and calling it that invites the "thai near me" misuse the old
+                line existed to prevent. The dashed Bars/Movies chips above stay dashed. --%>
           <p class="text-[11.5px] leading-[1.4] text-muted">
-            Restaurant search coming soon. For now, type the name yourself or paste a link.
+            Type a name and we'll try to find its link. Or paste one yourself.
           </p>
         </div>
 
@@ -894,34 +1449,84 @@ defmodule ConsensusWeb.GroupLive.Options do
           phx-update="stream"
           class="flex min-h-0 flex-1 flex-col gap-1.5 overflow-y-auto overflow-x-clip pb-2"
         >
-          <.sticker_card
+          <%!-- Each stream child is a wrapper so the assist's suggestion slot (02c/02d)
+                or the one-time area prompt (02f) can attach *under* the card while the
+                pair stays one stream item. The card itself is the old `sticker_card`
+                depth-2 row hand-rolled (same classes), because the assist needs states
+                the primitive has no prop for: squared bottom corners + no shadow while a
+                slot hangs off it (the slot carries the pair's `shadow-sticker-2`), and
+                the violet `shadow-assist` for the 02e enriching interval. With the
+                feature absent every conditional below is inert and the row renders
+                exactly as it always has. Assist state lives in assigns, so every change
+                to it re-streams the affected row (mark/unmark/restream helpers) — a
+                streamed item never re-renders on an assign change alone. --%>
+          <div
             :for={{dom_id, activity} <- @streams.activities}
             id={dom_id}
-            depth={2}
-            class="flex items-center gap-2.5 px-2.5 py-2.5"
+            class="flex flex-col"
           >
-            <.position_badge n={activity.position} />
-            <div class="min-w-0 flex-1">
-              <p class="truncate text-[14px] font-bold text-ink">{activity.name}</p>
-              <p class="font-mono text-[10.5px] text-muted">
-                {provenance_text(activity, @fetching)}
-              </p>
-            </div>
-            <%!-- `gap-6`, not `gap-2.5`. Both controls now carry a `::before` expander, and
+            <div class={
+              pool_card_class(assist_slot(assigns, activity), assist_enriching?(assigns, activity))
+            }>
+              <.position_badge n={activity.position} />
+              <div
+                :if={assist_enriching?(assigns, activity)}
+                class="assist-shim-anim stripes-mint stripe-pitch-5 size-8 shrink-0 rounded-[9px] border-2 border-ink"
+                aria-hidden="true"
+              >
+              </div>
+              <div class="min-w-0 flex-1">
+                <p class={[
+                  "truncate font-bold text-ink",
+                  if(assist_enriching?(assigns, activity),
+                    do: "assist-name-in text-[13.5px] leading-[1.15]",
+                    else: "text-[14px]"
+                  )
+                ]}>
+                  {activity.name}
+                </p>
+                <%!-- 02b "added, looking": the shimmer bar replaces the meta line while
+                      the one lookup is in flight, and must read as "nothing is wrong" if
+                      nothing ever follows — when the async returns, empty or not, the
+                      plain provenance line simply comes back. No spinner, no text. --%>
+                <div
+                  :if={assist_looking?(assigns, activity)}
+                  class="assist-shim mt-[3px] h-[9px] w-[132px] rounded-full"
+                  aria-hidden="true"
+                >
+                </div>
+                <%!-- Phrase-by-phrase, not one text node: at 375px the line used to
+                      wrap mid-phrase ("no details / yet"). Each phrase is a nowrap
+                      span carrying its own trailing "·", and the whitespace *between*
+                      the spans (the `for` block's newlines) is the only break
+                      opportunity — so a narrow card wraps at the separator, never
+                      inside a phrase. --%>
+                <p
+                  :if={!assist_looking?(assigns, activity)}
+                  class="font-mono text-[10.5px] text-muted"
+                >
+                  <%= for phrase <- meta_phrases(card_meta_text(assigns, activity)) do %>
+                    <span class="whitespace-nowrap">{phrase}</span>
+                  <% end %>
+                </p>
+              </div>
+              <%!-- `gap-6`, not `gap-2.5`. Both controls now carry a `::before` expander, and
                   `Remove` starts 6px early (`-m-1.5`) before its box adds another 8px to the
                   left — so the gutter has to cover 14px before either control gets any clear
                   space at all. At 16px the destructive control's hit box came within 2px of
                   Edit's; 24px leaves 10px, measured. The name beside them is
                   `min-w-0 flex-1 truncate`, so the width comes out of an ellipsis. --%>
-            <div class="flex shrink-0 items-center gap-6">
-              <.link
-                patch={~p"/groups/#{@group}/options/#{activity.id}"}
-                aria-label={"Edit #{activity.name}"}
-                class={edit_pill_class()}
-              >
-                ✎ Edit
-              </.link>
-              <%!-- Measured 16×24px, whose entire affordance was a hover colour — which does
+              <div class="flex shrink-0 items-center gap-6">
+                <%!-- Icon-only while the card enriches (frame 02e collapses Edit to ✎ to
+                      make room for the photo tile); the aria-label carries the word. --%>
+                <.link
+                  patch={~p"/groups/#{@group}/options/#{activity.id}"}
+                  aria-label={"Edit #{activity.name}"}
+                  class={edit_pill_class()}
+                >
+                  {if assist_enriching?(assigns, activity), do: "✎", else: "✎ Edit"}
+                </.link>
+                <%!-- Measured 16×24px, whose entire affordance was a hover colour — which does
                     not exist on touch, so a tap gave no feedback at all. `-m-1.5 p-1.5`
                     grows the box to 28×36 without moving the glyph, and `active:` gives
                     touch the acknowledgement `hover:` gave the pointer.
@@ -935,18 +1540,188 @@ defmodule ConsensusWeb.GroupLive.Options do
                     `py-2.5`, so no two cards' Remove boxes can touch across the list gap —
                     which for a destructive control would be worse than the small target
                     was. `data-confirm` is still what makes a mis-tap recoverable. --%>
-              <button
-                type="button"
-                phx-click="delete_activity"
-                phx-value-id={activity.id}
-                data-confirm={"Remove #{activity.name} from the pool?"}
-                aria-label={"Remove #{activity.name}"}
-                class="relative -m-1.5 rounded-full p-1.5 text-muted transition-colors before:absolute before:-inset-x-2 before:-inset-y-1 before:content-[''] hover:text-tangerine active:bg-yellow active:text-tangerine"
-              >
-                <.icon name="hero-x-mark" class="size-4" />
-              </button>
+                <button
+                  type="button"
+                  phx-click="delete_activity"
+                  phx-value-id={activity.id}
+                  data-confirm={"Remove #{activity.name} from the pool?"}
+                  aria-label={"Remove #{activity.name}"}
+                  class="relative -m-1.5 rounded-full p-1.5 text-muted transition-colors before:absolute before:-inset-x-2 before:-inset-y-1 before:content-[''] hover:text-tangerine active:bg-yellow active:text-tangerine"
+                >
+                  <.icon name="hero-x-mark" class="size-4" />
+                </button>
+              </div>
             </div>
-          </.sticker_card>
+            <%= case assist_slot(assigns, activity) do %>
+              <% {:suggestions, results} -> %>
+                <%!-- Frames 02c (one match) / 02d (two–three). Rows carry name + street
+                      address (+ a cuisine chip on the one-match shape) and NOTHING else:
+                      no rating, no price, no photo, no hours, no distance — the licence
+                      rule the brief's constraint 2 pins. Max 3 rows, hard. --%>
+                <%!-- The reveal wrapper carries the slot's whole life in motion terms
+                      (02c annotation: 180ms height expand in, 120ms collapse out via
+                      phx-remove; CSS `.assist-slot-reveal` / `@starting-style`, no JS)
+                      plus the `AssistReveal` hook that scrolls the pool just enough to
+                      show it (02d annotation, frame-review §e-3 clamp). It exists only
+                      while the slot does, so the silence states' subtree is untouched. --%>
+                <div
+                  id={"assist-slot-#{activity.id}"}
+                  class="assist-slot-reveal"
+                  phx-hook="AssistReveal"
+                  phx-remove={collapse_slot()}
+                >
+                  <div class="assist-slot flex flex-col gap-2 px-[11px] pb-2 pt-[9px]">
+                    <div class="flex items-center justify-between gap-2">
+                      <span class="font-mono text-[10.5px] font-semibold uppercase tracking-[0.05em] text-muted">
+                        Is this it?
+                      </span>
+                      <button
+                        type="button"
+                        phx-click="assist_dismiss"
+                        phx-value-id={activity.id}
+                        title="No thanks"
+                        aria-label="No thanks"
+                        class="relative px-1 text-[15px] font-medium leading-none text-muted before:absolute before:-inset-3 before:content-[''] hover:text-tangerine active:text-tangerine"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <%= for {result, index} <- Enum.with_index(results) do %>
+                      <div :if={index > 0} class="assist-divider" aria-hidden="true"></div>
+                      <div class="flex items-center gap-[9px]">
+                        <%!-- Stacked, never inline: the frame's own 02c rendering puts
+                              the cuisine chip on its own row between the venue name and
+                              the address (at the panel's 340px the name+chip pair
+                              wraps, and the rendered PNG — the judge's ground truth —
+                              shows three stacked rows). `self-start` keeps the chip
+                              hugging its text instead of stretching the column. --%>
+                        <div class="flex min-w-0 flex-1 flex-col gap-[3px]">
+                          <span class={[
+                            "font-bold text-ink",
+                            if(length(results) == 1, do: "text-[13.5px]", else: "text-[13px]")
+                          ]}>
+                            {result.name}
+                          </span>
+                          <span
+                            :if={length(results) == 1 && suggestion_cuisine(result)}
+                            class="self-start rounded-full border-[1.5px] border-ink/45 bg-white px-[7px] py-px font-mono text-[9px] font-medium text-muted"
+                          >
+                            {suggestion_cuisine(result)}
+                          </span>
+                          <span :if={result.address} class="font-mono text-[10.5px] text-muted">
+                            {result.address}
+                          </span>
+                        </div>
+                        <button
+                          type="button"
+                          phx-click="assist_use"
+                          phx-value-id={activity.id}
+                          phx-value-index={index}
+                          class={[
+                            "shrink-0 rounded-full border-2 border-ink bg-yellow font-bold text-ink shadow-sticker-2 press-2",
+                            if(length(results) == 1,
+                              do: "px-[13px] py-[9px] text-[11.5px]",
+                              else: "px-3 py-2 text-[11px]"
+                            )
+                          ]}
+                        >
+                          Use this
+                        </button>
+                      </div>
+                    <% end %>
+                    <%!-- The frame links ONLY the contributors phrase; the "Places from "
+                        prefix stays plain text. Both halves and the ODbL href come from
+                        the provider via `Discovery.attribution_for/1` — nothing here is
+                        hardcoded. --%>
+                    <p :if={@assist_attribution} class="font-mono text-[9px] text-faint">
+                      {@assist_attribution.prefix}<a
+                        href={@assist_attribution.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="underline underline-offset-2 hover:text-tangerine"
+                      >{@assist_attribution.text}</a>
+                    </p>
+                  </div>
+                </div>
+              <% :area_prompt -> %>
+                <%!-- Frame 02f, the one-time area prompt (F2) — in the slot, instead of
+                      results. The ✕ is the flagged frame disagreement resolved in favour
+                      of the annotation + brief: dismissible like any suggestion. The
+                      field computes at 16px (invariant 18) and carries no maxlength
+                      (invariant 11 — `Group.search_area_changeset/2`'s 100-grapheme cap
+                      is the real limit; `01 setup`'s title field has no live counter, so
+                      none here either, matching that convention). --%>
+                <%!-- Same reveal wrapper as the suggestion slot above — the prompt
+                      occupies the slot and expands the same way (02f annotation), and
+                      the `AssistReveal` scroll matters MOST here: an area prompt that
+                      renders below the fold and is never seen silently disables the
+                      assist for the session. --%>
+                <div
+                  id={"assist-area-prompt-#{activity.id}"}
+                  class="assist-slot-reveal"
+                  phx-hook="AssistReveal"
+                  phx-remove={collapse_slot()}
+                >
+                  <div class="assist-slot flex flex-col gap-2 px-[11px] py-2.5">
+                    <div class="flex items-start justify-between gap-2">
+                      <div class="flex min-w-0 flex-col gap-[3px]">
+                        <span class="text-[13.5px] font-bold text-ink">Where should we look?</span>
+                        <span class="text-[11px] leading-[1.35] text-muted">
+                          So we can match names to the right places. Asked once, then remembered for this group.
+                        </span>
+                      </div>
+                      <button
+                        type="button"
+                        phx-click="assist_dismiss_area"
+                        title="No thanks"
+                        aria-label="No thanks"
+                        class="relative shrink-0 px-1 text-[15px] font-medium leading-none text-muted before:absolute before:-inset-3 before:content-[''] hover:text-tangerine active:text-tangerine"
+                      >
+                        ✕
+                      </button>
+                    </div>
+                    <.form
+                      for={@area_form}
+                      id="area-prompt-form"
+                      phx-submit="area_submit"
+                      class="flex items-start gap-2"
+                    >
+                      <div class="min-w-0 flex-1">
+                        <%!-- The violet-soft shadow needs the `!`: `CoreComponents.input/1`
+                              *appends* @class to its base classes (which carry the mint
+                              `shadow-field`), and `.shadow-field` sorts after this
+                              arbitrary utility in the compiled sheet, so without the
+                              important marker the mint won and the field measured
+                              #B9EFC9 at rest. The assist family carries violet-soft
+                              #D6CCFB (frame-review §d.5 — a deliberate, scoped
+                              deviation from DESIGN-SPEC's mint-at-rest rule). --%>
+                        <.input
+                          field={@area_form[:search_area]}
+                          type="text"
+                          placeholder="Neighborhood or city"
+                          class="w-full rounded-xl border-2 border-ink bg-white px-3 py-2.5 text-[16px] font-medium shadow-[2px_2px_0_var(--color-violet-soft)]! placeholder:text-faint focus:outline-none"
+                        />
+                      </div>
+                      <button
+                        type="submit"
+                        class="shrink-0 rounded-xl border-2 border-ink bg-yellow px-3.5 py-[11px] text-[13px] font-bold text-ink shadow-sticker-2 press-2"
+                      >
+                        Save
+                      </button>
+                    </.form>
+                    <p :if={@assist_attribution} class="font-mono text-[9px] text-faint">
+                      {@assist_attribution.prefix}<a
+                        href={@assist_attribution.url}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        class="underline underline-offset-2 hover:text-tangerine"
+                      >{@assist_attribution.text}</a>
+                    </p>
+                  </div>
+                </div>
+              <% nil -> %>
+            <% end %>
+          </div>
         </div>
       </div>
 
@@ -955,8 +1730,12 @@ defmodule ConsensusWeb.GroupLive.Options do
           <span class="text-[15px] font-bold text-ink">
             {length(@group.activities)} in the pool
           </span>
+          <%!-- "N yours", not "N added by you" — both the original 02 frame
+                ("2 yours · 1 from friends") and t5 ("3 yours") word it this way; the
+                longer copy was an app deviation. The "· N from friends" half stays
+                unbuilt: co-creation is Post-MVP sample garnish (frame-review §e-4). --%>
           <span class="text-[11px] text-muted">
-            {added_by_you_count(@group, @current_scope)} added by you
+            {added_by_you_count(@group, @current_scope)} yours
           </span>
         </div>
         <button

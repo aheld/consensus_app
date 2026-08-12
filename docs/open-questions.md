@@ -62,20 +62,19 @@ coverage from a path nobody intends to use. Either manufacture the pending migra
 (a throwaway migration file generated in the job) or relabel the step to say what it actually
 proves: that the boot-time migrator runs and finds nothing to do on a populated database.
 
-### F-2. Nothing has ever been deployed to Fly.io
+### F-2. ~~Nothing has ever been deployed to Fly.io~~ — closed by the deploy D-040 records; one piece survives
 
-Deployability is demonstrated, not performed: the image builds, boots on a mounted volume, migrates,
-seeds, serves, survives a restart, and every `flyctl` command in [TODO.md](../TODO.md) was checked
-against the real binary. But no Fly app exists, `flyctl` on this machine is not logged in, and the
-first real deploy is still the first real deploy. The `[[http_service.checks]]` behaviour, the
-volume's mount semantics, and the GitHub Actions → Fly hand-off are all reasoned from the official
-guides rather than observed.
+**Mostly closed.** The app is deployed: `consensus-app` on Fly, served from
+`dinner.isourthing.com` (D-040, 2026-08-08 — which also records production behaviour actually
+*observed*, including the `check_origin` misconfiguration that D-023 predicted), and `flyctl` on
+this machine is logged in (`fly auth whoami`, verified 2026-08-11). The D-052 Stage-0b
+measurement was run *from the production machine*, so the GitHub Actions → Fly hand-off, the
+volume mount and the health check have all been exercised for real, not reasoned from guides.
 
-Related and more specific: `Consensus.BootCheck` has only ever been exercised against Docker named
-volumes, which reproduce uid/gid semantics but not Fly's mount behaviour. And the snapshot-restore
-procedure in TODO.md §7 (steps R1–R8) is documented, self-consistent and labelled untested — it has
-never been executed against a live app, and it necessarily destroys and recreates the Machine
-(D-019).
+What survives of this item, still true and still worth knowing: **the snapshot-restore procedure
+in TODO.md §7 (steps R1–R8) has never been executed against a live app.** It is documented,
+self-consistent and labelled untested, and it necessarily destroys and recreates the Machine
+(D-019). It remains the one recovery path that exists only on paper.
 
 ### F-3. The mail provider is configured but the secret may not be set
 
@@ -330,18 +329,16 @@ The PRD's original phase diagram listed this as a Phase 1 technical spike, ahead
 — the more honest ordering. Run the spike before committing "Instant Booking Action" to the MVP as
 specified. (See [prd-technical-extracts.md](prd-technical-extracts.md) § From §8.)
 
-### Q-6. Places/Yelp: which provider, and does caching survive their terms?
-
-- **Google Places** moved to per-SKU pricing; a naive search-as-you-type loop gets expensive fast.
-- **Yelp Fusion** access terms have tightened; confirm current availability and whether our use
-  qualifies.
-- Google Maps Platform terms restrict how long non-ID place content may be cached. The roadmap's
-  headline cost mitigation *is* a 24-hour cache — verify that's permitted before it becomes
-  load-bearing. Place IDs and our own derived data are the safer things to persist.
-
-Also unstated: **what's the monthly infra + API budget?** It no longer decides the stack — D-003
-settled that, and one Fly machine with one volume is the whole hosting bill — but it is still the
-number that decides how much third-party search this app can afford, and therefore this question.
+**Q-6 has been deleted from this file**, per the rule at the top. [decisions.md](decisions.md)
+**D-052** answers all of it, and the answer is *neither* candidate the question named: every
+commercial place API — Google, Yelp, Foursquare, Brave, Mapbox — is rejected **on its terms, not
+its price** (each forbids storing the fields the durable `activities` row is made of; see
+[research/activity-discovery.md](research/activity-discovery.md) §3), the provider is
+OpenStreetMap via Overpass with a local Overture extract as the destination, and the caching
+question dissolves because the retention boundary is URL-only — what gets stored is a name, a
+URL, and what the venue's own page says, which no provider's terms can reach. The budget half
+also answers itself: $0 at any volume this product can reach, no key, no card on file. The
+surviving numbers are unchanged, so this section runs Q-4, Q-5, then Q-7.
 
 ### Q-7. How does anyone learn the winner?
 

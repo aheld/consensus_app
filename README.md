@@ -6,8 +6,11 @@ product — an organizer can sign up, build a titled activity group with a hard 
 it with options (typed by hand or pasted as a URL that gets its title/description/image
 pulled from the page automatically), review and reorder the pool, and publish it to a share
 link — and the people he shares it with can open it with no account, vote, and watch the tally
-move live. Place discovery (Yelp/Places) is the main thing still missing; see *What is not
-built yet* below.
+move live. A typed option name also gets an assisted lookup — the app offers the venue's
+link, found in OpenStreetMap data, as a dismissible suggestion (D-052). Place *discovery* —
+browsing for options you haven't thought of — is still missing, and it will never be
+Yelp/Places (rejected on their terms, not their price; D-052); see *What is not built yet*
+below.
 
 **Status.** The foundation (accounts, sessions, roles, an admin area, first-boot seeding, a
 Docker release image, a CI/CD pipeline) is production-ready and was committed at `8825433`
@@ -170,7 +173,11 @@ tests). `mix ecto.reset` drops and rebuilds it.
 
 ### What is not built yet
 
-**Place discovery** (Yelp/Places) — options are typed or pasted as a link, never searched.
+**Place discovery** — a browse screen for options the organizer hasn't thought of. Options
+are typed or pasted as a link; a typed name gets one background *lookup* (Assisted Add,
+D-052 — OpenStreetMap via Overpass, a dismissible "Is this it?" suggestion), but nothing is
+ever *searched for* on a dedicated screen. It will not be Yelp/Places when it comes: every
+commercial place API is rejected on its terms (D-052, `docs/research/activity-discovery.md` §3).
 **Friends adding options to someone else's pool** — the pool freezes when the vote opens
 (D-037), and design frame `03`'s "Friends can still add" copy was changed to match. **Ranked
 choice** (Borda/IRV) — the MVP tally is approval voting, which is what the ballot comp draws;
@@ -407,8 +414,8 @@ The generator was run as `mix phx.gen.auth Accounts User users` (Phoenix 1.8 sco
 password, sudo mode). Five deliberate divergences:
 
 **1. Users have a unique, case-insensitive `username`.** Added to the initial migration rather
-than a follow-up one, because the schema has never been deployed and because SQLite cannot add a
-`NOT NULL` + `UNIQUE` column to a populated table without a table rewrite. The column is declared
+than a follow-up one, because at the time the schema had never been deployed anywhere and because
+SQLite cannot add a `NOT NULL` + `UNIQUE` column to a populated table without a table rewrite. The column is declared
 `COLLATE NOCASE`, so `Accounts.get_user_by_username/1` is case-insensitive for free. Usernames
 are 3–30 characters of `[a-zA-Z0-9_-]`.
 
@@ -571,7 +578,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1034 tests, 0 failures (~9s warm) — the one count in this file
+mix test                        # 1171 tests, 0 failures (~13s warm) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
@@ -682,9 +689,11 @@ database and every LiveView websocket down with it.
 There is deliberately **no `[deploy] release_command`** in [`fly.toml`](fly.toml): a release
 machine has no volume mounted, so it would migrate a throwaway database. Migrations run at boot
 instead, from the supervision tree (see *Architecture* above) — the pattern Fly's own
-[SQLite3 guide](https://fly.io/docs/elixir/advanced-guides/sqlite3/) prescribes. **This app has
-never actually been deployed to Fly** — [TODO.md](TODO.md) is the first-deploy runbook, written
-and reviewed but not yet run end to end against a live app.
+[SQLite3 guide](https://fly.io/docs/elixir/advanced-guides/sqlite3/) prescribes. **This app is
+deployed** — `consensus-app` on one Fly machine, served from `dinner.isourthing.com` (see
+`docs/decisions.md` D-040, which also records what the first deploy actually surfaced) —
+and [TODO.md](TODO.md) is the first-deploy runbook that got it there; its snapshot-restore
+procedure (§7) is the one part that has still never been executed against a live app.
 
 `fly.toml` does carry a `[[http_service.checks]]` block — a **`GET /health`** every 30s, 5s
 timeout, after a 15s grace period. `fly deploy` watches a new machine for about ten seconds and

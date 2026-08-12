@@ -46,6 +46,13 @@ defmodule Consensus.Application do
       # ConsensusWeb.Endpoint (both true here); test/consensus/application_test.exs
       # asserts that range rather than an exact index.
       Consensus.LinkPreview.Cache,
+      # The Discovery instance of the same parameterised cache (a second child of
+      # Consensus.LinkPreview.Cache under its own table — see that module and
+      # docs/research/activity-discovery.md §4.5). Starting it validates the
+      # provider registry, so an adapter whose cache_policy forbids storing
+      # results cannot boot. Same start-range constraint as the child above;
+      # test/consensus/application_test.exs asserts it.
+      Consensus.Discovery.Cache,
       # Start to serve requests, typically the last entry
       ConsensusWeb.Endpoint
     ]

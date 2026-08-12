@@ -57,6 +57,12 @@ __pycache__/
 .claude/settings.local.json
 .claude/worktrees/
 
+# Build-loop scratch: per-iteration design screenshots, side-by-side comparison
+# renders and one-off seed/probe scripts. Large binaries with no reader after the
+# iteration that produced them — the feature's conclusions belong in docs/, and
+# D-051 and D-052 both shipped with their loop/ directories left untracked.
+/loop/
+
 # Elixir language server / editor tooling caches
 /.elixir_ls/
 /.elixir-tools/

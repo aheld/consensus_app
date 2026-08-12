@@ -8,6 +8,12 @@
       "port": 4000
     },
     {
+      "name": "consensus-dev-live",
+      "runtimeExecutable": "sh",
+      "runtimeArgs": ["-c", "ASSIST_LIVE=1 exec mix phx.server"],
+      "port": 4000
+    },
+    {
       "name": "design-ref",
       "runtimeExecutable": "python3",
       "runtimeArgs": ["-m", "http.server", "4999", "--directory", "docs/design"],

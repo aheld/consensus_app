@@ -58,6 +58,25 @@ config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Local
 # are read by Consensus.LinkPreview.Cache and default to 6 hours / 5 minutes when unset.
 config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreview.Fetcher.Req
 
+# The Consensus.Discovery provider registry: activity type => {adapter, opts}, read
+# with Map.get/3 and never branched on (CLAUDE.md product invariant 2; the shape is
+# docs/research/activity-discovery.md §4.4). Four types resolve to the SAME module
+# with different tag data — the invariant-12 proof: there is no per-type code for a
+# branch to live in. An unregistered type falls through to {:ok, []} and the
+# typed/paste path. config/test.exs replaces this map with a stub registry, so the
+# live adapter is never reached from the suite.
+config :consensus, Consensus.Discovery,
+  providers: %{
+    "restaurant" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "restaurant"}]},
+    "bar" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "bar"}]},
+    "bowling" => {Consensus.Discovery.Provider.Overpass, tags: [{"leisure", "bowling_alley"}]},
+    "cinema" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "cinema"}]}
+  }
+
+# The Overpass adapter's HTTP seam (config/test.exs points it at a stub instead).
+config :consensus, Consensus.Discovery.Provider.Overpass,
+  http: Consensus.Discovery.Provider.Overpass.HTTP.Req
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

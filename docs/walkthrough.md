@@ -39,6 +39,10 @@ Ranked by how much they cost a first-time user. None of these blocks anyone.
    `Movies` chips the same way but puts *"Restaurants first. More types as we grow."*
    right underneath. The deadline row's caption talks about something else entirely
    (*"Hard deadline. Voting locks itself and picks the winner."*). One sentence fixes it.
+   *(Update, 2026-08-11: the comparison caption is gone — Assisted Add removed
+   "Restaurants first…" per design frame t5, and the chips now say "more types later"
+   through their quiet-dashed treatment alone (D-052). The `Custom…` complaint itself
+   still stands.)*
 2. **The four coloured tiles on the share screen look like four targets and are one**
    (§36) — kind 5, ambiguous duplication. They are `aria-hidden` decoration inside a
    single `Open your phone's share sheet →` button, so every tap does the same correct
@@ -446,6 +450,19 @@ and its reason is countable. *"Restaurant search coming soon. For now, type the 
 yourself or paste a link."* pre-empts the obvious question. `Bars` and `Movies` are dashed
 and grey with `Restaurants first. More types as we grow.` underneath — the exact
 treatment §24's `Custom…` chip is missing.
+
+> **This screen changed after the walk — Assisted Add (D-052, 2026-08-11).** The frames
+> from here through §31 show the pre-assist `02`. As built now: the helper reads *"Type a
+> name and we'll try to find its link. Or paste one yourself."* (the "coming soon" line is
+> gone — the search it promised shipped, as a lookup); the chip caption "Restaurants
+> first…" is removed; the input's placeholder is `Name or link` and the add form is a
+> sticky dock under the global header; the `✎ Edit` pill is white at rest (yellow was an
+> app deviation from the frames); the tally bar's breakdown reads "N yours" rather than
+> "N added by you". And a **typed** name now fires one background lookup after Add — a
+> quiet violet shimmer on the new card's meta line, then either a dismissible "Is this
+> it?" suggestion (accepting it enriches the card exactly as a pasted link does) or
+> nothing at all: every failure renders as silence, so §28's bare-card path below is still
+> exactly what a no-match add looks like. The pasted-URL path (§29–§31) is unchanged.
 
 ### 27 — a name typed
 

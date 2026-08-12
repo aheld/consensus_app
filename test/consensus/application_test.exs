@@ -80,6 +80,29 @@ defmodule Consensus.ApplicationTest do
              "Consensus.LinkPreview.Cache must start before ConsensusWeb.Endpoint accepts traffic"
     end
 
+    # Deliberate extension for the Discovery core (docs/research/activity-discovery.md
+    # §4.5): a second instance of the parameterised Consensus.LinkPreview.Cache, wrapped
+    # by Consensus.Discovery.Cache, whose start also validates the provider registry.
+    # The Migrator/Seeds adjacency and endpoint-last assertions above are untouched —
+    # the new child sits in the same after-repo/before-endpoint range as its sibling.
+    test "starts the discovery cache after the repo and before the endpoint" do
+      children = App.children()
+
+      repo = index_of(children, &(&1 == Consensus.Repo))
+      cache = index_of(children, &(&1 == Consensus.Discovery.Cache))
+      endpoint = index_of(children, &(&1 == ConsensusWeb.Endpoint))
+
+      assert cache,
+             "Consensus.Discovery.Cache is not in the supervision tree — " <>
+               "Consensus.Discovery.search/3 and the geocoder would have nowhere to " <>
+               "cache into, and nothing would validate the provider registry at boot"
+
+      assert repo < cache, "Consensus.Discovery.Cache must start after Consensus.Repo"
+
+      assert cache < endpoint,
+             "Consensus.Discovery.Cache must start before ConsensusWeb.Endpoint accepts traffic"
+    end
+
     test "passes the configured repos and the current skip decisions through" do
       System.delete_env("RELEASE_NAME")
       Application.put_env(:consensus, :seed_on_boot, false)

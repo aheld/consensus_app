@@ -203,13 +203,26 @@ defmodule Consensus.LinkPreview do
     |> URI.to_string()
   end
 
-  # Resolves `host` and rejects loopback, private and link-local addresses, plus a
+  # Resolves `host` and rejects loopback, private and link-local addresses — in
+  # their IPv6 forms too, including IPv6 addresses that merely *embed* an IPv4 one
+  # (IPv4-mapped `::ffff:0:0/96`, IPv4-compatible `::/96`, 6to4, Teredo), which
+  # route to that IPv4 address and must answer exactly as it would — plus a
   # short list of hostnames that are dangerous even before DNS gets involved
   # (`localhost`, the GCP/AWS metadata hostname). Resolution failure is treated as
   # `:ok` rather than `:blocked_host` — an unresolvable host is a network error, not a
   # security decision, and the fetcher will fail on it naturally (as
   # `:fetch_failed`) without this guard pretending to know why.
-  defp check_host(host) do
+  #
+  # Public (`@doc false`) since the Overpass adapter landed, per
+  # docs/research/activity-discovery.md trap J: a URL that comes *back* from a
+  # provider is attacker-influenceable input, and every Discovery adapter must run
+  # it through this same check before it enters a `Result` — one SSRF allowlist,
+  # never two that drift. Behaviour for this module's own callers is unchanged;
+  # `test/consensus/discovery/provider/overpass_test.exs` pins the export so a
+  # tidy-up cannot silently re-privatise it and un-guard every adapter.
+  @doc false
+  @spec check_host(String.t()) :: :ok | {:error, :blocked_host}
+  def check_host(host) do
     downcased = String.downcase(host)
 
     cond do
@@ -242,14 +255,60 @@ defmodule Consensus.LinkPreview do
   defp blocked_ip?({172, b, _, _}) when b in 16..31, do: true
   defp blocked_ip?({192, 168, _, _}), do: true
   defp blocked_ip?({169, 254, _, _}), do: true
+  # 0.0.0.0/8 ("this host on this network"): connecting to 0.0.0.0 reaches
+  # loopback on Linux and macOS, so it is 127.0.0.1 wearing another name.
+  defp blocked_ip?({0, _, _, _}), do: true
+
+  # IPv6 loopback (::1) and unspecified (::).
   defp blocked_ip?({0, 0, 0, 0, 0, 0, 0, 1}), do: true
+  defp blocked_ip?({0, 0, 0, 0, 0, 0, 0, 0}), do: true
+
+  # An IPv6 address that embeds an IPv4 address routes to that IPv4 address, so
+  # it must answer exactly as the embedded address would — before these clauses,
+  # `[::ffff:169.254.169.254]` walked straight past every IPv4 rule above. In
+  # order: IPv4-mapped (`::ffff:0:0/96`, the one every dual-stack socket layer
+  # actually honours), the deprecated IPv4-compatible (`::/96`), and 6to4
+  # (`2002::/16`, the IPv4 in the next 32 bits).
+  defp blocked_ip?({0, 0, 0, 0, 0, 0xFFFF, hi, lo}), do: blocked_ip?(embedded_ipv4(hi, lo))
+  defp blocked_ip?({0, 0, 0, 0, 0, 0, hi, lo}), do: blocked_ip?(embedded_ipv4(hi, lo))
+  defp blocked_ip?({0x2002, hi, lo, _, _, _, _, _}), do: blocked_ip?(embedded_ipv4(hi, lo))
+
+  # NAT64 well-known prefix (64:ff9b::/96, RFC 6052): a synthesized address
+  # that routes to the embedded IPv4 target in the last 32 bits, same
+  # reasoning as the mapped/compatible/6to4 clauses above.
+  defp blocked_ip?({0x0064, 0xFF9B, 0, 0, 0, 0, hi, lo}), do: blocked_ip?(embedded_ipv4(hi, lo))
+
+  # NAT64 local-use prefix (64:ff9b:1::/48, RFC 8215): the RFC 6052 companion
+  # for networks that translate toward private/shared address space precisely
+  # because the well-known prefix must not — i.e. the deployments MOST likely
+  # to route a synthesized address at an internal target. Embedded IPv4 in the
+  # last 32 bits, checked exactly like the well-known prefix above.
+  defp blocked_ip?({0x0064, 0xFF9B, 0x0001, _, _, _, hi, lo}),
+    do: blocked_ip?(embedded_ipv4(hi, lo))
+
+  # Teredo (2001:0::/32) embeds two IPv4 addresses: the server's in words 3–4
+  # and the client's — bit-inverted — in words 7–8. Either one being private
+  # marks a tunnel toward exactly what this guard exists to keep away from.
+  defp blocked_ip?({0x2001, 0, server_hi, server_lo, _, _, client_hi, client_lo}) do
+    blocked_ip?(embedded_ipv4(server_hi, server_lo)) or
+      blocked_ip?(embedded_ipv4(Bitwise.bxor(client_hi, 0xFFFF), Bitwise.bxor(client_lo, 0xFFFF)))
+  end
 
   defp blocked_ip?(ip) when tuple_size(ip) == 8 do
+    # fc00::/7 (unique local), fe80::/10 (link-local), and fec0::/10
+    # (deprecated site-local, RFC 3879 — deprecated, not gone: still routable
+    # on a network that never migrated off it).
     first = elem(ip, 0)
-    first in 0xFC00..0xFDFF
+    first in 0xFC00..0xFDFF or first in 0xFE80..0xFEBF or first in 0xFEC0..0xFEFF
   end
 
   defp blocked_ip?(_ip), do: false
+
+  # Two 16-bit IPv6 words carrying an embedded IPv4 address, re-expressed as the
+  # 4-tuple the IPv4 clauses above understand.
+  defp embedded_ipv4(hi, lo) do
+    {Bitwise.bsr(hi, 8), Bitwise.band(hi, 0xFF), Bitwise.bsr(lo, 8), Bitwise.band(lo, 0xFF)}
+  end
 
   ## Description truncation — 140 characters, on a word boundary
 

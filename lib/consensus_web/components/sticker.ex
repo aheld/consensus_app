@@ -120,6 +120,16 @@ defmodule ConsensusWeb.Sticker do
   attr :selected, :boolean, default: false
   attr :disabled, :boolean, default: false
 
+  # Two disabled treatments exist in the design frames, and they are per-screen, not
+  # per-mood: `01 setup`'s `Custom…` chip is full-ink dashed (`2px dashed #17211C`),
+  # while the t5 `02 add options` panels draw `Bars`/`Movies` with a fine
+  # `rgba(23,33,28,.38)` dash and faint text so they visibly recede behind the one live
+  # chip beside them. `quiet` opts a disabled chip into the latter; it is ignored when
+  # the chip is not disabled.
+  attr :quiet, :boolean,
+    default: false,
+    doc: "disabled only — the receding `ink/38` dashed border the `02` frames draw"
+
   # The design selects a chip two different ways, and the difference is meaningful rather
   # than decorative. On `01` a chosen deadline is a *value* — violet, the colour this app
   # uses for vote and session state. On `02` the chosen activity type is a *mode* the rest
@@ -137,7 +147,7 @@ defmodule ConsensusWeb.Sticker do
   def chip(%{rest: rest} = assigns) do
     if !assigns.disabled && (rest[:navigate] || rest[:href] || rest[:patch]) do
       ~H"""
-      <.link class={chip_class(@selected, @disabled, @tone, @class)} {@rest}>
+      <.link class={chip_class(@selected, @disabled, @quiet, @tone, @class)} {@rest}>
         {render_slot(@inner_block)}
       </.link>
       """
@@ -153,7 +163,7 @@ defmodule ConsensusWeb.Sticker do
         type="button"
         disabled={@disabled}
         aria-pressed={to_string(@selected)}
-        class={chip_class(@selected, @disabled, @tone, @class)}
+        class={chip_class(@selected, @disabled, @quiet, @tone, @class)}
         {@rest}
       >
         {render_slot(@inner_block)}
@@ -162,7 +172,7 @@ defmodule ConsensusWeb.Sticker do
     end
   end
 
-  defp chip_class(selected, disabled, tone, class) do
+  defp chip_class(selected, disabled, quiet, tone, class) do
     [
       # `min-h-11` (44px) with `py-2` kept. Every chip in the app painted 39.5px tall —
       # including the four deadline chips that are the very first input on the organizer's
@@ -174,10 +184,23 @@ defmodule ConsensusWeb.Sticker do
       "inline-flex min-h-11 items-center gap-1.5 whitespace-nowrap rounded-full border-2 px-3.5 py-2",
       "text-[13px] transition-colors",
       cond do
-        disabled -> "cursor-not-allowed border-dashed border-ink text-faint"
-        selected and tone == :ink -> "border-ink bg-ink font-semibold text-white shadow-chip"
-        selected -> "border-ink bg-violet font-semibold text-white shadow-sticker-2"
-        true -> "cursor-pointer border-ink bg-white font-medium hover:bg-violet-tint"
+        # `quiet` is the t5 `02` treatment — `2px dashed rgba(23,33,28,.38)`, faint
+        # 500-weight text — a variant rather than the new default because `01`'s
+        # `Custom…` frame keeps the full-ink dash (see the attr comment above).
+        disabled and quiet ->
+          "cursor-not-allowed border-dashed border-ink/38 font-medium text-faint"
+
+        disabled ->
+          "cursor-not-allowed border-dashed border-ink text-faint"
+
+        selected and tone == :ink ->
+          "border-ink bg-ink font-semibold text-white shadow-chip"
+
+        selected ->
+          "border-ink bg-violet font-semibold text-white shadow-sticker-2"
+
+        true ->
+          "cursor-pointer border-ink bg-white font-medium hover:bg-violet-tint"
       end,
       class
     ]

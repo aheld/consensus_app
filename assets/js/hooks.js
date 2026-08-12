@@ -293,6 +293,176 @@ const SwipeCard = {
   },
 }
 
+// Brings the Assisted Add's just-attached suggestion slot — or the one-time area prompt
+// that renders in its place — into view inside the `#pool-list` scroller (frame 02d's
+// annotation: "The scroller auto-scrolls just enough to bring the last row into view,
+// never past the input"; frame-review §e-3 is the binding reading of it).
+//
+// Without this, a new card streams to the END of the pool, so on a phone with several
+// options the slot renders below the fold — and the ONE-TIME area prompt rendering
+// unseen silently disables the assist for the whole session, which is the worst case.
+//
+// The clamp rule, and why (frame 02d + frame-review §e-3): scroll by the MINIMUM that
+// reveals the slot's bottom edge, capped so the attached card's top — its name row, the
+// "IS THIS IT?" context — never leaves the visible area. The drawn 02d panel scrolls
+// the card above the fold and renders the suggestion contextless; the review's
+// BINDING-BRIEF-WINS ruling caps the auto-scroll earlier than the drawing, and the cap
+// here is exactly `card.top - visible.top`, applied to every scroller touched — where
+// the visible top is the sticky chrome's measured bottom edge (see visibleTop()): the
+// global header plus, on 02, the sticky add-form dock (`#add-option-dock`,
+// `[data-reveal-boundary]`) pinned under it — because a card clamped to viewport y=0
+// lands underneath them.
+// "Never past the input" now holds structurally for BOTH passes: the input is sticky
+// (`#add-option-dock`), so neither scrolling the pool nor scrolling the page can move
+// it out of view, and the dock's own bottom edge is part of the clamp above, so a
+// revealed card's name row stops below the pinned form rather than under it.
+//
+// TWO scrollers, because the shipped layout has two regimes (measured at 375x812):
+// `#pool-list` is `overflow-y-auto`, but its column is `min-h-dvh` — a MINIMUM — so on
+// a phone the column simply grows past the viewport and it is the *document* that
+// clips the slot, with the pool never overflowing at all. The pool pass runs first
+// (only when the pool actually overflows — the frame's own layout), then the page pass
+// covers what remains, both deltas computed from one pre-scroll measurement since
+// smooth scrolling is asynchronous.
+//
+// The slot expands in over 180ms (`.assist-slot-reveal`), so its rendered height at
+// mounted() time is mid-animation — or frozen near zero in a hidden tab, where no
+// frames run. Rather than wait for a transitionend that a hidden or non-animating
+// browser may never fire, the target is computed from the slot's FINAL geometry: its
+// top (fixed — the expand only grows downward) plus the inner `.assist-slot`'s
+// scrollHeight (+ borders), which reports the full content height whatever the grid
+// track currently shows. Scrolling toward that target mid-expand is fine; smooth
+// scrolling and the expansion settle together.
+const AssistReveal = {
+  mounted() {
+    // One task later so the patch's layout is settled. Not requestAnimationFrame —
+    // that never fires in a hidden document, and the area prompt being missed in a
+    // background tab is the exact failure this hook exists to prevent.
+    this.timer = setTimeout(() => this.reveal(), 0)
+    // The first reveal aims at the slot's final geometry, but a scroll issued while
+    // the expand is still running can clamp against a document that has not grown
+    // yet. Re-run ONCE when the wrapper's own expand transition completes — reveal
+    // is idempotent (it recomputes the minimal remaining delta, zero when the slot
+    // is already in view). Own-element check + immediate removal so a child's
+    // hover-colour transition can never re-scroll a pool the organizer has since
+    // scrolled away from.
+    this.onExpandEnd = (e) => {
+      if (e.target !== this.el) return
+      this.el.removeEventListener("transitionend", this.onExpandEnd)
+      this.reveal()
+    }
+    this.el.addEventListener("transitionend", this.onExpandEnd)
+  },
+
+  // The slot can grow after its first render — the area prompt swaps an inline
+  // changeset error into this same element (an over-long area re-streams the row) —
+  // and the grown tail can sit below the fold exactly like the initial render did.
+  // Same reveal, same clamp rules; reveal() recomputes the minimal remaining delta,
+  // so a patch that changed nothing geometric scrolls by zero.
+  updated() {
+    clearTimeout(this.timer)
+    this.timer = setTimeout(() => this.reveal(), 0)
+  },
+
+  // The bottom edge of the sticky chrome overlaying the top of the visible area —
+  // the global header (Chrome.header/1, `sticky top-0 z-40`) plus any
+  // `[data-reveal-boundary]` element, which on 02 is the sticky add-form dock pinned
+  // under it. Everything is measured rather than assumed: the header's height is set
+  // by its tallest child (~48px), not by a constant this hook could hardcode.
+  // Anything scrolled above this line is under opaque chrome, i.e. not visible, so
+  // both clamps treat it as the true top of the visible area.
+  //
+  // `pinned` picks which geometry a boundary contributes, and the two callers need
+  // different ones. The pool pass scrolls `#pool-list`'s own content — the dock does
+  // not move — so the dock's CURRENT bottom is exact. The page pass scrolls the
+  // document, and until the dock reaches its `top` offset it rides along with the
+  // card (their gap is constant, so the card cannot catch it); the only position that
+  // can ever occlude the card is where the dock STOPS — `top` offset + height — so
+  // the page pass clamps against that pinned bottom, whether or not the dock has
+  // reached it yet. (When it has, the two values coincide.) The header is `top-0`
+  // and always pinned on this screen, so `pinned` changes nothing for it.
+  visibleTop(pinned = false) {
+    let top = 0
+    for (const header of document.querySelectorAll("header")) {
+      const position = getComputedStyle(header).position
+      if (position === "sticky" || position === "fixed") {
+        const rect = header.getBoundingClientRect()
+        if (rect.top <= 0 && rect.bottom > 0) {
+          top = Math.max(top, rect.bottom)
+        }
+      }
+    }
+    for (const el of document.querySelectorAll("[data-reveal-boundary]")) {
+      const style = getComputedStyle(el)
+      if (style.position !== "sticky" && style.position !== "fixed") continue
+      const rect = el.getBoundingClientRect()
+      const bottom = pinned ? (parseFloat(style.top) || 0) + rect.height : rect.bottom
+      if (bottom > 0) top = Math.max(top, bottom)
+    }
+    return top
+  },
+
+  reveal() {
+    const container = this.el.closest("#pool-list")
+    if (!container) return
+    const reduced = window.matchMedia("(prefers-reduced-motion: reduce)").matches
+    // "auto" (jump) under prefers-reduced-motion, and also when the document is
+    // hidden: browsers drop smooth scrolls in a document that gets no rendering
+    // frames, so a background tab would silently not scroll at all.
+    const behavior = reduced || document.visibilityState === "hidden" ? "auto" : "smooth"
+    const slotRect = this.el.getBoundingClientRect()
+    // The slot's final bottom edge, independent of how far the expand has run.
+    let slotBottom = slotRect.bottom
+    const inner = this.el.firstElementChild
+    if (inner) {
+      const style = getComputedStyle(inner)
+      const borders =
+        (parseFloat(style.borderTopWidth) || 0) + (parseFloat(style.borderBottomWidth) || 0)
+      slotBottom = Math.max(slotBottom, slotRect.top + inner.scrollHeight + borders)
+    }
+    // The pool card the slot hangs under: the previous sibling inside the stream item.
+    const card = this.el.previousElementSibling
+    const cardTop = card ? card.getBoundingClientRect().top : slotRect.top
+    // The clamp anchors the card's name row at the top of the VISIBLE area — which is
+    // the sticky chrome's bottom edge (header + the 02 add-form dock), not viewport
+    // y=0: both overlay the top of the page, so a card clamped to y=0 lands
+    // underneath them. See visibleTop() for why the pool pass measures the chrome
+    // where it IS and the page pass where it PINS.
+    const visibleTopNow = this.visibleTop()
+    const visibleTopPinned = this.visibleTop(true)
+
+    // Pass 1 — the pool's own scroller, when it actually overflows. Minimum to reveal
+    // the slot's bottom, clamped so the card's top never leaves the container's
+    // visible area (its own top, or the sticky chrome's bottom edge where the chrome
+    // overlaps it — the page may already be scrolled under it). The chrome does not
+    // move while only the pool scrolls, so current geometry is exact here.
+    let poolDelta = 0
+    if (container.scrollHeight > container.clientHeight) {
+      const cRect = container.getBoundingClientRect()
+      poolDelta = Math.min(
+        Math.max(0, slotBottom - cRect.bottom),
+        Math.max(0, cardTop - Math.max(cRect.top, visibleTopNow))
+      )
+      if (poolDelta > 0) container.scrollBy({top: poolDelta, behavior})
+    }
+
+    // Pass 2 — the page scroller, against the post-pass-1 positions (everything in the
+    // pool moves up by poolDelta). Same minimum, same clamp, with the visible area's
+    // edges instead: the bottom is the viewport's, the top is where the sticky
+    // chrome ends up once the page has scrolled (its pinned bottom).
+    const winDelta = Math.min(
+      Math.max(0, slotBottom - poolDelta - window.innerHeight),
+      Math.max(0, cardTop - poolDelta - visibleTopPinned)
+    )
+    if (winDelta > 0) window.scrollBy({top: winDelta, behavior})
+  },
+
+  destroyed() {
+    clearTimeout(this.timer)
+    if (this.onExpandEnd) this.el.removeEventListener("transitionend", this.onExpandEnd)
+  },
+}
+
 // Arms the browser's own "leave site?" prompt while there is an unsent ballot, and only
 // then. `@approved` / `@veto_id` live in socket assigns until `Voting.cast_ballot/3` runs
 // (D-036), so a reload — a stray pull-to-refresh on a phone, mid-deck — silently discards
@@ -355,4 +525,4 @@ const RevealError = {
   },
 }
 
-export default {Clipboard, NativeShare, RevealError, Sortable, SwipeCard, UnsavedBallot}
+export default {AssistReveal, Clipboard, NativeShare, RevealError, Sortable, SwipeCard, UnsavedBallot}

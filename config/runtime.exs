@@ -40,6 +40,20 @@ if config_env() == :dev do
     ]
 end
 
+# ASSIST_LIVE=1 swaps dev's Assisted Add registry from the scripted provider
+# (config/dev.exs) back to the real Overpass adapter — the same map prod uses
+# (config/config.exs). Registry resolution stays data in config either way
+# (invariant 12); runtime.exs runs after dev.exs, so this wins when set.
+if config_env() == :dev and System.get_env("ASSIST_LIVE") == "1" do
+  config :consensus, Consensus.Discovery,
+    providers: %{
+      "restaurant" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "restaurant"}]},
+      "bar" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "bar"}]},
+      "bowling" => {Consensus.Discovery.Provider.Overpass, tags: [{"leisure", "bowling_alley"}]},
+      "cinema" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "cinema"}]}
+    }
+end
+
 if config_env() == :prod do
   database_path =
     System.get_env("DATABASE_PATH") ||

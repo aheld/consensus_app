@@ -19,17 +19,30 @@ defmodule Consensus.Activities.Group do
   They are written only by `Consensus.Activities.resolve_group/4` and cleared only by
   `reopen_group/2`, through their own narrow changesets below — never through
   `changeset/2`, exactly like `status`.
+
+  `search_area` and `search_bbox` are storage for the Assisted Add area prompt
+  (`docs/design/assisted-add-ux-brief.md` F2): a human-typed neighbourhood/city
+  string, and its geocoded bounding box as `"min_lat,min_lon,max_lat,max_lon"`
+  (parsed by whatever reads it — see the migration
+  `20260811172739_add_search_area_to_activity_groups.exs`). Stored on the group, not
+  the organizer, per `docs/research/activity-discovery.md` §4.1. Written only by
+  `Consensus.Activities.set_search_area/3`, through `search_area_changeset/2` below
+  — never through `changeset/2`.
   """
 
   use Ecto.Schema
   import Ecto.Changeset
 
   @max_title_length 120
+  @max_search_area_length 100
   @statuses [:draft, :voting, :completed, :cancelled]
   @resolutions ~w(organizer_pick app_pick app_rescue)
 
   @doc "Longest title a group may have."
   def max_title_length, do: @max_title_length
+
+  @doc "Longest `search_area` string a group may have (invariant 11 — the changeset is the real limit)."
+  def max_search_area_length, do: @max_search_area_length
 
   @doc "Every status a group can be in, in lifecycle order."
   def statuses, do: @statuses
@@ -55,6 +68,8 @@ defmodule Consensus.Activities.Group do
     field :cancelled_at, :utc_datetime
     field :resolution, :string
     field :resolved_at, :utc_datetime
+    field :search_area, :string
+    field :search_bbox, :string
 
     belongs_to :organizer, Consensus.Accounts.User
     belongs_to :resolved_activity, Consensus.Activities.Activity
@@ -122,6 +137,24 @@ defmodule Consensus.Activities.Group do
     group
     |> cast(attrs, [:resolution, :resolved_activity_id, :resolved_at])
     |> validate_inclusion(:resolution, @resolutions)
+  end
+
+  @doc """
+  Changeset for answering the Assisted Add area prompt — `:search_area` and
+  `:search_bbox`, and nothing else.
+
+  Only `Consensus.Activities.set_search_area/3` calls this. Kept apart from
+  `changeset/2` for the same narrow-changeset reason `status_changeset/2` and
+  `resolution_changeset/2` are. `:search_area` carries no `maxlength` anywhere it is
+  rendered (invariant 11) — `validate_length/3` here, capped at
+  `max_search_area_length/0` graphemes, is the real limit. `:search_bbox` is left
+  unvalidated in shape: it is written by the geocoder, never typed by an organizer,
+  so there is no untrusted input here to bound the way `:search_area` is bounded.
+  """
+  def search_area_changeset(group, attrs) do
+    group
+    |> cast(attrs, [:search_area, :search_bbox])
+    |> validate_length(:search_area, max: @max_search_area_length)
   end
 
   @doc """

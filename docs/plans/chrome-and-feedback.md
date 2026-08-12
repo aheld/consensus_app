@@ -60,7 +60,7 @@ remaining gap. Loop until it passes.
 | P4 | Feedback admin queue — mark read, private admin notes | new `AdminLive.Feedback`, router, `Consensus.Feedback` |
 | P5 | Swipe deck (frame `1c-0`) as a toggle beside the sticker grid | `join_live/ballot.ex`, `group_live/review.ex`, new component, `hooks.js` |
 | P6 | Dead-end sweep — full-page success screens | `user_live/*`, `join_live/*`, controllers, router |
-| P7 | "Restaurant search coming soon." on `02 add options` | `group_live/options.ex` |
+| P7 | "Restaurant search coming soon." on `02 add options` *(that copy was later replaced by the Assisted Add helper line — D-052)* | `group_live/options.ex` |
 | P8 | Annotated walkthrough document | `docs/walkthrough.md` + screenshots |
 | P9 | Ship to `main`, re-walk every flow on <https://dinner.isourthing.com/> | — |
 

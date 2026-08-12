@@ -70,6 +70,20 @@ config :consensus, ConsensusWeb.Endpoint,
 # configured to run both http and https servers on
 # different ports.
 
+# The Assisted Add in dev answers from the scripted provider (dev/support/
+# scripted_provider.ex — its moduledoc documents the QUERY VOCABULARY: which typed
+# name produces one match, three matches, no match, an error, a timeout, or a
+# multi-second SLOW answer) so browser and pixel work never depends on the public
+# Overpass instance. Same registry shape as prod, different data — invariant 12
+# holds either way. Start dev with ASSIST_LIVE=1 to swap the real Overpass adapter
+# back in (config/runtime.exs).
+config :consensus, Consensus.Discovery,
+  providers: %{"restaurant" => {Consensus.Dev.ScriptedProvider, []}}
+
+# Both knobs optional (these are the defaults): delay_ms is the shimmer-visible
+# pause before every answer, slow_ms is the `slow` query's screenshot hold.
+config :consensus, Consensus.Dev.ScriptedProvider, delay_ms: 900, slow_ms: 5_000
+
 # Enable dev routes for dashboard and mailbox
 config :consensus, dev_routes: true
 

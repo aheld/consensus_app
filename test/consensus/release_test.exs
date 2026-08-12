@@ -73,14 +73,18 @@ defmodule Consensus.ReleaseTest do
 
       assert {:ok, [^last], _} = Consensus.Release.rollback(TmpRepo, last)
 
-      # The newest migration adds the resolution columns to `activity_groups` (the
-      # endgame screens), so reversing exactly that one has to take them away — which
-      # is also the only assertion that its `down` runs — while leaving everything an
-      # earlier migration created in place, the feedback and voting tables included.
+      # The newest migration adds the Assisted Add search columns to
+      # `activity_groups` (the area prompt, F2 of the assisted-add brief), so
+      # reversing exactly that one has to take them away — which is also the only
+      # assertion that its `down` runs — while leaving everything an earlier
+      # migration created in place, the endgame resolution columns and the
+      # feedback/voting tables included.
       columns = columns(database, "activity_groups")
-      refute "resolution" in columns
-      refute "resolved_activity_id" in columns
-      refute "resolved_at" in columns
+      refute "search_area" in columns
+      refute "search_bbox" in columns
+      assert "resolution" in columns
+      assert "resolved_activity_id" in columns
+      assert "resolved_at" in columns
 
       tables = tables(database)
       assert "feedback" in tables

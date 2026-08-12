@@ -44,6 +44,23 @@ config :consensus, Consensus.Mailer, adapter: Swoosh.Adapters.Test
 # when `fetch/1` runs inside a `start_async` Task. See its moduledoc.
 config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreviewStub
 
+# Consensus.Discovery in test resolves "restaurant" to the $callers-walking stub in
+# test/support/discovery_stub.ex (same idiom as Consensus.LinkPreviewStub — a stub a
+# test installs survives into start_async Tasks). Its default cache_policy is
+# ttl_ms: :none, so tests never share cache entries unless one opts in.
+config :consensus, Consensus.Discovery,
+  providers: %{"restaurant" => {Consensus.DiscoveryStub, []}}
+
+# Consensus.Discovery.Geocoder never touches the network in test either; the double
+# lives in test/support/geocoder_http_stub.ex, same $callers idiom.
+config :consensus, Consensus.Discovery.Geocoder, http: Consensus.GeocoderHTTPStub
+
+# Neither does the Overpass adapter: its tests feed it canned Overpass JSON through
+# this double (test/support/overpass_http_stub.ex, same $callers idiom). Note the
+# providers map above already replaced the prod registry wholesale (Config does not
+# deep-merge maps), so nothing in the suite reaches the live adapter by accident.
+config :consensus, Consensus.Discovery.Provider.Overpass, http: Consensus.OverpassHTTPStub
+
 # The tie takeover's "Let the app break the tie" shuffle runs the design's clock in
 # dev/prod (a 110ms step landing at ~1.9s — `ConsensusWeb.Endgame.Tie`); the suite
 # shortens it so the tests that watch the spin land don't sleep through real seconds.

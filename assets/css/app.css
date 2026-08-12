@@ -76,6 +76,10 @@
   --shadow-sticker-6: 6px 6px 0 var(--color-ink);
   --shadow-field: 3px 3px 0 var(--color-mint);
   --shadow-chip: 2px 2px 0 var(--color-mint);
+  /* The Assisted Add enriching card (frame t5, 02e): the card's hard shadow switches to
+   * violet — the assist's accent — for the interval between "Use this" and LinkPreview
+   * landing, then reverts to ink. Same shape as --shadow-sticker-2, different colour. */
+  --shadow-assist: 2px 2px 0 var(--color-violet);
   --shadow-sheet: 0 -8px 24px rgba(23, 33, 28, 0.16);
 }
 
@@ -224,6 +228,108 @@
    * one in the pool drawn at the pitch the frame specifies. */
   .stripe-pitch-6 {
     --stripe-pitch: 6px;
+  }
+
+  /* The Assisted Add enriching card's 32px photo tile (frame t5, 02e) draws its
+   * mint stripe at a 5px band. */
+  .stripe-pitch-5 {
+    --stripe-pitch: 5px;
+  }
+
+  /* ---- Assisted Add (frame t5, states 02b–02f — docs/design/assisted-add-ux-brief.md).
+   *
+   * These four classes carry the frame's exact chrome, in CSS rather than HEEx, the same
+   * way the five `.stripes-*` above hardcode their own hex pairs: the violet family is
+   * the assist's accent (frame review §d) and two of its values (`#f1ecfe` stripe,
+   * `#f5f1ff` slot fill) exist as no token. */
+
+  /* 02b "added, looking": the quiet shimmer that replaces the new card's meta line while
+   * one lookup is in flight. Must read as "nothing is wrong" if nothing ever follows —
+   * when the async returns empty or an error, the bar simply gives way to the plain
+   * `typed by you · no details yet` line. Size/radius live on the element in HEEx.
+   * The opacity pulse itself is gated below, like the slot transitions: under
+   * prefers-reduced-motion the bar is a static striped stand-in, still legible as
+   * "something is happening", just not breathing. */
+  .assist-shim {
+    background: repeating-linear-gradient(135deg, #d6ccfb 0 6px, #f1ecfe 6px 12px);
+  }
+
+  /* The shim pulse — 02b's meta-line bar and 02e's enriching photo tile (which keeps
+   * its `.stripes-mint` fill and takes only the animation from `.assist-shim-anim`).
+   * Behind no-preference so a reduced-motion reader gets the static stripes only. */
+  @media (prefers-reduced-motion: no-preference) {
+    .assist-shim,
+    .assist-shim-anim {
+      animation: shim 1.5s ease-in-out infinite;
+    }
+  }
+
+  /* 02e: "the title cross-fades to the canonical name" — the server swaps the text, this
+   * fades the new one in (200ms, the frame's silence-path cross-fade duration). */
+  .assist-name-in {
+    animation: assist-fade-in 200ms ease-out;
+  }
+
+  /* 02c/02d/02f: the suggestion slot attached under its card. The card above squares its
+   * bottom corners and hands this element its shadow; the dashed top is the seam between
+   * them (frame: 2px dashed at 40% ink). 16px bottom radius rather than the frame's 14 —
+   * the shipped pool card is `rounded-2xl`, and the slot has to meet the card it is
+   * attached to, not the mockup's row. `min-height: 0` + `overflow: hidden` make it track
+   * `.assist-slot-reveal`'s animated grid row (below) — inert at rest, when the row is a
+   * full 1fr. */
+  .assist-slot {
+    border: 2px solid var(--color-ink);
+    border-top: 2px dashed rgba(23, 33, 28, 0.4);
+    border-radius: 0 0 16px 16px;
+    background: #f5f1ff;
+    box-shadow: var(--shadow-sticker-2);
+    min-height: 0;
+    overflow: hidden;
+  }
+
+  /* The slot's motion (frame 02c annotation: "Arrives by expanding height 0→auto over
+   * 180ms with a 120ms fade; ✕ collapses the same way"). Height-to-auto cannot be
+   * transitioned directly, so the wrapper is a one-row grid whose track animates
+   * 0fr→1fr — the `.assist-slot` inside clips to the row via min-height/overflow above —
+   * and `@starting-style` supplies the entry's first frame, so the expand runs on plain
+   * DOM insertion with no JS. The exit is `phx-remove`'s `JS.hide` applying
+   * `.assist-slot-collapsing` for its 120ms. Both transitions live inside the
+   * no-preference media query: under prefers-reduced-motion the slot appears and
+   * disappears with no motion at all. */
+  .assist-slot-reveal {
+    display: grid;
+    grid-template-rows: 1fr;
+  }
+
+  @media (prefers-reduced-motion: no-preference) {
+    .assist-slot-reveal {
+      transition:
+        grid-template-rows 180ms ease-out,
+        opacity 180ms ease-out;
+    }
+
+    @starting-style {
+      .assist-slot-reveal {
+        grid-template-rows: 0fr;
+        opacity: 0;
+      }
+    }
+
+    /* Applied by phx-remove's JS.hide; declared after the base rule so its transition
+     * (the collapse's 120ms) wins the same-specificity cascade against the 180ms above. */
+    .assist-slot-collapsing {
+      grid-template-rows: 0fr;
+      opacity: 0;
+      transition:
+        grid-template-rows 120ms ease-in,
+        opacity 120ms ease-in;
+    }
+  }
+
+  /* 02d: the dashed divider between suggestion rows. */
+  .assist-divider {
+    height: 1.5px;
+    background: repeating-linear-gradient(90deg, rgba(23, 33, 28, 0.3) 0 5px, transparent 5px 10px);
   }
 
   /* The inert, muted stripe on a `Sticker.tally_bar/1` row whose activity has been
@@ -498,6 +604,34 @@
  * delay, which is what keeps the fire from reading as a loop), so the classes below hold
  * only what is shared: the transform box/origin every flame scales from, and the chips'
  * buzz. Unlayered, like the deck-card rules above, so no utility can out-cascade them. */
+/* The Assisted Add pulse: the looking shimmer on a just-added card's meta line (02b)
+ * and the enriching card's photo tile (02e) both breathe over 1.5s, in the frame's own
+ * .34↔.9 opacity range. Phase-shifted from t5's `@keyframes shim` (which STARTS at the
+ * .34 floor): a bar whose first painted frame is the trough lands washed out — a
+ * near-invisible pale lavender the instant Add is pressed, exactly when anyone (or a
+ * pixel judge) looks at it — while the frame's own rendered PNG shows the bar at its
+ * saturated ~.9 peak. Same stripes, same range, same period; the cycle just opens at
+ * the peak, so the bar arrives visible and dips from there. */
+@keyframes shim {
+  0%,
+  100% {
+    opacity: 0.9;
+  }
+  50% {
+    opacity: 0.34;
+  }
+}
+
+/* 02e's title cross-fade, server-side half: the new (canonical) name fades in. */
+@keyframes assist-fade-in {
+  from {
+    opacity: 0;
+  }
+  to {
+    opacity: 1;
+  }
+}
+
 @keyframes flick {
   0%,
   100% {

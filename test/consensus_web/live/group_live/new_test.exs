@@ -18,6 +18,22 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       assert has_element?(lv, "h1", "plan?")
       assert has_element?(lv, "#group-form", "Custom…")
 
+      # The up-front warning that the chips are a *required* choice, not optional
+      # filters — added after organizers hit the requirement only as a submit error.
+      assert has_element?(
+               lv,
+               "#group-form p.text-tangerine",
+               "Pick when votes close — the session can't run without an end time."
+             )
+
+      # The `!` badge beside it is decorative — the sentence is the accessible text, so
+      # the badge must stay `aria-hidden` rather than being announced as a bare "!".
+      assert has_element?(
+               lv,
+               "#group-form p.text-tangerine span[aria-hidden='true'].bg-tangerine",
+               "!"
+             )
+
       # Every chip carries an explicit `aria-pressed="false"` until it is chosen. This
       # assertion used to read `:not([aria-pressed])` and pass, because `aria-pressed={@selected}`
       # in HEEx renders a bare boolean attribute — `aria-pressed=""` when true, omitted when

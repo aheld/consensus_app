@@ -177,6 +177,57 @@ defmodule Consensus.LinkPreviewTest do
       assert LinkPreview.fetch("http://169.254.169.254/") == {:error, :blocked_host}
     end
 
+    test "blocks IPv4-mapped IPv6 literals — [::ffff:...] must answer as the embedded IPv4 would" do
+      # The historical blind spot: the 8-tuple clause checked only fc00::/7, so a
+      # mapped-IPv6 spelling of a blocked IPv4 target sailed through. Reachable
+      # from a paste and from every Discovery adapter (research trap J).
+      assert LinkPreview.fetch("http://[::ffff:127.0.0.1]/") == {:error, :blocked_host}
+      assert LinkPreview.fetch("http://[::ffff:10.0.0.1]/") == {:error, :blocked_host}
+      assert LinkPreview.fetch("http://[::ffff:169.254.169.254]/") == {:error, :blocked_host}
+    end
+
+    test "check_host/1 rejects every IPv6 shape that reaches a private target" do
+      for host <- [
+            # Mapped, in dotted and pure-hex spellings — same tuple either way.
+            "::ffff:192.168.1.1",
+            "::ffff:a9fe:a9fe",
+            # Deprecated IPv4-compatible (::/96), loopback and unspecified.
+            "::127.0.0.1",
+            "::1",
+            "::",
+            # Unique local, link-local and deprecated site-local.
+            "fc00::1",
+            "fe80::1",
+            "fec0::1",
+            # 6to4 with an embedded 10.0.0.1, Teredo with a private server IPv4.
+            "2002:a00:1::",
+            "2001:0:c0a8:101::",
+            # NAT64 well-known prefix (64:ff9b::/96) embedding 10.0.0.1.
+            "64:ff9b::a00:1",
+            # NAT64 local-use prefix (64:ff9b:1::/48, RFC 8215) embedding
+            # 10.0.0.1 and 127.0.0.1 — the deployments most likely to
+            # translate toward internal space, checked like the well-known
+            # prefix.
+            "64:ff9b:1::a00:1",
+            "64:ff9b:1:ffff::7f00:1",
+            # Teredo whose (bit-inverted) client words decode to 127.0.0.1.
+            "2001:0:808:808:0:5000:80ff:fffe"
+          ] do
+        assert LinkPreview.check_host(host) == {:error, :blocked_host},
+               "expected #{host} to be blocked"
+      end
+
+      # And the guard stays an allowlist of *dangerous* ranges, not a ban on
+      # IPv6: a public address in any of those families still passes.
+      for host <- ["2606:4700::1111", "::ffff:808:808", "2002:808:808::", "64:ff9b:1::808:808"] do
+        assert LinkPreview.check_host(host) == :ok, "expected #{host} to pass"
+      end
+    end
+
+    test "blocks 0.0.0.0/8 — connecting to 0.0.0.0 reaches loopback" do
+      assert LinkPreview.fetch("http://0.0.0.0/") == {:error, :blocked_host}
+    end
+
     test "never calls the fetcher for a blocked host" do
       test_pid = self()
       StubFetcher.stub(fn url, _opts -> send(test_pid, {:fetched, url}) end)

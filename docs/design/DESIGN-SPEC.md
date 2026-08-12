@@ -72,7 +72,7 @@ Put these in `assets/css/app.css` as CSS custom properties and Tailwind v4 `@the
 | `--violet-soft` | `#D6CCFB` | avatar / badge fills |
 | `--mint` | `#B9EFC9` | success, "added", input focus shadow |
 | `--mint-soft` | `#C9E8D2` | photo placeholder stripes |
-| `--yellow` | `#FFD84D` | secondary action (Add, Edit), hover fill |
+| `--yellow` | `#FFD84D` | secondary action (Add, Save, Use this), hover/press fill (Edit pill — white at rest, D-052) |
 | `--yellow-soft` | `#FFE3A8` | badge fills |
 | `--peach` | `#FFC2A3` | avatar fill |
 
@@ -91,6 +91,10 @@ labels. Self-host or `<link>` — either is fine, but the family names must matc
 5. **Fields carry a mint shadow at rest**, not ink: `box-shadow: 3px 3px 0 var(--mint)`. This
    is a resting state, not a focus state — every field in frames `01` and `02b` has it, and
    only one of them is drawn focused. Focus adds the `:focus-visible` violet outline on top.
+   One scoped exception: **assist-owned fields rest on violet-soft** (`2px 2px 0 #D6CCFB` on
+   the area prompt's field) — frame t5 draws the violet family as the assist's accent, and
+   the deviation is deliberate and confined to assist surfaces (D-052; see the `02` assist
+   states below).
 
 Section labels are `DM Mono`, 11px, 600, `letter-spacing:.06em`, `uppercase`, `--muted`.
 
@@ -282,6 +286,16 @@ Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progres
   dashed `Custom…` chip — **render it disabled/greyed for now**, it is explicitly deferred.
   Helper line under the chips: "Hard deadline. Voting locks itself and picks the winner."
   If a chip's time has already passed today, it still means the *next* occurrence.
+  **Deviation (2026-08-11, not in the frame):** a warning line renders *above* the
+  chips — a 20px `--tangerine` circle (2px ink border) holding a white bold `!`, then
+  "Pick when votes close — the session can't run without an end time." (13px/500,
+  `--tangerine`). The frame's bare chip row read as optional filters, and organizers only
+  learned the deadline was required when submit failed; the helper line below stays the
+  mechanics footnote. This is the one place on this screen where tangerine appears twice
+  (here and on **Add the options →**) — deliberate, and the same licence
+  `CoreComponents.error/1` already takes: tangerine is this system's alert colour, and the
+  submit-time deadline error directly below is tangerine too. The badge is
+  `aria-hidden` — the sentence beside it is the accessible text.
 - **GROUP** — overlapping 30px avatars (−8px margin) with a `+N` bubble and a 12px muted
   caption. Saved friend groups are Post-MVP: show the organizer's own avatar and the caption
   "Just you so far · invite by link".
@@ -289,23 +303,104 @@ Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progres
   location, so the button reads **Add the options →**.
 
 ### `02` add options — `/groups/:id/options`
-Step 2 of 3 (two progress segments filled).
+Step 2 of 3 (two progress segments filled). **Design frame t5 ("5 · Assisted Add", six 02
+panels in the same Claude Design file) is the newest ground truth for this screen** —
+transcribed in the assisted-add frame review and bound by
+[assisted-add-ux-brief.md](assisted-add-ux-brief.md); where t5 and the original `1a-1` frame
+disagree, t5 wins (D-052).
 
-- `h1` "Add the options" 29px/1.08.
+- `h1` "Add the options" — built at 28px/1.1 (the 29px original wrapped to two lines in the
+  app's column; one blind A/B round flagged the wrap as a tell and the size moved).
 - **ACTIVITY TYPE** — horizontally scrolling chips. `Restaurant` is selected: ink-filled,
-  white text, `2px 2px 0 var(--mint)`. `Bars` and `Movies` are dashed-border, `--faint`, and
-  **not clickable** (Post-MVP). Helper: "Restaurants first. More types as we grow."
-- **TYPE A NAME OR PASTE A LINK** — a text input (14px radius, mint shadow) and a yellow
-  **Add** button (14px radius, `2px 2px 0 var(--ink)`).
-  Pasting a URL fetches the page and fills image, title and description; all three stay
-  editable. A typed non-URL just becomes a name with no details.
-- The pool list, scrollable. Each row: 2px ink border, 14px radius, `2px 2px 0 var(--ink)`,
-  a 24px rounded-square position badge (DM Mono 700 11px, fill cycles mint → yellow-soft →
+  white text. `Bars` and `Movies` are **not clickable** (Post-MVP) and draw in t5's *quiet*
+  treatment — a fine `rgba(23,33,28,.38)` dash and faint text — not the full-ink dashed
+  `01` uses for `Custom…`. **No caption under the chips**: the original frame's
+  "Restaurants first. More types as we grow." appears in no t5 panel (the helper budget
+  moved to the assist's line under the input) and is not built (D-052).
+- **TYPE A NAME OR PASTE A LINK** — a text input (placeholder `Name or link`, 16px computed,
+  mint shadow at rest) and a yellow **Add** button. Helper line beneath, 11.5px `--muted`:
+  *"Type a name and we'll try to find its link. Or paste one yourself."* (the brief's F4 swap;
+  the old "Restaurant search coming soon…" line is gone). Pasting a URL fetches the page and
+  fills image, title and description; all three stay editable. A typed non-URL becomes a name
+  with no details — and fires one background lookup (the assist, below). **Nothing fires
+  while typing** — no dropdown, no per-keystroke state, ever (brief constraint 1).
+- The pool list. Each row: 2px ink border, 14px radius, `2px 2px 0 var(--ink)`, a 24px
+  rounded-square position badge (DM Mono 700 11px, fill cycles mint → yellow-soft →
   violet-soft), the name at 14px/700, a DM Mono 10.5px provenance line
-  ("typed by you · no details yet" / "link · photo + description pulled"), a yellow `✎ Edit`
-  pill and a muted `✕` that turns tangerine on hover.
+  ("typed by you · no details yet" / "link · photo + description pulled"), a **white**
+  `✎ Edit` pill and a muted `✕` that turns tangerine on hover.
 - Sticky footer with a 2px ink top border: "N in the pool" 15px/700 over an 11px muted
-  breakdown, and a tangerine **Review →**.
+  "N yours" (both frames word it `yours`, not "added by you"; the "· N from friends" half
+  is Post-MVP sample garnish and is not built), and a tangerine **Review →**.
+
+> **The `✎ Edit` pill is white at rest, yellow only on hover/press (D-052).** Both the
+> original `1a-1` frame and every t5 panel draw the resting pill white with the 2px ink
+> outline and a `hover: background:#FFD84D` rule — the one yellow pill in each drawing
+> carries the *pressed* treatment (translate + collapsed shadow), i.e. it is the same
+> control illustrated mid-hover, not a yellow resting state. Solid yellow at rest was an
+> app deviation, now corrected; yellow remains the fill of the real actions (Add / Save /
+> Use this). An earlier revision of this file called the pill yellow — that read the
+> hover illustration as the resting state.
+
+> **The add form is a sticky dock; the page stays the scroller (D-052).** Every t5 panel
+> stages a fixed-height device with the pool sliding beneath a fixed input. The app pins
+> the input + helper `sticky top-[48px]` flush under the global chrome header instead: the
+> h1 and type chips scroll away above it, and the pool passes beneath. The brief's
+> constraint 5 — the input stays reachable for the next option while a suggestion is
+> showing — is the operative clause and the dock satisfies it at every viewport height; a
+> recorded divergence from the frame's fixed-height composition, not drift.
+
+#### The assist states (t5, panels 02b–02f)
+
+Six states of the same screen, all socket-local, none an error. **The violet family is the
+assist's accent — a deliberate deviation from rule 5's "fields carry a mint shadow at
+rest", scoped to assist-owned surfaces only** (slot, shimmer, enriching card, area field);
+the main add input keeps its mint resting shadow in every panel and in the app. Carry the
+deviation, don't "fix" it (D-052 §8).
+
+- **Added, looking (02b)** — the new card lands instantly and its meta line renders as a
+  9×132px pill of violet shimmer stripes (`#D6CCFB`/`#F1ECFE`, opacity pulsing .34→.9 over
+  1.5s). If nothing comes back it cross-fades into the plain "typed by you · no details
+  yet" line. **No failure state exists for this feature** — no match, provider down, 429,
+  504 and timeout all render as the shimmer simply stopping.
+- **One match / two–three matches (02c/02d)** — the suggestion slot attaches under the
+  card: the card's corners square into it, the slot carries the shadow, `#F5F1FF` fill, a
+  dashed ink top rule, `IS THIS IT?` in DM Mono with a dismiss ✕ (`title="No thanks"`).
+  Rows carry **name + street address (+ a cuisine chip on the one-match shape only,
+  1.5px `ink/45` border — small-pill convention) and nothing else: no rating, no price
+  band, no photo, no hours, no distance** — those fields are unlicensed for display
+  (research §4.6, brief constraint 2). Three rows is the hard ceiling; dashed dividers
+  between them; yellow **Use this** per row. The slot expands 180ms/fades 120ms and never
+  moves the input or the Review bar; the reveal scroll is clamped so the card's own name
+  row stays visible above its slot (frame-review §e-3 — the brief wins over the drawing's
+  over-scroll).
+- **Confirmed, enriching (02e)** — the slot collapses, the title cross-fades to the
+  provider's canonical name, a 32px shimmering photo tile appears, the meta reads
+  `link attached · details arriving`, Edit collapses to icon-only `✎`, and the card's
+  shadow switches to **violet** (`--shadow-assist: 2px 2px 0 var(--violet)`) for the
+  enriching interval — then the card is an ordinary link-enriched card, back on the ink
+  shadow.
+- **Dismissed** — the slot collapses and the bare typed card stands; the lookup is not
+  retried for that card. Visually identical to a plain typed card; not drawn by the frame,
+  by design.
+- **Area prompt (02f)** — the slot shows the one-time "Where should we look?" prompt
+  instead of results: a 16px `Neighborhood or city` field (violet-soft `#D6CCFB` resting
+  shadow — the scoped deviation again; no `maxlength`, the changeset's 100 graphemes is
+  the limit), a yellow **Save**, and a dismiss ✕ **which the drawing omits but the frame's
+  own annotation and the brief both require — built** (D-052 §8). Asked once per group;
+  answered → never again, dismissed → suppressed for the session, geocode failure →
+  silent collapse and a later add may ask again.
+- **Attribution renders in every slot state**, last child, DM Mono 9px `--faint`:
+  `Places from OpenStreetMap contributors`, only the contributors phrase linked, to the
+  ODbL licence. The prefix/link split and the URL come from the provider
+  (`Discovery.attribution_for/1`) — nothing hardcoded in the template. Absent is not an
+  option wherever suggestions render (brief constraint 3).
+
+Not built from t5, deliberately: the friend-added card garnish (`Kismet · ALEX`,
+"1 from friends") and the 5b setup-screen area-field variant with its saved-group row —
+Post-MVP sample content, same class as the D-051 sample-data deviation. The panels'
+in-content back circle is the global header's `‹` (D-041), and the position badge keeps
+the app's shipped fill cycle rather than re-matching each panel's sample fills.
 
 ### `02b` edit an option — `/groups/:id/options/:option_id`
 Full screen, not a modal. Header with a 34px `✕`, "Edit option" 15px/700, and a tangerine

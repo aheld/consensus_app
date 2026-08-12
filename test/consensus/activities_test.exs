@@ -86,6 +86,74 @@ defmodule Consensus.ActivitiesTest do
     end
   end
 
+  describe "set_search_area/3" do
+    test "sets search_area and search_bbox on a draft group" do
+      scope = user_scope_fixture()
+      group = group_fixture(scope)
+
+      assert {:ok, updated} =
+               Activities.set_search_area(scope, group, %{
+                 search_area: "Fishtown",
+                 search_bbox: "39.96,-75.15,39.98,-75.12"
+               })
+
+      assert updated.search_area == "Fishtown"
+      assert updated.search_bbox == "39.96,-75.15,39.98,-75.12"
+    end
+
+    test "allows a nil search_bbox (the area was typed but not geocoded yet)" do
+      scope = user_scope_fixture()
+      group = group_fixture(scope)
+
+      assert {:ok, updated} =
+               Activities.set_search_area(scope, group, %{search_area: "Fishtown"})
+
+      assert updated.search_area == "Fishtown"
+      assert is_nil(updated.search_bbox)
+    end
+
+    test "raises for someone else's group" do
+      owner_scope = user_scope_fixture()
+      stranger_scope = user_scope_fixture()
+      group = group_fixture(owner_scope)
+
+      assert_raise FunctionClauseError, fn ->
+        Activities.set_search_area(stranger_scope, group, %{search_area: "Fishtown"})
+      end
+    end
+
+    test "refuses once the group is no longer a draft" do
+      scope = user_scope_fixture()
+      group = group_fixture(scope)
+      {:ok, cancelled} = Activities.cancel_group(scope, group)
+
+      assert {:error, :pool_locked} =
+               Activities.set_search_area(scope, cancelled, %{search_area: "Fishtown"})
+    end
+
+    test "enforces the search_area length cap" do
+      scope = user_scope_fixture()
+      group = group_fixture(scope)
+      too_long = String.duplicate("a", 101)
+
+      assert {:error, changeset} =
+               Activities.set_search_area(scope, group, %{search_area: too_long})
+
+      assert "should be at most 100 character(s)" in errors_on(changeset).search_area
+    end
+
+    test "accepts exactly 100 characters" do
+      scope = user_scope_fixture()
+      group = group_fixture(scope)
+      exactly = String.duplicate("a", 100)
+
+      assert {:ok, updated} =
+               Activities.set_search_area(scope, group, %{search_area: exactly})
+
+      assert updated.search_area == exactly
+    end
+  end
+
   describe "activity description cap" do
     test "rejects a description over 140 characters" do
       scope = user_scope_fixture()
@@ -162,6 +230,13 @@ defmodule Consensus.ActivitiesTest do
     test "delete_activity/2 refuses, which is what protects cast ballots", %{scope: scope, a: a} do
       assert {:error, :pool_locked} = Activities.delete_activity(scope, a)
       assert Repo.get(Activity, a.id)
+    end
+
+    test "set_search_area/3 refuses", %{scope: scope, group: group} do
+      assert {:error, :pool_locked} =
+               Activities.set_search_area(scope, group, %{search_area: "Fishtown"})
+
+      assert Repo.get!(Group, group.id).search_area != "Fishtown"
     end
 
     test "reorder_activities/3 refuses", %{scope: scope, group: group, a: a, b: b} do

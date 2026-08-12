@@ -561,14 +561,18 @@ Concrete names, so the rules above land in the right place:
   produced five failures in `Consensus.ContentTest`. ExUnit runs sync cases only after every async
   one has finished, so `async: false` gives the module the file to itself; the DDL still rolls back
   with the sandbox transaction. Ordinary inserts and updates remain safe under `async: true`.
-  Current split, across 24 test files:
-  - **Five declare `async: true`** — `content_test`, `router_test`, `deploy_config_test`,
-    `error_html_test`, `error_json_test`. `router_test` and `deploy_config_test` are plain
-    `ExUnit.Case` and touch no database at all (`deploy_config_test` only reads `fly.toml` as
-    text), which is why they are free.
-  - **Seven explicitly pin `async: false`** — `seeds_test`, `user_notifier_test`,
-    `application_test`, `boot_check_test`, `release_test`, `health_controller_test`, and
-    `voting_concurrency_test`. Each has a reason in a comment at the top; do not flip one without
+  Current split, across 53 test files (re-counted 2026-08-11):
+  - **Twenty-four declare `async: true`** — among them `router_test`, `deploy_config_test`,
+    `activity_type_invariant_test`, `error_html_test`, `error_json_test`. The free ones are
+    plain `ExUnit.Case` touching no database at all (`deploy_config_test` and
+    `activity_type_invariant_test` only read repo files as text). `content_test` used to head
+    this list; it was deleted with the home page (D-027).
+  - **Eleven explicitly pin `async: false`** — `seeds_test`, `user_notifier_test`,
+    `application_test`, `boot_check_test`, `release_test`, `health_controller_test`,
+    `voting_concurrency_test`, `link_preview_test`, and — since D-052 — `discovery_test`,
+    `discovery/cache_test` and `discovery/geocoder_test` (the last four all touch the
+    app-wide named ETS caches or the provider registry in application env, both
+    process-global). Each has a reason in a comment at the top; do not flip one without
     reading it. The last one is the odd case and the interesting one: it does not issue DDL, it
     **leaves the sandbox entirely**, starting a second dynamic instance of `Consensus.Repo`
     (`put_dynamic_repo/1`) on a throwaway file under `tmp_dir` with a real connection pool, so that

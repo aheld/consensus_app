@@ -246,7 +246,10 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       activity = activity_fixture(group, %{name: "Kismet"})
 
       {:ok, _view, html} = live(conn, ~p"/groups/#{group}/options")
-      assert html =~ "typed by you · no details yet"
+      # The meta line renders phrase-by-phrase (nowrap spans, wrapping only at the
+      # "·"), so the two phrases are asserted separately.
+      assert html =~ "typed by you"
+      assert html =~ "no details yet"
 
       {:ok, editor, _} = live(conn, ~p"/groups/#{group}/options/#{activity.id}")
 
@@ -257,7 +260,8 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       |> render_submit()
 
       {:ok, _view, reloaded} = live(conn, ~p"/groups/#{group}/options")
-      assert reloaded =~ "typed by you · description added"
+      assert reloaded =~ "typed by you"
+      assert reloaded =~ "description added"
       refute reloaded =~ "no details yet"
     end
 
@@ -675,6 +679,69 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options")
 
       refute has_element?(lv, "footer a[data-confirm]")
+    end
+  end
+
+  # The t5 pixel round (second blind critique). These pin the frame-extracted values so
+  # a later edit cannot quietly drift back to the app deviations they replaced.
+  describe "the t5 pixel pass on the index screen" do
+    setup %{scope: scope} do
+      %{group: group_fixture(scope)}
+    end
+
+    # Brief constraint 5: "the input stays reachable for the next option while a
+    # suggestion is showing." The page is the scroller on this screen (no
+    # `fill_viewport`), so on a long pool the add form used to scroll out of the
+    # viewport; the dock pins it under the 48px chrome header instead, and the pool
+    # slides beneath it — the t5 panels' own composition. `data-reveal-boundary` is
+    # what tells the `AssistReveal` hook's clamp that the dock's bottom edge, not the
+    # header's, is the top of the visible area — without it a revealed card's name row
+    # can be scrolled under the pinned form.
+    test "the add form is a sticky dock the AssistReveal clamp knows about", %{
+      conn: conn,
+      group: group
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      dock = lv |> element("#add-option-dock") |> render()
+      assert dock =~ "sticky"
+      assert dock =~ "top-[48px]"
+      assert dock =~ "data-reveal-boundary"
+      # The dock carries the whole type-Add unit — input and helper line — so what
+      # pins is what the t5 panels pin, and the form's own id is unchanged for every
+      # other test in this file.
+      assert dock =~ "add-option-form"
+      assert dock =~ "we&#39;ll try to find its link"
+    end
+
+    # The t5 panels: `font:700 28px/1.1`, letter-spacing -.025em, ONE line — the
+    # 29px `Add the<br/>options` two-line stack was an app deviation.
+    test "the H1 is the frame's single-line 28px", %{conn: conn, group: group} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      heading = lv |> element("h1") |> render()
+      assert heading =~ "text-[28px]"
+      assert heading =~ "Add the options"
+      refute heading =~ "<br"
+    end
+
+    # The t5 panels: placeholder "Name or link", and Bars/Movies recede behind the
+    # live Restaurant chip — `2px dashed rgba(23,33,28,.38)` + faint text
+    # (`Sticker.chip/1`'s `quiet` variant), not the full-ink dash `01`'s `Custom…`
+    # keeps.
+    test "the input placeholder and the quiet disabled chips match the frame", %{
+      conn: conn,
+      group: group
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      assert has_element?(lv, ~s|#add-option-query-0[placeholder="Name or link"]|)
+
+      html = render(lv)
+      quiet_chips = html |> String.split("border-ink/38") |> length() |> Kernel.-(1)
+      assert quiet_chips == 2, "expected exactly Bars and Movies to wear the quiet dash"
+      assert has_element?(lv, "button[disabled].border-ink\\/38", "Bars")
+      assert has_element?(lv, "button[disabled].border-ink\\/38", "Movies")
     end
   end
 end

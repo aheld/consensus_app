@@ -310,6 +310,22 @@ defmodule ConsensusWeb.GroupLive.New do
           <div class="flex flex-col gap-2">
             <.eyebrow>Votes close</.eyebrow>
             <.input type="hidden" field={@form[:deadline_at]} />
+            <%!-- The chips alone read as optional filters, not a required field — usability
+                  feedback: organizers reached "Add the options →" without realising a
+                  deadline had to be picked, and met the requirement only as a submit error.
+                  This line states it up front; the muted caption below stays the mechanics
+                  footnote. Not in design frame 01 — recorded in DESIGN-SPEC.md. --%>
+            <p class="flex items-start gap-2 text-[13px] font-medium leading-[1.4] text-tangerine">
+              <%!-- Decorative: the sentence beside it carries the whole meaning, so the badge
+                    is hidden from assistive tech rather than read out as a bare "!". --%>
+              <span
+                aria-hidden="true"
+                class="mt-px grid size-5 shrink-0 place-items-center rounded-full border-2 border-ink bg-tangerine text-[12px] font-bold leading-none text-white"
+              >
+                !
+              </span>
+              Pick when votes close — the session can't run without an end time.
+            </p>
             <div class="flex flex-wrap gap-2" role="group" aria-label="When voting closes">
               <.chip
                 :for={chip <- @chips}

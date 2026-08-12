@@ -1039,10 +1039,10 @@ fly sftp get /data/consensus.db ./prod.db --app <FLY_APP_NAME>
 ### Restoring from a snapshot — READ ALL OF THIS FIRST
 
 > **Untested against a live app.** Everything in §0–§6 was walked through against a real
-> deployment. This procedure was **not** — this machine has flyctl 0.4.79 installed but is not
-> logged in, so every command and flag below was verified against `fly <command> --help` and
-> against Fly's published guides, and **the sequence itself has never been executed end to
-> end.** It is also the only destructive procedure in this document: steps R5 and R6 delete
+> deployment. This procedure was **not** — every command and flag below was verified against
+> `fly <command> --help` (flyctl 0.4.x; the machine is logged in now, which changes nothing
+> about this warning) and against Fly's published guides, and **the sequence itself has never
+> been executed end to end.** It is also the only destructive procedure in this document: steps R5 and R6 delete
 > your Machine and then permanently delete a volume. Read it through completely before you
 > run the first command, and do not improvise the order.
 

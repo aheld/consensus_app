@@ -21,8 +21,9 @@ defmodule Consensus.Activities do
 
   ## The pool is frozen the moment the vote opens
 
-  `add_activity/3`, `update_activity/3`, `delete_activity/2` and `reorder_activities/3`
-  all refuse with `{:error, :pool_locked}` unless the group is still a `:draft`. This is
+  `add_activity/3`, `update_activity/3`, `delete_activity/2`, `reorder_activities/3` and
+  `set_search_area/3` all refuse with `{:error, :pool_locked}` unless the group is still
+  a `:draft`. This is
   a **data-integrity** rule, not a UX preference, and it became load-bearing the moment
   `Consensus.Voting` shipped: `votes.activity_id` references `activities` with
   `ON DELETE CASCADE`, so deleting an option that people have already voted on silently
@@ -171,6 +172,31 @@ defmodule Consensus.Activities do
     |> Group.changeset(attrs)
     |> Repo.update()
     |> broadcast_group_update()
+  end
+
+  @doc """
+  Answers the Assisted Add area prompt (`docs/design/assisted-add-ux-brief.md` F2):
+  sets `:search_area` and/or `:search_bbox` on the group.
+
+  Refuses with `{:error, :pool_locked}` unless the group is still a `:draft` — the
+  assist only exists on the draft `02 add options` screen, per the brief, so there is
+  never a legitimate write once the group has left `:draft`. Same "the pool is frozen
+  the moment the vote opens" reasoning as `add_activity/3` and friends in the
+  moduledoc, applied to this field even though it is not itself part of the tally.
+  No broadcast: nothing outside the organizer's own socket reads these fields.
+  """
+  def set_search_area(
+        %Scope{user: %User{id: user_id}},
+        %Group{organizer_id: user_id, status: :draft} = group,
+        attrs
+      ) do
+    group
+    |> Group.search_area_changeset(attrs)
+    |> Repo.update()
+  end
+
+  def set_search_area(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, _attrs) do
+    {:error, :pool_locked}
   end
 
   @doc """

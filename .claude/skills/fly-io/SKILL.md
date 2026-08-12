@@ -47,7 +47,7 @@ There is **no** `[deploy]` stanza, **no** top-level `[checks]` table and no `[pr
 table. There **is** an `[[http_service.checks]]` block, and it points at a real `/health`
 route — see "The health check".
 
-`flyctl` is installed (v0.4.79 at time of writing). Elixir is in `/opt/homebrew/bin`; prefix
+`flyctl` is installed (v0.4.80 at time of writing). Elixir is in `/opt/homebrew/bin`; prefix
 agent shell invocations with `export PATH="/opt/homebrew/bin:$PATH"` to run `mix`.
 
 ## fly.toml, annotated
@@ -663,7 +663,7 @@ fails to authenticate → `FLY_API_TOKEN` missing, expired, or pasted without it
 `FlyV1 ` prefix. CI `deploy` never starts → the reusable `ci.yml` failed and `deploy` has
 `needs: test`. CI deploys to the wrong app → `fly.toml` was edited but never committed.
 
-## Commands verified against `flyctl` v0.4.79
+## Commands verified against `flyctl` v0.4.80
 
 Every flag above was checked with `--help` on this machine (read-only; no login, no mutation):
 `fly deploy`, `fly secrets set|list|unset`, `fly logs`, `fly status`, `fly ssh console|issue`,
