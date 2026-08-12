@@ -294,11 +294,14 @@ or let the app pick one at random) instead of a bare report, but Q-8 in
   in a `handle_event` — it's a real network call with multi-second timeouts, and a LiveView is
   one process. See D-030.
 
-- [`Consensus.Deadlines`](lib/consensus/deadlines.ex) — pure functions, no database. Computes
-  the three deadline chips on `/groups/new` and the countdown label on the home screen, from
-  UTC arithmetic shifted by the browser's UTC offset (sent in the LiveView connect params —
-  there is no time zone database in this app, so a DST transition inside the chip's window can
-  be off by an hour). See D-031.
+- [`Consensus.Deadlines`](lib/consensus/deadlines.ex) — pure functions, no database. Every
+  wall-clock computation in the app: the three deadline chips and the custom picker on
+  `/groups/new`, the countdown, and every "closes …" label. The browser sends both its IANA zone
+  name and its UTC offset in the LiveView connect params, and `Deadlines.Clock` resolves them
+  **zone → offset → UTC**: with a zone the answer is right at any future date, including across a
+  daylight-saving change; without one it falls back to the offset arithmetic D-031 shipped, which
+  can be an hour out across a DST transition. The zone database is `:tz`, compiled in at build
+  time with its updater deliberately unsupervised. See D-055, and D-031 for what it supersedes.
 
 **Web layer** (`lib/consensus_web/`): two controllers of its own, plus the generated error views.
 [`UserSessionController`](lib/consensus_web/controllers/user_session_controller.ex) exists because
@@ -578,7 +581,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1207 tests, 0 failures (~28s warm) — the one count in this file
+mix test                        # 1241 tests, 0 failures (~28s warm) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```

@@ -283,9 +283,26 @@ Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progres
   hover to `--violet-tint`. **Exactly three chips, computed live in the user's timezone:**
   `5pm this evening` · `5pm tomorrow` · `next Thursday at noon`. Label them the way the design
   does — short and human (`Tonight 5pm`, `Tomorrow 5pm`, `Thu noon`). The design also shows a
-  dashed `Custom…` chip — **render it disabled/greyed for now**, it is explicitly deferred.
+  dashed `Custom…` chip. ~~**Render it disabled/greyed for now**, it is explicitly deferred.~~
+  **Live since D-055, and it is an ordinary chip now** — not dashed, not `disabled`, styled
+  exactly like its three siblings, and carrying `aria-expanded`/`aria-controls` for the panel
+  it toggles.
   Helper line under the chips: "Hard deadline. Voting locks itself and picks the winner."
+  (The trailing "Pick-your-own times are coming; for now it's one of these three." went with
+  the deferral.)
   If a chip's time has already passed today, it still means the *next* occurrence.
+- **CUSTOM DEADLINE PANEL** (D-055) — **no frame draws this**; the design turn predates the
+  picker, so the treatment below is a design call recorded here rather than a transcription,
+  and a fidelity review has nothing to compare it against. A `DATE AND TIME` eyebrow over one
+  native `<input type="datetime-local">`, matched to the SESSION TITLE input's box — 16px
+  radius, 2px ink border, white fill, `--shadow-sticker-2`, mint focus shadow — and revealed
+  under the chip row only once `Custom…` is pressed. **The type size is 16px and is not a
+  style choice:** invariant 18 puts a hard floor there because iOS Safari zooms the page when
+  a focused field computes below it and never zooms back, and a date field is the worst place
+  for that since the native picker opens over a page that has just jumped. Adjust padding, not
+  the type size. A native control is deliberate: it brings the platform's own picker on the
+  two browsers this product is actually used in, for no JavaScript and no date library, and
+  the cost is that its internals cannot be styled to the sticker system.
   **Deviation (2026-08-11, not in the frame):** a warning line renders *above* the
   chips — a 20px `--tangerine` circle (2px ink border) holding a white bold `!`, then
   "Pick when votes close — the session can't run without an end time." (13px/500,
@@ -313,8 +330,10 @@ disagree, t5 wins (D-052).
   app's column; one blind A/B round flagged the wrap as a tell and the size moved).
 - **ACTIVITY TYPE** — horizontally scrolling chips. `Restaurant` is selected: ink-filled,
   white text. `Bars` and `Movies` are **not clickable** (Post-MVP) and draw in t5's *quiet*
-  treatment — a fine `rgba(23,33,28,.38)` dash and faint text — not the full-ink dashed
-  `01` uses for `Custom…`. **No caption under the chips**: the original frame's
+  treatment — a fine `rgba(23,33,28,.38)` dash and faint text. (This used to contrast itself
+  against "the full-ink dashed `01` uses for `Custom…`"; that chip is live and undashed since
+  D-055, so these two are now the **only** dashed-inert chips in the app.) **No caption under
+  the chips**: the original frame's
   "Restaurants first. More types as we grow." appears in no t5 panel (the helper budget
   moved to the assist's line under the input) and is not built (D-052).
 - **TYPE A NAME OR PASTE A LINK** — a text input (placeholder `Name or link`, 16px computed,
@@ -437,7 +456,8 @@ Full screen, not a modal. Header with a 34px `✕`, "Edit option" 15px/700, and 
 
 > **The veto row is built solid, not dashed, and its copy is not the frame's (D-047).** In this
 > repo a dashed border is the documented "not built yet" treatment — `Bars` and `Movies` on
-> `02`, `Custom…` on `01`, all `disabled` and captioned "Coming soon". This row states a rule
+> `02`, `disabled` and captioned. (`Custom…` on `01` belonged to that list until D-055 built
+> it; the convention is unchanged, the example simply graduated.) This row states a rule
 > that is live and enforced on every ballot, one screen after those, and it sits directly under
 > an equally immutable rule (`Anonymous voting · ALWAYS ON`) drawn as a solid violet card; a
 > reader should not have to work out which of the two a dashed border means. It is now that

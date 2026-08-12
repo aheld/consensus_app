@@ -373,14 +373,24 @@ for a pasted URL, and it is worth knowing as a *non*-database pattern alongside 
 ### `Consensus.Deadlines` — pure functions, no database, no `Repo`
 
 `lib/consensus/deadlines.ex` computes the three deadline chips on `01 setup`
-(`Consensus.Deadlines.options/2`) entirely from a UTC `DateTime` and an integer offset in
-minutes — no schema, no changeset, no `Repo` call anywhere in the module. It is the module to
+(`Consensus.Deadlines.options/2`), the custom picker's conversion (`from_wall_clock/2`) and
+every "closes …" label, entirely from a UTC `DateTime` and a `Consensus.Deadlines.Clock` — no
+schema, no changeset, no `Repo` call anywhere in the module. It is the module to
 reach for as an example of "this doesn't need to be a context" when a future feature is pure
 computation dressed up as domain logic. Every function is unit-testable with nothing but plain
 data, which is exactly what `test/consensus/deadlines_test.exs` does — no `DataCase`, no
 sandbox, `use ExUnit.Case, async: true`, and it is safe async because nothing it does touches
 shared state. See the `phoenix` skill for why the browser (not the server) is the source of the
-UTC offset, and CLAUDE.md's product invariant about there being no `tzdata` dependency.
+clock.
+
+**There *is* a `tzdata`-shaped dependency now, and it is not `tzdata`** (D-055, superseding
+half of D-031). `:tz` compiles the IANA database in at build time and its updater processes
+are deliberately **not** in the supervision tree, which is what keeps D-031's actual objection
+— a runtime download plus a periodic updater plus a new boot failure mode — satisfied. Two
+rules follow for anyone touching this area: **all wall-clock math lives in this module** (a
+private copy in a LiveView is how the share sheet nearly kept computing the wrong hour across
+a DST change), and **the offset fallback's known wrongness is pinned by a test on purpose**,
+so "fixing" it by guessing fails the suite rather than shipping.
 
 ## Pattern matching, `with`, and result tuples
 
@@ -521,7 +531,7 @@ connection and its own transaction, rolled back at exit, instead of joining the 
 tests still cannot see each other's rows. It just no longer buys concurrent wall-clock time,
 because `max_cases: 1` removes that regardless of the tag.
 
-Verified 2026-08-11: `MIX_TEST_PARTITION=p11 mix precommit` → **1207 tests, 0 failures**,
+Verified 2026-08-11: `MIX_TEST_PARTITION=p11 mix precommit` → **1241 tests, 0 failures**,
 "Finished in 6.0 seconds (1.9s async, 4.1s sync)". Re-run for a current count rather than
 quoting that number — the count grows as the app is written.
 
@@ -952,7 +962,7 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect the count of the day: 1207 tests, 0 failures as of 2026-08-11. Re-run rather than
+Expect the count of the day: 1241 tests, 0 failures as of 2026-08-11. Re-run rather than
 trusting that number — the count grows as the app is written — but a failure is a real
 signal, not background noise, provided you partitioned the database.
 

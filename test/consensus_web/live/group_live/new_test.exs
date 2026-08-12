@@ -8,11 +8,17 @@ defmodule ConsensusWeb.GroupLive.NewTest do
   alias Consensus.Accounts.Scope
   alias Consensus.Activities
   alias Consensus.Deadlines
+  alias Consensus.Deadlines.Clock
 
   setup :register_and_log_in_user
 
+  # `Phoenix.LiveViewTest` sends no connect params, so the LiveView under test builds the
+  # UTC clock (`%Clock{zone: nil, offset_minutes: 0}`). Tests that recompute an expected
+  # instant have to use the same one.
+  defp clock(offset_minutes), do: %Clock{offset_minutes: offset_minutes}
+
   describe "new" do
-    test "renders three enabled deadline chips plus a disabled Custom chip", %{conn: conn} do
+    test "renders three deadline chips plus a live Custom chip", %{conn: conn} do
       {:ok, lv, _html} = live(conn, ~p"/groups/new")
 
       assert has_element?(lv, "h1", "plan?")
@@ -47,11 +53,209 @@ defmodule ConsensusWeb.GroupLive.NewTest do
                )
       end
 
-      assert has_element?(
-               lv,
-               "#group-form button[disabled][title='Coming soon']",
-               "Custom…"
-             )
+      # Live since D-055. It shipped `disabled` with a `title="Coming soon"` and this
+      # assertion pinned it that way; the picker is real now, so the pin inverts.
+      assert has_element?(lv, "#group-form button[phx-click='toggle_custom']", "Custom…")
+      refute has_element?(lv, "#group-form button[disabled][title='Coming soon']")
+    end
+
+    test "the custom picker is closed until the Custom chip is pressed", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      refute has_element?(lv, "#custom-deadline-input")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+      assert has_element?(lv, "#custom-deadline-input")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+      refute has_element?(lv, "#custom-deadline-input")
+    end
+
+    # Invariant 18: iOS Safari zooms the page when a focused field computes under 16px and
+    # never zooms back out. `text-base` is 16px; anything smaller here is a layout break on
+    # the one platform this product is designed for, and a date field is the worst place
+    # for it because the native picker opens over a page that has just jumped.
+    test "the custom picker's field is at least 16px", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      html =
+        lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      assert html =~ ~r/id="custom-deadline-input"[^>]*class="[^"]*\btext-base\b/s
+    end
+
+    test "a custom date and time is converted and saved", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      wall_clock =
+        DateTime.utc_now()
+        |> DateTime.add(9, :day)
+        |> DateTime.truncate(:second)
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_iso8601()
+        |> String.slice(0, 16)
+
+      lv
+      |> form("#group-form", %{
+        "group" => %{"title" => "Custom night"},
+        "custom_deadline" => wall_clock
+      })
+      |> render_submit()
+
+      assert [group] = Activities.list_groups(scope)
+      assert group.title == "Custom night"
+
+      # The test client sends no connect params, so the LiveView is on the UTC clock and
+      # the wall clock above is read back verbatim.
+      assert group.deadline_at |> DateTime.to_naive() |> NaiveDateTime.to_iso8601() =~ wall_clock
+    end
+
+    test "a custom deadline in the past is refused by the changeset, not the widget", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      # A `min` attribute is a client-side hint; the event can be pushed regardless, which
+      # is why the refusal has to live in `Group.changeset/2` (D-055). This posts exactly
+      # what a bypassed widget would.
+      past =
+        DateTime.utc_now()
+        |> DateTime.add(-2, :day)
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_iso8601()
+        |> String.slice(0, 16)
+
+      html =
+        lv
+        |> form("#group-form", %{
+          "group" => %{"title" => "Yesterday"},
+          "custom_deadline" => past
+        })
+        |> render_submit()
+
+      assert html =~ "must be in the future"
+      assert Activities.list_groups(scope) == []
+    end
+
+    test "a custom deadline more than a year out is refused", %{conn: conn, scope: scope} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      far =
+        DateTime.utc_now()
+        |> DateTime.add(400, :day)
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_iso8601()
+        |> String.slice(0, 16)
+
+      html =
+        lv
+        |> form("#group-form", %{
+          "group" => %{"title" => "Mistyped year"},
+          "custom_deadline" => far
+        })
+        |> render_submit()
+
+      assert html =~ "must be within a year"
+      assert Activities.list_groups(scope) == []
+    end
+
+    test "an unparseable custom value leaves the picker showing what was typed", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      html =
+        lv
+        |> form("#group-form", %{
+          "group" => %{"title" => "Nonsense"},
+          "custom_deadline" => "not-a-date"
+        })
+        |> render_change()
+
+      # Kept on screen rather than silently discarded, so the organizer can see and fix it.
+      assert html =~ ~s(value="not-a-date")
+    end
+
+    # The premise D-055 deleted: a blank `deadline_at` used to mean "the patch was lost"
+    # unconditionally, because the chips were the only writers. Clearing the picker is a
+    # blank that genuinely means "cleared", and it must not be restored from `@selected_at`.
+    test "clearing the custom picker clears the deadline instead of restoring it", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      wall_clock =
+        DateTime.utc_now()
+        |> DateTime.add(9, :day)
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_iso8601()
+        |> String.slice(0, 16)
+
+      lv
+      |> form("#group-form", %{
+        "group" => %{"title" => "Cleared"},
+        "custom_deadline" => wall_clock
+      })
+      |> render_change()
+
+      html =
+        lv
+        |> form("#group-form", %{
+          "group" => %{"title" => "Cleared"},
+          "custom_deadline" => ""
+        })
+        |> render_submit()
+
+      assert html =~ "Pick when voting closes"
+      assert Activities.list_groups(scope) == []
+    end
+
+    # The other half of the same rule: pressing a chip abandons the picker's value, and a
+    # later `phx-change` (a keystroke in the title) must not resurrect it.
+    test "pressing a chip after typing a custom value keeps the chip", %{
+      conn: conn,
+      scope: scope
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("button[phx-click='toggle_custom']") |> render_click()
+
+      custom =
+        DateTime.utc_now()
+        |> DateTime.add(9, :day)
+        |> DateTime.to_naive()
+        |> NaiveDateTime.to_iso8601()
+        |> String.slice(0, 16)
+
+      lv
+      |> form("#group-form", %{
+        "group" => %{"title" => "Chip wins"},
+        "custom_deadline" => custom
+      })
+      |> render_change()
+
+      lv |> element("button[phx-value-key='tomorrow']") |> render_click()
+
+      # The browser re-renders the now-empty input and sends `""` with the next keystroke.
+      lv
+      |> form("#group-form", %{
+        "group" => %{"title" => "Chip wins!"},
+        "custom_deadline" => ""
+      })
+      |> render_submit()
+
+      assert [group] = Activities.list_groups(scope)
+      assert group.deadline_at == Deadlines.resolve(:tomorrow, DateTime.utc_now(), clock(0))
     end
 
     # The chips write `deadline_at` into a hidden input by patching the DOM from the server.
@@ -70,7 +274,7 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       # Pushed raw rather than through `form/3`: `form/3` refuses to send a hidden input a
       # value that is not in the rendered DOM, which is precisely the state the race puts the
       # browser in, so the harness cannot express it any other way.
-      raced = %{"group" => %{"title" => "Dinner", "deadline_at" => ""}}
+      raced = %{"group" => %{"title" => "Dinner"}}
 
       render_change(lv, "validate", raced)
 
@@ -121,7 +325,7 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       {:ok, lv, _html} = live(conn, ~p"/groups/new")
 
       lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
-      expected_deadline = Deadlines.resolve(:tomorrow, DateTime.utc_now(), 0)
+      expected_deadline = Deadlines.resolve(:tomorrow, DateTime.utc_now(), clock(0))
 
       form = form(lv, "#group-form", group: %{title: "Dinner Friday?"})
 
@@ -149,7 +353,7 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       conn: conn,
       scope: scope
     } do
-      deadline = Deadlines.resolve(:tomorrow, DateTime.utc_now(), 0)
+      deadline = Deadlines.resolve(:tomorrow, DateTime.utc_now(), clock(0))
       group = group_fixture(scope, title: "Old title", deadline_at: deadline)
 
       {:ok, lv, html} = live(conn, ~p"/groups/#{group.id}/edit")

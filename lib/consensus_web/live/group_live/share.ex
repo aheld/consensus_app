@@ -23,6 +23,7 @@ defmodule ConsensusWeb.GroupLive.Share do
   use ConsensusWeb, :live_view
 
   alias Consensus.Activities
+  alias Consensus.Deadlines
 
   @impl true
   def mount(%{"id" => id}, _session, socket) do
@@ -44,7 +45,7 @@ defmodule ConsensusWeb.GroupLive.Share do
        |> assign(:group, group)
        |> assign(:activity_count, length(group.activities))
        |> assign(:now, DateTime.utc_now())
-       |> assign_tz_offset()
+       |> assign_clock()
        |> assign(:organizer_username, socket.assigns.current_scope.user.username)
        |> assign(:join_url, join_url(group))}
     end
@@ -72,67 +73,31 @@ defmodule ConsensusWeb.GroupLive.Share do
     {:noreply, put_flash(socket, :info, "Select the link above to copy it")}
   end
 
-  defp assign_tz_offset(socket) do
-    offset =
-      case connected?(socket) && get_connect_params(socket) do
-        %{"tz_offset" => offset} when is_integer(offset) -> offset
-        _ -> 0
-      end
-
-    assign(socket, :tz_offset, offset)
+  defp assign_clock(socket) do
+    params = if connected?(socket), do: get_connect_params(socket)
+    assign(socket, :clock, Deadlines.clock_from_params(params))
   end
 
   defp join_url(group), do: ConsensusWeb.Endpoint.url() <> ~p"/join/#{group.slug}"
 
-  defp spots_line(group, activity_count, now, tz_offset) do
-    "#{activity_count} #{pluralize(activity_count, "spot")} · #{closes_phrase(group, now, tz_offset)}"
+  defp spots_line(group, activity_count, now, clock) do
+    "#{activity_count} #{pluralize(activity_count, "spot")} · #{closes_phrase(group, now, clock)}"
   end
 
-  defp closes_phrase(%{deadline_at: nil}, _now, _offset), do: "no deadline set"
+  defp closes_phrase(%{deadline_at: nil}, _now, _clock), do: "no deadline set"
 
   # The review footer uses `Deadlines.label_for/3` verbatim ("Closes Thu 6:00 PM") — that
   # wording is correct there. This card is a compact invite preview ("5 spots · closes Thu
-  # 6pm"), which `label_for/3` doesn't produce, so this is its own small formatter rather
-  # than a second mode bolted onto the shared one.
-  defp closes_phrase(%{deadline_at: at}, now, offset) do
-    local_at = shift(at, offset)
-    local_now = shift(now, offset)
-    "closes #{compact_day(local_at, local_now)} #{compact_clock(local_at)}"
-  end
-
-  defp shift(dt, offset_minutes), do: DateTime.add(dt, offset_minutes * 60, :second)
-
-  defp compact_day(local_at, local_now) do
-    at_date = DateTime.to_date(local_at)
-    now_date = DateTime.to_date(local_now)
-
-    cond do
-      Date.compare(at_date, now_date) == :eq -> "today"
-      Date.compare(at_date, Date.add(now_date, 1)) == :eq -> "tomorrow"
-      true -> weekday_abbrev(at_date)
-    end
-  end
-
-  defp weekday_abbrev(date) do
-    elem({"Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"}, Date.day_of_week(date) - 1)
-  end
-
-  # "6pm", "12pm", "6:30pm" — no colon or leading zero for the on-the-hour case, matching
-  # the reference card. `Deadlines.label_for/3`'s "6:00 PM" is deliberately not reused here.
-  defp compact_clock(%DateTime{hour: hour, minute: minute}) do
-    {display_hour, period} =
-      cond do
-        hour == 0 -> {12, "am"}
-        hour == 12 -> {12, "pm"}
-        hour > 12 -> {hour - 12, "pm"}
-        true -> {hour, "am"}
-      end
-
-    if minute == 0 do
-      "#{display_hour}#{period}"
-    else
-      "#{display_hour}:#{String.pad_leading(Integer.to_string(minute), 2, "0")}#{period}"
-    end
+  # 6pm"), so it uses the compact reading instead.
+  #
+  # Both now go through `Consensus.Deadlines`. This screen used to carry a private copy of
+  # the wall-clock arithmetic — its own `shift/2`, `compact_day/2` and `compact_clock/1` —
+  # which was fine while everything was offset-based and became a trap the moment the app
+  # moved to zone rules (D-055): the one screen whose whole job is producing the artifact
+  # the group reads would have kept silently computing the wrong hour across a DST
+  # boundary. The *formatting* is still this card's own; the conversion is not.
+  defp closes_phrase(%{deadline_at: at}, now, clock) do
+    "closes #{Deadlines.compact_reading_for(at, now, clock)}"
   end
 
   defp pluralize(1, word), do: word
@@ -167,7 +132,7 @@ defmodule ConsensusWeb.GroupLive.Share do
           <h1 class="mb-2.5 text-[27px]/[1.1] font-bold text-ink">Session is live</h1>
           <p class="text-sm font-semibold text-ink-soft">{@group.title}</p>
           <p class="mt-1 text-sm text-ink-soft">
-            {spots_line(@group, @activity_count, @now, @tz_offset)}
+            {spots_line(@group, @activity_count, @now, @clock)}
           </p>
         </div>
 
@@ -188,7 +153,7 @@ defmodule ConsensusWeb.GroupLive.Share do
                   {@group.title}
                 </p>
                 <p class="font-mono text-[12.5px] text-white/90">
-                  {spots_line(@group, @activity_count, @now, @tz_offset)}
+                  {spots_line(@group, @activity_count, @now, @clock)}
                 </p>
               </div>
             </div>

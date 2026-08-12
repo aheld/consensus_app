@@ -77,6 +77,20 @@ config :consensus, Consensus.Discovery,
 config :consensus, Consensus.Discovery.Provider.Overpass,
   http: Consensus.Discovery.Provider.Overpass.HTTP.Req
 
+# The IANA time zone database behind `DateTime.new/4` and `DateTime.shift_zone/2`, which
+# `Consensus.Deadlines` needs to turn an organizer's wall-clock deadline into a real
+# instant (D-055). Elixir's default is `Calendar.UTCOnlyTimeZoneDatabase`, which answers
+# `{:error, :utc_only_time_zone_database}` for every named zone.
+#
+# `:tz` compiles the database in at BUILD time. Its updater processes
+# (`Tz.UpdatePeriodically`, `Tz.WatchPeriodically`) are deliberately NOT in
+# `Consensus.Application`'s supervision tree: D-031 rejected a zone database over "a
+# runtime data download, a periodic updater, and a new failure mode at boot", and all
+# three of those objections are about the updater, not the data. The data goes stale
+# between deploys and refreshes on the next one — accepted, and the honest cost of not
+# running an updater. See docs/plans/custom-deadline.md §3.
+config :elixir, :time_zone_database, Tz.TimeZoneDatabase
+
 # Configure esbuild (the version is required)
 config :esbuild,
   version: "0.25.4",

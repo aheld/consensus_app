@@ -854,21 +854,21 @@ Storing only the URL keeps us out of image hosting, storage sizing, content mode
 ## D-031 — Deadline chips are computed from a browser-supplied UTC offset
 
 - **Date:** 2026-08-08
-- **Status:** settled
-- **Decision:** The three chips on design frame `01` — `Tonight 5pm`, `Tomorrow 5pm`, `Thu noon` — are computed by `Consensus.Deadlines`, not stored. The browser sends `tz_offset` (minutes east of UTC) in the LiveView connect params from `assets/js/app.js`; `Consensus.Deadlines` shifts UTC by that offset to get local wall time, snaps to the target hour, and shifts back. A dead render with no connect params falls back to UTC. The design's dashed `Custom…` chip renders **disabled**.
+- **Status:** **partly superseded by D-055.** The chips, their labels and the collision rule stand exactly as described. What is superseded is the *mechanism underneath them* and the deferral at the end: there **is** a time zone database now (`:tz`, compiled in, no updater), the browser's IANA zone name is preferred over the offset, and the `Custom…` chip is **live**. The offset arithmetic below survives as the documented fallback, so nothing in this entry is wrong about what happens when a client sends no usable zone.
+- **Decision:** The three chips on design frame `01` — `Tonight 5pm`, `Tomorrow 5pm`, `Thu noon` — are computed by `Consensus.Deadlines`, not stored. The browser sends `tz_offset` (minutes east of UTC) in the LiveView connect params from `assets/js/app.js`; `Consensus.Deadlines` shifts UTC by that offset to get local wall time, snaps to the target hour, and shifts back. A dead render with no connect params falls back to UTC. ~~The design's dashed `Custom…` chip renders **disabled**.~~ **It is a working picker since D-055.**
 
 **Why:** named time zones need a tz database, and `tzdata` is not a dependency — adding one for three chips means a runtime data download, a periodic updater, and a new failure mode at boot on a machine whose whole job is to serve one SQLite file. Offset arithmetic gets the right answer for every user who is not mid-DST-transition, and being an hour off inside that window is a smaller defect than a boot-time dependency on a remote zone file.
 
 The offset must come from the browser because the server has none: a Fly machine runs UTC and the organizer is wherever they are.
 
 **Alternatives rejected:**
-- *Add `tzdata` and resolve a named zone.* Correct, and disproportionate. Revisit when a feature needs real zone arithmetic — recurring sessions would.
-- *Ask the organizer to pick a time.* That is the custom picker, which was explicitly deferred this pass.
-- *Compute the chips in JavaScript.* Then the label and the stored instant are derived in two places, and only one of them is testable.
+- *Add `tzdata` and resolve a named zone.* Correct, and disproportionate. Revisit when a feature needs real zone arithmetic — recurring sessions would. **This trigger fired, and not for the reason predicted: it was the custom picker, not recurring sessions. See D-055 — the "disproportionate" half also turned out to be specific to `tzdata`, whose runtime download and updater are what this entry was really objecting to; `:tz` compiles the data in and has neither.**
+- *Ask the organizer to pick a time.* That is the custom picker, which was explicitly deferred this pass. **Built in D-055.**
+- *Compute the chips in JavaScript.* Then the label and the stored instant are derived in two places, and only one of them is testable. **Still rejected, and this reasoning is what killed the cheap version of D-055** — a browser-side conversion would have fixed the stored instant and left the *label* wrong, which is the half the organizer can see.
 
 **Consequences:**
-- The first paint of `/groups/new` before the socket connects uses UTC and self-corrects on connect. Visible only as a chip label, and only to someone reading faster than the websocket.
-- A DST transition inside the chip's window shifts the result by an hour. Documented in the module, and the honest cost of not carrying a zone database.
+- The first paint of `/groups/new` before the socket connects uses UTC and self-corrects on connect. Visible only as a chip label, and only to someone reading faster than the websocket. **Still true**, and now the whole of what the UTC fallback covers.
+- ~~A DST transition inside the chip's window shifts the result by an hour. Documented in the module, and the honest cost of not carrying a zone database.~~ **Fixed by D-055 whenever the browser sends a resolvable zone, which is every real client.** It remains exactly true of the offset fallback, and `deadlines_test.exs` pins it there deliberately so nobody "fixes" the fallback by guessing.
 - `Consensus.Deadlines` is pure and has no database access, so its rules — including "next Thursday" meaning a week out when today is Thursday — are unit-tested across all seven weekdays and several offsets rather than reasoned about.
 
 ---
@@ -2277,6 +2277,76 @@ The distribution is the point: every **venue** site answered inside a third of a
 - No test pins the constant. A timeout is wall-clock behaviour against a real socket, and the suite's fetcher is a stub that never consults `opts` — a test asserting `@receive_timeout_ms == 15_000` would restate the source rather than check anything. The measurement above is the evidence, and it is recorded here rather than in an assertion.
 - Nothing else moves: no config key, no environment split (this is the same number in dev, test and prod), and `Consensus.Discovery`'s own timeouts are separate and untouched — Overpass carries a server-side `[timeout:]` and its own 504 handling (D-052).
 - **Post-deploy verification, and its one honest limit.** The exact call that had returned `{:error, :fetch_failed}` now returns a full preview from production — title `"Easy classic lasagne"`, `site_name` `"Good Food"`, a description and an image — in **730ms** against a flushed cache. That 730ms is an order of magnitude under the 6986ms measured locally, which means the CDN edge was warm for it; the run therefore proves the whole D-053 pipeline works end to end in production, but it is *not* a re-measurement of the cold-fetch latency this decision was made on. The cold number stands as the reason for the change, and the warm number stands as the proof the change is live and correct.
+
+---
+
+## D-055 — The custom deadline picker ships, and with it a real time zone database: the browser's zone name wins, the offset is the fallback, UTC is the floor
+
+**Date:** 2026-08-11
+**Status:** settled
+
+**Context.** `01 setup` offered three deadline presets and a dashed, `disabled` `Custom…` chip captioned *"Pick-your-own times are coming; for now it's one of these three."* — the last unbuilt control in the creation flow, deferred by **D-031**. So "organizer-defined deadline" (PRD §5.1 A) actually meant *tonight, tomorrow, or Thursday*, and a Saturday-afternoon plan could not be given a Saturday-afternoon deadline. Plan: [docs/plans/custom-deadline.md](plans/custom-deadline.md).
+
+**The picker could not be built on the existing arithmetic**, and D-031 said so itself: *"an offset is a fixed number, not a rule … Acceptable for a same-day-to-one-week deadline picker; **not acceptable for anything computed further out**."* A picker's window is whatever the organizer types.
+
+### 1. The failure this removes, which was visible and not subtle
+
+An organizer in New York on 25 Oct picks **Nov 8, 7:00 PM**. Today's offset is −240 (EDT); on Nov 8 the zone is on EST (−300). Under offset arithmetic the stored instant was an hour early — *and* `Deadlines.label_for/3` rendered it back through today's offset, so the confirmation chip read **8:00 PM**. Picking 7 and being told 8 does not read as a DST subtlety; it reads as a broken form.
+
+Verified end to end in a real browser against the real database before and after: the browser reports `America/New_York` at offset `-240`, and the stored instant is now `2026-11-09T00:00:00Z` (7:00 PM EST) where offset arithmetic gives `2026-11-08T23:00:00Z`. The chip reads back **"Closes Sun 7:00 PM"**.
+
+A picker also reaches two wall-clock times the chips never could: one that **does not exist** (02:30 on spring-forward day) and one that **happens twice** (01:30 on fall-back day). Offset arithmetic cannot even detect these; it silently invents an answer.
+
+### 2. `:tz`, compiled in, with the updater deliberately unsupervised
+
+`{:tz, "~> 0.28"}` plus `config :elixir, :time_zone_database, Tz.TimeZoneDatabase`. **D-031's objection was never to zone data — it was to "a runtime data download, a periodic updater, and a new failure mode at boot", and all three of those are properties of `tzdata`, not of zone rules.** `:tz` compiles the IANA database in at build time; `Tz.UpdatePeriodically` and `Tz.WatchPeriodically` exist and are **not** in the supervision tree. No download, no updater, no boot failure mode. The data goes stale between deploys and refreshes on the next one — accepted, and the honest cost of not running an updater; for deadlines 1–2 days out it only bites a zone whose rules changed in the gap.
+
+`zoneinfo` was rejected for the opposite reason: cheapest in Elixir, worst operationally here. It reads the OS's `/usr/share/zoneinfo`, which the runner image does not install — so it would trade a dependency for a missing-OS-package failure on a single machine, which is exactly the class of boot failure `Consensus.BootCheck` exists to catch. Having a mechanism to catch a failure is not a reason to create one.
+
+### 3. The ladder is zone → offset → UTC, and the fallback is not a guessed region
+
+`assets/js/app.js` **was already sending** `tz: Intl.DateTimeFormat().resolvedOptions().timeZone` and nothing in `lib/` read it. It does now. `Consensus.Deadlines.Clock` carries both; `clock_from_params/1` resolves the zone name against the database **once** and drops it to `nil` if unknown (a stale client, a spoofed param, a zone newer than the compiled database), so everything downstream may use the raising `DateTime.shift_zone!/2` without a rescue.
+
+**"Assume EST and let the organizer's zone override it" was proposed and rejected on two independent grounds**, recorded because it is the intuitive answer:
+
+- `EST` is the fixed −5 offset the US East Coast is **not** on for eight months of the year (it is EDT, −4). A hardcoded EST default is wrong more often than right *for its own region* — the same class of error D-031 avoided by not guessing zone rules.
+- More decisively, **the default is unreachable by anyone who can use the feature.** The connect params arrive on every LiveView connect, and a date picker cannot be operated without a connected LiveView. The only clients that reach the fallback are dead renders and bots. A default that applies exclusively to clients which cannot use the control is not a safety net; UTC is the honest floor.
+
+### 4. On an ambiguous or nonexistent wall-clock time, take the later instant
+
+`DateTime.new/4` answers `{:ambiguous, first, second}` and `{:gap, just_before, just_after}`. One rule covers both: **a deadline may never arrive earlier than the organizer's own words imply**, so `from_wall_clock/2` takes `second` and `just_after`. Both give voters at least as much time as they expect; the alternatives close voting early on a date nobody was thinking about. Pinned across `America/New_York`, `Europe/London` and `Australia/Sydney` — whose transitions fall on three different dates and, in Sydney's case, the opposite way round — as a property ("always the later candidate, and strictly after the earlier one"), not as three memorised instants.
+
+### 5. `deadline_at` had no validation at all, and the chips were the only thing hiding it
+
+`Group.changeset/2` cast `deadline_at` and never validated it: not required, not bounded, not checked for being in the future. That was survivable only because the three chips were its **only** writers and each computes a future instant by construction. The picker accepts what an organizer types, including yesterday and the year 3000, so the rule moves into the changeset — the same split invariant 11 makes for text length: the changeset is the limit, the widget's `min` is a courtesy.
+
+Two bounds: **in the future**, and **within `@max_deadline_days` (365)**. The upper one is not a product limit anybody asked for; it is a guard against a mistyped year, because `maybe_complete_group/1` only fires when somebody *reads* the group (D-029), so a session dated 2126 never completes and never leaves the organizer's active list. There is no sweeper to catch it later.
+
+**Gated on `get_change/2`, not `get_field/2`, and that is load-bearing.** `GroupLive.New`'s `:edit` action opens on a group of any status, so a `:completed` session necessarily holds a past deadline; validating the *field* would make its title uneditable forever, with an error about a date the organizer never touched.
+
+The same rule broke `group_fixture/2`, which passed `past_deadline()` straight through `create_group/2`. That is now stamped on afterwards rather than smuggled through the organizer's write path — a group whose deadline has *passed* is a thing time does, not a thing an organizer types, and the fixture should simulate the former.
+
+### 6. `GroupLive.Share` was carrying a private copy of the arithmetic
+
+Four LiveViews called `Consensus.Deadlines`; a fifth — `GroupLive.Share` — had its own `shift/2`, `compact_day/2` and `compact_clock/1`. Harmless while everything was offset-based, and a trap the moment the app moved to zone rules: **the one screen whose entire job is producing the artifact the group reads** would have gone on computing the wrong hour across a DST boundary while every other screen was right. Its formatting is genuinely its own (`"closes thu 6pm"`, not `"Closes Thu 6:00 PM"`) and stays, as `Deadlines.compact_reading_for/3`; the conversion is not.
+
+The four near-identical private `read_tz_offset`/`assign_tz_offset` helpers collapsed into `Deadlines.clock_from_params/1` at the same time. Adding a fifth near-copy for the zone name is precisely how this seam would have rotted.
+
+### 7. A native `datetime-local`, and the race guard whose premise this deletes
+
+The picker is one `<input type="datetime-local">`: platform pickers on iOS and Android for no JavaScript and no date library. There is **no design frame for it** — `docs/design/screens/` has none — so the treatment is a design call, recorded in `DESIGN-SPEC.md` rather than reviewed against a drawing. **Invariant 18 binds it**: measured at 16px in a real browser, not asserted from a class name.
+
+`keep_selected_deadline/2` guards a real, reproduced race (pick a chip, type in the title in the same tick, and the still-empty hidden field serialises first). Its correctness argument was quoted in the code: *"A blank `deadline_at` can never mean 'the organizer cleared it': the only controls that write it are the three chips, and `Custom…` is disabled."* **This feature is what makes that false** — the picker is a fourth writer and one the organizer can genuinely empty. The resolution is that the guard no longer has to tell the two apart: `apply_custom_deadline/3` runs first on the same params, and a genuine clear is the one case that writes `""` *and* drops `@selected_at` to `nil` together, so a blank arriving at the guard has no selection left to restore.
+
+Three smaller rules fall out, each with a test: pressing a chip abandons the picker's value (or a later keystroke resurrects it over the chip); `nil` and `""` are the same "empty" when deciding whether the field changed (or pressing a chip reads as a clear); and a **closed** picker has no opinion at all (which is what makes pre-filling the field on `:edit` safe).
+
+**Consequences:**
+
+- **D-031 is partly superseded and annotated in place.** Its chips, labels and collision rule stand; its mechanism, its "not acceptable further out" caveat and its `Custom…`-is-disabled clause do not. Its rejected alternative *"Add `tzdata` and resolve a named zone … Revisit when a feature needs real zone arithmetic — recurring sessions would"* is the trigger firing, though not for the predicted feature.
+- **The offset path is deliberately kept and deliberately pinned as still-wrong.** `deadlines_test.exs` asserts that the fallback stores the hour-early instant across a DST boundary, so anyone "fixing" the fallback by guessing fails a test that sends them here instead.
+- **PRD §5.1 A's ⛔ on the custom picker flips**, and the clause saying it needs D-031's parked timezone question answered first is discharged.
+- Guests still read the deadline in **their own** zone, not the organizer's; a session carries no timezone of its own. A traveling organizer picking in the wrong zone is unaddressed and named in the plan's §2 as out of scope.
+- 1241 tests (from 1207), 0 failures. `README.md`, `CLAUDE.md` and the `elixir` skill carry the count and move with it.
 
 ---
 

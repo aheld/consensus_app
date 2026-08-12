@@ -76,7 +76,13 @@ defmodule Consensus.MixProject do
       {:gettext, "~> 1.0"},
       {:jason, "~> 1.2"},
       {:dns_cluster, "~> 0.2.0"},
-      {:bandit, "~> 1.5"}
+      {:bandit, "~> 1.5"},
+      # The IANA time zone database, compiled in at build time. Deliberately NOT `tzdata`,
+      # and its own periodic updater is deliberately not supervised — D-031 rejected a zone
+      # database on the grounds of "a runtime data download, a periodic updater, and a new
+      # failure mode at boot", and compiled-in data with no updater has none of the three.
+      # The data refreshes on redeploy. See docs/plans/custom-deadline.md §3 and D-055.
+      {:tz, "~> 0.28"}
     ]
   end
 

@@ -421,11 +421,21 @@ prompts are orthogonal to that. Likewise the roadmap's "offline resilience" loca
 for a 10-second voting interaction with a hard deadline, an offline write queue may be
 over-engineering. Mobile-web-first is required; installability may not be.
 
-### Q-14. Swipe UI vs. list voting for the MVP
+### Q-14. ~~Swipe UI vs. list voting for the MVP~~ — answered by D-044; kept only to record the answer
 
-The PRD offers both ("swiping or list voting"). Swipe physics is real frontend work; a compact
-visual list with vote buttons is faster to build and easier to scan for the foodie persona who
-wants to compare options side by side. Decide which ships first.
+~~The PRD offers both ("swiping or list voting"). Decide which ships first.~~ **Both shipped, as two
+views of one ballot** ([decisions.md](decisions.md) **D-044**, 2026-08-09): the sticker grid is the
+default, a segmented `Grid`/`Swipe` switch is on both views, and the selections — plus the deck's
+position — survive switching. Nothing below the LiveView differs between them: same assigns, same
+single write, no new route and no schema change, which is what made "ship both" cheaper than
+choosing. The question this entry posed ("which first") had a false premise: the deck is a
+*presentation* of the same ballot, not a second voting mechanism.
+
+The reasoning it guessed at was right, though, and is why the grid is the default: the grid shows
+the whole pool at once, needs no gesture vocabulary and works with no client-side code at all,
+which is what the foodie persona wants for side-by-side comparison. This entry is annotated rather
+than deleted because it is cited from the PRD's §5.1 A ballot requirement, which was written
+against the answer.
 
 ### Q-15. Phase schedule and staffing
 

@@ -35,6 +35,7 @@ defmodule Consensus.Activities.Group do
 
   @max_title_length 120
   @max_search_area_length 100
+  @max_deadline_days 365
   @statuses [:draft, :voting, :completed, :cancelled]
   @resolutions ~w(organizer_pick app_pick app_rescue)
 
@@ -46,6 +47,16 @@ defmodule Consensus.Activities.Group do
 
   @doc "Every status a group can be in, in lifecycle order."
   def statuses, do: @statuses
+
+  @doc """
+  How far ahead a deadline may be set, in days.
+
+  Not a product limit anybody asked for — a guard against a mistyped year in the custom
+  picker (D-055). `Consensus.Activities.maybe_complete_group/1` only fires when somebody
+  reads the group, so a session dated 2126 never completes and never leaves the
+  organizer's active list; there is no sweeper to catch it later.
+  """
+  def max_deadline_days, do: @max_deadline_days
 
   @doc """
   Every way a completed group's endgame can be resolved, as stored strings:
@@ -104,8 +115,43 @@ defmodule Consensus.Activities.Group do
     |> validate_required([:title])
     |> validate_length(:title, min: 1, max: @max_title_length)
     |> validate_number(:expected_voter_count, greater_than: 0)
+    |> validate_deadline_window()
     |> put_slug()
     |> unique_constraint(:slug)
+  end
+
+  # Until D-055 `deadline_at` was cast and never validated at all — not required, not
+  # bounded, not checked for being in the future. That was survivable only because the
+  # three chips on `01 setup` were the *only* thing that could write it, and each of them
+  # computes an instant that is in the future by construction. The custom picker removes
+  # that guarantee: it accepts whatever an organizer types, including yesterday and the
+  # year 3000. So the rule moves here, where it belongs — the changeset is the real limit
+  # and the input is a courtesy, the same split invariant 11 makes for text length.
+  #
+  # **Gated on `get_change/2`, not `get_field/2`, and that distinction is load-bearing.**
+  # `GroupLive.New`'s `:edit` action opens on a group of any status, so a `:completed`
+  # session necessarily holds a deadline in the past; validating the *field* would make
+  # its title uneditable forever, with an error about a date the organizer never touched.
+  # Only a deadline being changed is judged.
+  defp validate_deadline_window(changeset) do
+    case get_change(changeset, :deadline_at) do
+      nil ->
+        changeset
+
+      at ->
+        now = DateTime.utc_now()
+
+        cond do
+          DateTime.compare(at, now) != :gt ->
+            add_error(changeset, :deadline_at, "must be in the future")
+
+          DateTime.compare(at, DateTime.add(now, @max_deadline_days, :day)) == :gt ->
+            add_error(changeset, :deadline_at, "must be within a year")
+
+          true ->
+            changeset
+        end
+    end
   end
 
   @doc """

@@ -127,22 +127,22 @@ defmodule ConsensusWeb.JoinLive.Results do
      # sitting here watching the countdown must not be told they arrived too late. See
      # `footer_state/3`.
      |> assign(:saw_voting?, group.status == :voting)
-     |> assign_tz_offset()
+     |> assign_clock()
      |> load_tally()}
   end
 
   # The violet header counts *down* ("2d 4h"); the footer needs the wall-clock instant,
   # because "when does this close" is one of the three things a voter who has just
-  # submitted actually wants and a relative duration does not answer it. Same offset-only
-  # arithmetic every other screen uses — there is no time-zone database (D-031).
-  defp assign_tz_offset(socket) do
-    offset =
-      case connected?(socket) && get_connect_params(socket) do
-        %{"tz_offset" => offset} when is_integer(offset) -> offset
-        _ -> 0
-      end
-
-    assign(socket, :tz_offset, offset)
+  # submitted actually wants and a relative duration does not answer it.
+  #
+  # The reading is in **this guest's** own zone, not the organizer's — a voter in
+  # California opening a Philadelphia dinner's link should read 4:00 PM for a 7:00 PM
+  # Eastern close, because the question the line answers is "by when must I vote".
+  # That was already true under offset arithmetic and stays true under zone rules
+  # (D-055); what changed is that it is now also right across a DST boundary.
+  defp assign_clock(socket) do
+    params = if connected?(socket), do: get_connect_params(socket)
+    assign(socket, :clock, Deadlines.clock_from_params(params))
   end
 
   @impl true
@@ -301,10 +301,10 @@ defmodule ConsensusWeb.JoinLive.Results do
   defp tie_rows({:tie, rows}), do: rows
   defp tie_rows(_outcome), do: []
 
-  defp closes_at_text(%{deadline_at: nil}, _now, _offset), do: nil
+  defp closes_at_text(%{deadline_at: nil}, _now, _clock), do: nil
 
-  defp closes_at_text(%{deadline_at: at}, now, offset),
-    do: Deadlines.label_for(at, now, offset)
+  defp closes_at_text(%{deadline_at: at}, now, clock),
+    do: Deadlines.label_for(at, now, clock)
 
   @impl true
   def render(assigns) do
@@ -318,7 +318,7 @@ defmodule ConsensusWeb.JoinLive.Results do
           assigns.saw_voting?
         )
       )
-      |> assign(:closes_at, closes_at_text(assigns.group, assigns.now, assigns.tz_offset))
+      |> assign(:closes_at, closes_at_text(assigns.group, assigns.now, assigns.clock))
 
     ~H"""
     <%!-- `:public` — this is still the `/join` tree, reached by someone who may have no

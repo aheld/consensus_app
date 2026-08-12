@@ -24,15 +24,48 @@ defmodule Consensus.ActivitiesFixtures do
   Goes through `Consensus.Activities.create_group/2`, the real write path — unlike
   `AccountsFixtures.admin_fixture/1`, there is no chicken-and-egg problem here that
   would justify bypassing it.
+
+  **A `deadline_at` already in the past is the one exception, and it is stamped on
+  afterwards rather than passed through the write path.** Since D-055 `Group.changeset/2`
+  refuses a deadline that is not in the future, which is correct: an organizer cannot
+  create a session that has already closed. A *test* still needs one, because that is the
+  precondition for everything about `maybe_complete_group/1` — but what it needs is a
+  group whose deadline has *passed*, which is a thing time does, not a thing an organizer
+  types. So the group is created normally and the clock is moved by writing the column
+  directly, which is the honest simulation and keeps the validation testable.
   """
   def group_fixture(scope, attrs \\ %{}) do
+    attrs = Enum.into(attrs, %{title: unique_group_title()})
+    {deadline, attrs} = Map.pop(attrs, :deadline_at)
+
     {:ok, group} =
       attrs
-      |> Enum.into(%{title: unique_group_title()})
+      |> maybe_put_future_deadline(deadline)
       |> then(&Activities.create_group(scope, &1))
 
-    group
+    backdate_deadline(group, deadline)
   end
+
+  defp maybe_put_future_deadline(attrs, nil), do: attrs
+
+  defp maybe_put_future_deadline(attrs, deadline) do
+    if past?(deadline),
+      do: Map.put(attrs, :deadline_at, future_deadline()),
+      else: Map.put(attrs, :deadline_at, deadline)
+  end
+
+  defp backdate_deadline(group, deadline) do
+    if deadline && past?(deadline) do
+      group
+      |> Ecto.Changeset.change(deadline_at: DateTime.truncate(deadline, :second))
+      |> Repo.update!()
+    else
+      group
+    end
+  end
+
+  defp past?(%DateTime{} = at), do: DateTime.compare(at, DateTime.utc_now()) != :gt
+  defp past?(_other), do: false
 
   @doc """
   Creates an activity in the given group.

@@ -48,7 +48,7 @@ defmodule ConsensusWeb.GroupLive.Review do
      socket
      |> assign(:page_title, "Review · #{group.title}")
      |> assign(:now, DateTime.utc_now())
-     |> assign_tz_offset()
+     |> assign_clock()
      |> assign_group(group)}
   end
 
@@ -213,14 +213,9 @@ defmodule ConsensusWeb.GroupLive.Review do
       "Cancel #{group.title}? #{n} people have already voted; their ballots are discarded " <>
         "and no winner is picked. This cannot be undone."
 
-  defp assign_tz_offset(socket) do
-    offset =
-      case connected?(socket) && get_connect_params(socket) do
-        %{"tz_offset" => offset} when is_integer(offset) -> offset
-        _ -> 0
-      end
-
-    assign(socket, :tz_offset, offset)
+  defp assign_clock(socket) do
+    params = if connected?(socket), do: get_connect_params(socket)
+    assign(socket, :clock, Deadlines.clock_from_params(params))
   end
 
   # Re-reads the group from storage. This is the single mechanism behind three
@@ -246,10 +241,10 @@ defmodule ConsensusWeb.GroupLive.Review do
 
   # -- deadline formatting --------------------------------------------------------------
 
-  defp closes_label(%{deadline_at: nil}, _now, _offset), do: "NO DEADLINE SET"
+  defp closes_label(%{deadline_at: nil}, _now, _clock), do: "NO DEADLINE SET"
 
-  defp closes_label(%{deadline_at: at}, now, offset),
-    do: at |> Deadlines.label_for(now, offset) |> String.upcase()
+  defp closes_label(%{deadline_at: at}, now, clock),
+    do: at |> Deadlines.label_for(now, clock) |> String.upcase()
 
   defp countdown_text(%{deadline_at: nil}, _now), do: "—"
   defp countdown_text(%{deadline_at: at}, now), do: Deadlines.countdown(at, now)
@@ -496,7 +491,7 @@ defmodule ConsensusWeb.GroupLive.Review do
         </button>
 
         <div class="flex items-center justify-between border-t-2 border-ink-12 pt-3 font-mono text-[11.5px] text-ink-soft">
-          <span>{closes_label(@group, @now, @tz_offset)}</span>
+          <span>{closes_label(@group, @now, @clock)}</span>
           <span class="text-tangerine" aria-label={countdown_aria(@group, @now)}>
             {countdown_text(@group, @now)}
           </span>
