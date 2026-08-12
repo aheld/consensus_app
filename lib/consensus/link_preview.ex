@@ -33,8 +33,24 @@ defmodule Consensus.LinkPreview do
 
   @max_redirects 3
   @max_body_bytes 512 * 1024
+
+  # Connect and receive are deliberately different numbers, because they fail for
+  # different reasons (D-054). A slow *connect* is an unreachable or dead host and
+  # waiting longer does not help; a slow *body* is a real page on a slow origin, and
+  # the only cost of waiting is that the preview lands later — the card already
+  # exists, the fetch runs in `start_async`, and nothing is blocked on it.
+  #
+  # Measured 2026-08-11 with a 30s ceiling: bbcgoodfood.com 6986ms, and
+  # vernickphilly 216ms, zahavrestaurant 319ms, en.wikipedia 765ms,
+  # allrecipes 515ms, simplyrecipes 315ms. At 5s the recipe aggregator — exactly the
+  # population D-053 targets — timed out while every venue site had answered inside a
+  # second. 15s clears the observed worst case with better than 2x headroom.
+  #
+  # This is per hop, so the pathological ceiling is 4 hops x 15s; each hop has to be
+  # individually slow to get there, and it is an async task throughout.
   @connect_timeout_ms 5_000
-  @receive_timeout_ms 5_000
+  @receive_timeout_ms 15_000
+
   @description_max_length 140
 
   @blocked_hostnames ~w(localhost metadata.google.internal)

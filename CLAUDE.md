@@ -7,7 +7,7 @@ Consensus is a Phoenix 1.8 / LiveView 1.2 application on Elixir 1.20 and SQLite,
 | Doc | Authority |
 |---|---|
 | [AGENTS.md](AGENTS.md) | **How to write code here.** Official Phoenix/LiveView/Ecto/HEEx usage rules injected by `phx.gen.auth`, plus a short Consensus-specific appendix. Read before touching `lib/`. This file does not restate it. |
-| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-053. Anything recorded here beats the drafts. |
+| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-054. Anything recorded here beats the drafts. |
 | [docs/PRD.md](docs/PRD.md) | **North star for product.** Personas, functional requirements, success metrics. Ratified. Contains no stack, schema, vendor, or algorithm decisions — by design. |
 | [docs/open-questions.md](docs/open-questions.md) | What still needs a product/technical decision. |
 | [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) | **Not ratified.** First-pass stack proposal (NestJS/Socket.io/Redis). Reference only — do not implement from it. |

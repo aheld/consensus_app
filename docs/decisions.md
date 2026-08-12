@@ -2238,6 +2238,42 @@ Rejected: letting JSON-LD win outright. It is often the *better* string, but `og
 - The brief's F3 is built; F1, F2 and F4 shipped with D-052. The Assisted Add brief has no unbuilt items left.
 - Recipes, movies, books and events get better cards with no per-type code, which is invariant 12 holding under a second feature.
 - 1207 tests (from 1171), 0 failures, verified 2026-08-11.
+- **The receive timeout was what actually bounded this feature's reach in production, and it is fixed in D-054** — see there. On the day this landed, the page used to demonstrate it (`bbcgoodfood.com`) returned `{:error, :fetch_failed}` from the production machine, because the fetch took 6986ms against a 5s receive timeout. Nothing to do with the parser; the bytes never arrived.
+
+---
+
+## D-054 — `LinkPreview`'s receive timeout goes to 15s; connect stays at 5s, because they fail for different reasons
+
+**Date:** 2026-08-11
+**Status:** settled
+
+**Context.** Immediately after D-053 shipped, an end-to-end check from the production machine returned `{:error, :fetch_failed}` for `https://www.bbcgoodfood.com/recipes/classic-lasagne` — the very page used to demonstrate the feature. A raw `Req.get/2` from the *same* machine answered `200`, so this was not the bot wall the research warned about and not an egress problem: `Consensus.LinkPreview` was giving up before the body arrived. `Fetcher.Req.get/2` reported `%Req.TransportError{reason: :timeout}` against `@receive_timeout_ms 5_000`.
+
+**Decision.** `@receive_timeout_ms` goes from `5_000` to `15_000`. `@connect_timeout_ms` stays at `5_000`. `@max_body_bytes` stays at `512 * 1024` — see below.
+
+**The two timeouts are not the same knob and should not move together.** A slow *connect* means an unreachable, dead or firewalled host, and waiting longer converts a fast failure into a slow one with the same outcome. A slow *body* means a real page on a slow origin, where the only cost of waiting is that the preview lands later — the option card already exists, `fetch/1` runs from `start_async` (invariant 13), and no LiveView is blocked on it. Being generous is cheap on one and pointless on the other.
+
+**Measured 2026-08-11**, with a 30s ceiling, from this machine:
+
+| Page | Time | Body |
+|---|---|---|
+| `bbcgoodfood.com/recipes/classic-lasagne` | **6986ms** | 543,004 B |
+| `en.wikipedia.org/wiki/Lasagne` | 765ms | 286,610 B |
+| `allrecipes.com/recipe/23600/…` | 515ms | 554,679 B |
+| `zahavrestaurant.com` | 319ms | 577,105 B |
+| `simplyrecipes.com/recipes/lasagna` | 315ms | 517,362 B |
+| `vernickphilly.com` | 216ms | 378,807 B |
+
+The distribution is the point: every **venue** site answered inside a third of a second, while the **recipe aggregator** — precisely the population D-053 exists to serve — took seven. This is the same split the research called out at Stage 2 (recipe aggregators have the strongest commercial incentive to be hostile or heavy; a neighbourhood restaurant's Squarespace page does not), showing up in latency rather than in 403s. 15s clears the observed worst case with better than 2× headroom.
+
+**The 512KB body cap was investigated at the same time and deliberately left alone.** Four of the six pages exceed it, which looked like a second limiter, and it is not: `schema.org` JSON-LD lives in `<head>`, and the last `ld+json` block ends at byte 187,535 / 179,351 / 171,165 / 47,803 on the four oversized pages — all far inside the cap. Truncation was verified not to change the extracted title on any of them. The cap is a security bound against an attacker-controlled body (invariant 13's neighbourhood), it is not costing this feature anything, and it stays.
+
+**Consequences:**
+
+- The pathological wall-clock ceiling for one `fetch/1` rises from 4 hops × 5s to 4 hops × 15s, since the timeout is per hop and `@max_redirects` is 3. Each hop has to be individually slow to reach it, and the whole thing is an async task, so the exposure is a `Task` living longer — not a blocked LiveView and not a held database connection.
+- A spurious timeout is cached as a failure for the error TTL, so this also stops a slow page being un-previewable for the length of that TTL after one unlucky fetch.
+- No test pins the constant. A timeout is wall-clock behaviour against a real socket, and the suite's fetcher is a stub that never consults `opts` — a test asserting `@receive_timeout_ms == 15_000` would restate the source rather than check anything. The measurement above is the evidence, and it is recorded here rather than in an assertion.
+- Nothing else moves: no config key, no environment split (this is the same number in dev, test and prod), and `Consensus.Discovery`'s own timeouts are separate and untouched — Overpass carries a server-side `[timeout:]` and its own 504 handling (D-052).
 
 ---
 
