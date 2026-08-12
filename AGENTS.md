@@ -561,9 +561,10 @@ Concrete names, so the rules above land in the right place:
   produced five failures in `Consensus.ContentTest`. ExUnit runs sync cases only after every async
   one has finished, so `async: false` gives the module the file to itself; the DDL still rolls back
   with the sandbox transaction. Ordinary inserts and updates remain safe under `async: true`.
-  Current split, across 53 test files (re-counted 2026-08-11):
+  Current split, across 54 test files (re-counted 2026-08-11, after D-053):
   - **Twenty-four declare `async: true`** — among them `router_test`, `deploy_config_test`,
-    `activity_type_invariant_test`, `error_html_test`, `error_json_test`. The free ones are
+    `activity_type_invariant_test`, `error_html_test`, `error_json_test`, and — since D-053 —
+    `link_preview/json_ld_test` (a pure parser over string input, no database, no ETS). The free ones are
     plain `ExUnit.Case` touching no database at all (`deploy_config_test` and
     `activity_type_invariant_test` only read repo files as text). `content_test` used to head
     this list; it was deleted with the home page (D-027).
@@ -579,9 +580,12 @@ Concrete names, so the rules above land in the right place:
     N ballots can be cast at genuinely the same instant. It is the only test in the repo that can
     observe concurrency at all — everything else is sequential by `max_cases: 1` plus the sandbox's
     one-connection-per-test. Read its moduledoc before touching it.
-  - **The remaining ten take the default, which is sync** — `accounts_test`,
-    `user_session_controller_test`, `user_auth_test`, `home_live_test`,
-    `admin_live/{users,home_page}_test`, `user_live/{registration,login,confirmation,settings}_test`.
+  - **The remaining nineteen take the default, which is sync** — among them `accounts_test`,
+    `feedback_test`, `user_session_controller_test`, `join_controller_test`, `user_auth_test`,
+    `admin_live/{users,feedback}_test`, `endgame/{all_vetoed,tie}_test`,
+    `group_live/{results,review,share}_test`, `join_live/results_test`,
+    `user_live/{registration,login,confirmation,settings}_test`. (`home_live_test` and
+    `admin_live/home_page_test` were named here until the home page was deleted with D-027.)
     They `use Consensus.DataCase` / `ConsensusWeb.ConnCase` with no `async:` option. Adding
     `async: true` to one of these is a real change, not a tidy-up: `DataCase`'s
     `start_owner!(Consensus.Repo, shared: not tags[:async])` stops sharing the sandbox connection,

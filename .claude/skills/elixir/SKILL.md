@@ -521,7 +521,7 @@ connection and its own transaction, rolled back at exit, instead of joining the 
 tests still cannot see each other's rows. It just no longer buys concurrent wall-clock time,
 because `max_cases: 1` removes that regardless of the tag.
 
-Verified 2026-08-11: `MIX_TEST_PARTITION=p11 mix precommit` → **1171 tests, 0 failures**,
+Verified 2026-08-11: `MIX_TEST_PARTITION=p11 mix precommit` → **1207 tests, 0 failures**,
 "Finished in 6.0 seconds (1.9s async, 4.1s sync)". Re-run for a current count rather than
 quoting that number — the count grows as the app is written.
 
@@ -952,7 +952,7 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect the count of the day: 1171 tests, 0 failures as of 2026-08-11. Re-run rather than
+Expect the count of the day: 1207 tests, 0 failures as of 2026-08-11. Re-run rather than
 trusting that number — the count grows as the app is written — but a failure is a real
 signal, not background noise, provided you partitioned the database.
 

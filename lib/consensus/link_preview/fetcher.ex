@@ -44,12 +44,21 @@ defmodule Consensus.LinkPreview.Fetcher.Req do
   each attribute independently against the whole tag rather than assuming a fixed
   order.
 
+  Since F3, each field resolves through a three-source chain — OpenGraph, then
+  `schema.org` JSON-LD (`Consensus.LinkPreview.JsonLd`), then the plain HTML tag —
+  and the winner is the first source that yields a *non-blank* value, not merely a
+  present one. That distinction is load-bearing: `<meta property="og:title"
+  content="">` returns `""`, which is truthy in Elixir, so an `||` chain would let an
+  empty tag suppress both fallbacks and produce a card with no title at all.
+
   Sharing this file with the behaviour (rather than a `fetcher/req.ex`) is a
   deliberate, narrow exception to "one module per file": the two are never used
   independently of each other, and nothing here nests one `defmodule` inside another.
   """
 
   @behaviour Consensus.LinkPreview.Fetcher
+
+  alias Consensus.LinkPreview.JsonLd
 
   @meta_tag_regex ~r/<meta\b[^>]*>/i
   @link_tag_regex ~r/<link\b[^>]*>/i
@@ -113,8 +122,9 @@ defmodule Consensus.LinkPreview.Fetcher.Req do
   end
 
   @doc """
-  Extracts OpenGraph metadata from `html`, falling back to plain HTML tags, resolving
-  a relative image URL against `base_url`, and HTML-entity-decoding every text field.
+  Extracts metadata from `html`, resolving each field through OpenGraph, then
+  `schema.org` JSON-LD, then the plain HTML tag; resolving a relative image URL
+  against `base_url`; and HTML-entity-decoding every text field.
 
   Returns raw (untruncated) values — `Consensus.LinkPreview` applies the 140-character
   description cap, since that is a UI constraint, not a parsing one. Any field that
@@ -129,31 +139,50 @@ defmodule Consensus.LinkPreview.Fetcher.Req do
   def extract_metadata(html, base_url) when is_binary(html) do
     meta_tags = tags(html, @meta_tag_regex)
     link_tags = tags(html, @link_tag_regex)
+    json_ld = JsonLd.extract(html)
 
     title =
-      (meta_content(meta_tags, "property", "og:title") || title_tag(html))
-      |> decode_entities()
-      |> presence()
+      first_present([
+        meta_content(meta_tags, "property", "og:title"),
+        json_ld.title,
+        title_tag(html)
+      ])
 
     description =
-      (meta_content(meta_tags, "property", "og:description") ||
-         meta_content(meta_tags, "name", "description"))
-      |> decode_entities()
-      |> presence()
+      first_present([
+        meta_content(meta_tags, "property", "og:description"),
+        json_ld.description,
+        meta_content(meta_tags, "name", "description")
+      ])
 
+    # Resolved per candidate rather than after the winner is picked, so a present but
+    # unusable `og:image` (an unresolvable reference, or a non-http scheme) falls
+    # through to JSON-LD instead of blanking the card's image.
     image_url =
-      (meta_content(meta_tags, "property", "og:image") ||
-         link_href(link_tags, "image_src"))
-      |> decode_entities()
-      |> resolve_url(base_url)
-      |> presence()
+      Enum.find_value(
+        [
+          meta_content(meta_tags, "property", "og:image"),
+          json_ld.image_url,
+          link_href(link_tags, "image_src")
+        ],
+        fn value ->
+          value |> decode_entities() |> presence() |> resolve_image_url(base_url)
+        end
+      )
 
     site_name =
-      meta_content(meta_tags, "property", "og:site_name")
-      |> decode_entities()
-      |> presence()
+      first_present([
+        meta_content(meta_tags, "property", "og:site_name"),
+        json_ld.site_name
+      ])
 
     %{title: title, description: description, image_url: image_url, site_name: site_name}
+  end
+
+  # The first candidate that is non-blank once decoded wins. See the moduledoc for why
+  # this is not an `||` chain.
+  defp first_present(values) do
+    Enum.find_value(values, fn value -> value |> decode_entities() |> presence() end)
   end
 
   defp tags(html, regex), do: regex |> Regex.scan(html) |> List.flatten()
@@ -221,10 +250,26 @@ defmodule Consensus.LinkPreview.Fetcher.Req do
 
   defp codepoint(_code, whole), do: whole
 
-  defp resolve_url(nil, _base), do: nil
+  # Resolves an image reference against the page URL and admits only absolute
+  # http/https results. Both the OpenGraph and the JSON-LD candidate go through this
+  # one function on purpose: an image URL is the only field here that a page can put
+  # into an attribute the browser will act on, and two near-identical sanitizers that
+  # drift apart is the failure mode `Consensus.LinkPreview.check_host/1` already
+  # carries a comment about. A protocol-relative `//cdn.example.com/x.jpg` still
+  # resolves normally; `javascript:`, `data:` and `file:` references do not survive.
+  defp resolve_image_url(nil, _base), do: nil
 
-  defp resolve_url(url, base) do
-    base |> URI.merge(url) |> URI.to_string()
+  defp resolve_image_url(url, base) do
+    merged = base |> URI.merge(url) |> URI.to_string()
+
+    case URI.parse(merged) do
+      %URI{scheme: scheme, host: host}
+      when scheme in ["http", "https"] and is_binary(host) and host != "" ->
+        merged
+
+      _ ->
+        nil
+    end
   rescue
     URI.Error -> nil
   end

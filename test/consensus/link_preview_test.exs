@@ -73,6 +73,140 @@ defmodule Consensus.LinkPreviewTest do
     end
   end
 
+  describe "fetch/1 — JSON-LD precedence (F3)" do
+    defp ld_script(json),
+      do: ~s(<script type="application/ld+json">#{json}</script>)
+
+    test "OpenGraph still wins over JSON-LD on every field" do
+      html = """
+      <html><head>
+        <meta property="og:title" content="OG Title">
+        <meta property="og:description" content="OG description.">
+        <meta property="og:image" content="https://example.test/og.jpg">
+        <meta property="og:site_name" content="OG Site">
+        #{ld_script(~s({"@type":"Recipe","name":"LD Title","description":"LD description.","image":"https://example.test/ld.jpg","publisher":{"name":"LD Site"}}))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/og-wins")
+      assert preview.title == "OG Title"
+      assert preview.description == "OG description."
+      assert preview.image_url == "https://example.test/og.jpg"
+      assert preview.site_name == "OG Site"
+    end
+
+    test "JSON-LD fills every field OpenGraph left empty" do
+      html = """
+      <html><head>
+        #{ld_script(~s({"@type":"Recipe","name":"Focaccia","description":"Slow rise, dimpled, olive oil.","image":"https://example.test/f.jpg","publisher":{"@type":"Organization","name":"A Food Blog"}}))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/ld-fills")
+      assert preview.title == "Focaccia"
+      assert preview.description == "Slow rise, dimpled, olive oil."
+      assert preview.image_url == "https://example.test/f.jpg"
+      assert preview.site_name == "A Food Blog"
+    end
+
+    test "JSON-LD outranks the plain <title>, which is the whole point" do
+      html = """
+      <html><head>
+        <title>Focaccia Recipe | A Food Blog | Best Breads 2026</title>
+        #{ld_script(~s({"@type":"Recipe","name":"Focaccia"}))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/ld-beats-title")
+      assert preview.title == "Focaccia"
+    end
+
+    test "a blank og:title falls through to JSON-LD instead of blanking the card" do
+      html = """
+      <html><head>
+        <meta property="og:title" content="">
+        #{ld_script(~s({"@type":"Movie","name":"The Third Man"}))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/blank-og")
+      assert preview.title == "The Third Man"
+    end
+
+    test "a relative JSON-LD image resolves against the page URL" do
+      html = ld_script(~s({"@type":"Recipe","name":"X","image":"/media/dish.jpg"}))
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/recipes/dish")
+      assert preview.image_url == "http://192.0.2.10/media/dish.jpg"
+    end
+
+    test "a JSON-LD description is truncated by the same 140-character cap" do
+      long = String.duplicate("tomato ", 40)
+      html = ld_script(~s({"@type":"Recipe","name":"X","description":"#{long}"}))
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/long-ld")
+      assert String.length(preview.description) <= 140
+    end
+
+    test "malformed JSON-LD never costs a page its OpenGraph tags" do
+      html = """
+      <html><head>
+        <meta property="og:title" content="Still Here">
+        <meta property="og:image" content="https://example.test/og.jpg">
+        #{ld_script(~s({"@type": "Recipe", "name": "Unterminated))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/broken-ld")
+      assert preview.title == "Still Here"
+      assert preview.image_url == "https://example.test/og.jpg"
+    end
+  end
+
+  describe "fetch/1 — image URLs are http(s) only" do
+    test "a javascript: og:image is dropped rather than passed to the card" do
+      html = "<meta property=\"og:image\" content=\"javascript:alert(1)\">"
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/js-image")
+      assert preview.image_url == nil
+    end
+
+    test "an unusable og:image falls through to the JSON-LD image" do
+      html = """
+      <html><head>
+        <meta property="og:image" content="javascript:alert(1)">
+        #{ld_script(~s({"@type":"Recipe","name":"X","image":"https://example.test/good.jpg"}))}
+      </head></html>
+      """
+
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/js-then-ld")
+      assert preview.image_url == "https://example.test/good.jpg"
+    end
+
+    test "a protocol-relative image still resolves normally" do
+      html = ~s(<meta property="og:image" content="//cdn.example.test/x.jpg">)
+      StubFetcher.stub(fn url, _opts -> html_response(url, html) end)
+
+      assert {:ok, preview} = LinkPreview.fetch("http://192.0.2.10/proto-rel")
+      assert preview.image_url == "http://cdn.example.test/x.jpg"
+    end
+  end
+
   describe "fetch/1 — relative og:image resolution" do
     test "resolves a relative og:image against the final URL" do
       html = ~s(<meta property="og:image" content="../assets/cover.png">)

@@ -2204,6 +2204,43 @@ The failure trio — no match, provider error (including 429/504), timeout — p
 
 ---
 
+## D-053 — `LinkPreview` reads `schema.org` JSON-LD, ranked below OpenGraph and above the plain HTML tags
+
+**Date:** 2026-08-11
+**Status:** settled
+
+**Context.** F3 of [docs/design/assisted-add-ux-brief.md](design/assisted-add-ux-brief.md) and Stage 2 of [docs/research/activity-discovery.md](research/activity-discovery.md), both of which call it independent of the assist and shippable whenever. It was the one piece of D-052's brief left unbuilt when D-052 shipped. The case for it is that structured data is *already on the page* the organizer pasted: the Oct-2024 Web Data Commons crawl found 2,922,378 `schema.org/Recipe` entities across 37,304 domains, 3,785,443 `Movie` and 10,288,815 `Book`, and Google's rich-result requirements keep the SEO incentive to emit it permanent. **This is the answer to "recipes as a dinner option": there is no recipe provider to buy, because the paste field already works and this makes it work better.** No vendor, no key, no licence, no column, no dependency — `Jason` and `Req` were both already here, and the page has already been fetched.
+
+### 1. JSON-LD is a fallback *below* OpenGraph, which is what makes the change strictly additive
+
+`Consensus.LinkPreview.Fetcher.Req.extract_metadata/2` now resolves each field as **`og:<field>` → JSON-LD → plain HTML** (`<title>`, `meta[name=description]`, `link[rel=image_src]`). A page whose `og:` tags already produce a good card is bit-for-bit unaffected, so nothing that works today can regress. It outranks the plain-HTML fallbacks because those are weakest exactly where structured data is strongest: `<title>` on a recipe page is `"Focaccia Recipe | A Food Blog | Best Breads 2026"` where JSON-LD's `name` is `"Focaccia"`.
+
+Rejected: letting JSON-LD win outright. It is often the *better* string, but `og:` is the tag a site author writes specifically to control how their link unfurls, and D-052 §6 is the cautionary case — an over-eager metadata source silently overwriting a better name is a bug this codebase has already shipped once.
+
+### 2. Eligible nodes are an ordered allowlist, read by index, never branched on
+
+`@content_types` in `Consensus.LinkPreview.JsonLd` is data — the same shape as the `Consensus.Discovery` provider registry, for the same reason (product invariant 2). A node qualifies only if its `@type` is on the list; when several qualify the earliest wins, and a `@type` that is itself a list scores as its most specific member. The list covers the four things the research names (recipes, movies, books, events with their common subtypes) plus this app's own four verticals as a venue's page describes itself (`Restaurant`, `Bar`, `BowlingAlley`, `MovieTheater`, …), with generic parents (`LocalBusiness`, `Product`, `Article`, `CreativeWork`) ranked last.
+
+**It is deliberately not "any node with a name".** Nearly every page also ships `Organization`, `WebSite` and `BreadcrumbList` nodes whose `name` is the *site's* name — adopting one would make the card worse than the `<title>` it displaced. For the same reason the flattener handles a bare object, a top-level array and `@graph`, but does **not** recurse into arbitrary nested properties: descending into `itemListElement` or `mainEntity` surfaces breadcrumb fragments and related-content stubs that score as eligible while describing something other than the page.
+
+### 3. Failure is silence, and here that is a correctness requirement rather than a style
+
+`JsonLd.extract/1` rescues everything and returns all-`nil` on any malformed block, unparseable JSON, unexpected shape or exception. This is not the same claim as D-052 §9, which is about what the *organizer* sees; this one is about not damaging a path that already worked. JSON-LD on an arbitrary third-party page is attacker-influenceable input arriving on a code path that previously could not fail there, so an uncaught raise would turn a page with perfectly good `og:` tags into `{:error, :fetch_failed}` — a regression caused entirely by an optional enhancement. Bounds on attacker-controlled structure (`@max_blocks 20`, `@max_depth 12`) sit on top of the fetcher's existing 512KB body cap; the depth bound is mutation-verified.
+
+### 4. Two pre-existing weaknesses in the same function, fixed because the new source made them reachable
+
+- **Blank beats fallback.** The chain was an `||`, and `<meta property="og:title" content="">` returns `""`, which is truthy in Elixir — so an empty tag suppressed the fallback and produced a card with no title. Replaced with a first-*non-blank*-wins helper. This was already wrong for the `<title>` fallback; adding a second source made it worse and is what surfaced it.
+- **One image sanitizer, not two.** Image URLs from both sources now go through a single `resolve_image_url/2` which resolves against the page URL and admits only absolute `http`/`https`. An image URL is the only field here that lands in an attribute the browser acts on, and the alternative — a guard on the new path beside an unguarded old one — is precisely the drift that `check_host/1` carries a comment about. Protocol-relative `//cdn.example.com/x.jpg` still resolves normally; `javascript:`, `data:` and `file:` no longer survive. **This is a behaviour change to the OpenGraph path**, not only the new one: a non-http(s) `og:image` used to reach the card as a raw string and now reads as absent, and a present-but-unusable `og:image` now falls through to the JSON-LD image instead of blanking it.
+
+**Consequences:**
+
+- One new module, `Consensus.LinkPreview.JsonLd`, and no new dependency, config key, column, migration or supervision child. `Consensus.LinkPreview` itself is untouched — the 140-character description cap, the cache, the SSRF guard and the redirect loop all apply unchanged, so a JSON-LD description truncates exactly like an `og:` one.
+- The brief's F3 is built; F1, F2 and F4 shipped with D-052. The Assisted Add brief has no unbuilt items left.
+- Recipes, movies, books and events get better cards with no per-type code, which is invariant 12 holding under a second feature.
+- 1207 tests (from 1171), 0 failures, verified 2026-08-11.
+
+---
+
 ## Still open
 
 D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).
