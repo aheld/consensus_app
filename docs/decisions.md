@@ -2247,7 +2247,9 @@ Rejected: letting JSON-LD win outright. It is often the *better* string, but `og
 **Date:** 2026-08-11
 **Status:** settled
 
-**Context.** Immediately after D-053 shipped, an end-to-end check from the production machine returned `{:error, :fetch_failed}` for `https://www.bbcgoodfood.com/recipes/classic-lasagne` — the very page used to demonstrate the feature. A raw `Req.get/2` from the *same* machine answered `200`, so this was not the bot wall the research warned about and not an egress problem: `Consensus.LinkPreview` was giving up before the body arrived. `Fetcher.Req.get/2` reported `%Req.TransportError{reason: :timeout}` against `@receive_timeout_ms 5_000`.
+**Context.** Immediately after D-053 shipped, an end-to-end check from the production machine returned `{:error, :fetch_failed}` for `https://www.bbcgoodfood.com/recipes/classic-lasagne` — the very page used to demonstrate the feature. A raw `Req.get/2` from the *same* machine answered `200`, ruling out both the bot wall the research warned about and an egress problem.
+
+**Be precise about which measurement came from where, because they are two machines.** The production symptom was the bare `{:error, :fetch_failed}` above. The *diagnosis* was reproduced locally, where `Fetcher.Req.get/2` — called with exactly the options `fetch/1` passes — returned `%Req.TransportError{reason: :timeout}` against `@receive_timeout_ms 5_000` on a cold fetch that took 6986ms. That is direct evidence the 5s ceiling bites on this page; it is not, on its own, proof that the same ceiling was what failed in production on that particular attempt.
 
 **Decision.** `@receive_timeout_ms` goes from `5_000` to `15_000`. `@connect_timeout_ms` stays at `5_000`. `@max_body_bytes` stays at `512 * 1024` — see below.
 
@@ -2274,6 +2276,7 @@ The distribution is the point: every **venue** site answered inside a third of a
 - A spurious timeout is cached as a failure for the error TTL, so this also stops a slow page being un-previewable for the length of that TTL after one unlucky fetch.
 - No test pins the constant. A timeout is wall-clock behaviour against a real socket, and the suite's fetcher is a stub that never consults `opts` — a test asserting `@receive_timeout_ms == 15_000` would restate the source rather than check anything. The measurement above is the evidence, and it is recorded here rather than in an assertion.
 - Nothing else moves: no config key, no environment split (this is the same number in dev, test and prod), and `Consensus.Discovery`'s own timeouts are separate and untouched — Overpass carries a server-side `[timeout:]` and its own 504 handling (D-052).
+- **Post-deploy verification, and its one honest limit.** The exact call that had returned `{:error, :fetch_failed}` now returns a full preview from production — title `"Easy classic lasagne"`, `site_name` `"Good Food"`, a description and an image — in **730ms** against a flushed cache. That 730ms is an order of magnitude under the 6986ms measured locally, which means the CDN edge was warm for it; the run therefore proves the whole D-053 pipeline works end to end in production, but it is *not* a re-measurement of the cold-fetch latency this decision was made on. The cold number stands as the reason for the change, and the warm number stands as the proof the change is live and correct.
 
 ---
 
