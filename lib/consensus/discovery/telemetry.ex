@@ -35,8 +35,10 @@ defmodule Consensus.Discovery.Telemetry do
   ## The chain
 
       [lookup 7Kd2] geocode  q="philadelphia" cache=miss -> ok name="Philadelphia" bbox=39.867,-75.28,40.137,-74.955 (1340ms)
+      [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=philadelphia&format=jsonv2&limit=1
       [lookup 7Kd2] search   type=<type> q="vernick" area="Philadelphia" provider=Overpass cache=miss
       [lookup 7Kd2] overpass ql=[out:json][timeout:25]; ( node["amenity"="<tag>"]["name"~"vernick",i](39.867,...); ) out tags 10;
+      [lookup 7Kd2] repro    https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3B...
       [lookup 7Kd2] overpass -> 200 (690ms)
       [lookup 7Kd2] search   -> ok 1 result (695ms)
       [lookup 7Kd2] enrich   url="https://vernickphilly.com/" cache=miss -> ok title="Vernick Food & Drink" image=yes (500ms)
@@ -45,6 +47,17 @@ defmodule Consensus.Discovery.Telemetry do
   `test/consensus/activity_type_invariant_test.exs` reserves the literal to the
   one schema that declares it as a column default, and that pin is worth more
   than a more concrete example. The real lines carry the actual strings.)
+
+  Every `repro` line is a **GET you can paste into a browser or curl** — including
+  the Overpass one, which is the GET equivalent of the POST the adapter actually
+  sends (Overpass accepts the program as a `data` parameter). `grep repro` over
+  the log is a list of reproducible requests and nothing else. Both URLs are built
+  by the module that issues the request, so a `repro` line that works is evidence
+  about the real call rather than a second, driftable reconstruction of it.
+
+  A `repro` line appears on a cache **hit** too, for the geocode: the URL is a pure
+  function of the query, and a cached answer is exactly when you want to check what
+  the upstream would say now.
 
   The `overpass ql=` line is the one that cannot be reconstructed from anything
   else: it is where the bbox, the registered tag list and the two escaping layers
@@ -158,6 +171,8 @@ defmodule Consensus.Discovery.Telemetry do
       geocode_detail(meta),
       duration(measurements)
     ])
+
+    repro(meta[:url])
   end
 
   def handle_event([:consensus, :discovery, :search, :start], _measurements, meta, _config) do
@@ -186,6 +201,7 @@ defmodule Consensus.Discovery.Telemetry do
 
   def handle_event([:consensus, :discovery, :provider_request, :start], _measurements, meta, _) do
     log(["overpass ql=", flatten_ql(meta[:ql])])
+    repro(meta[:url])
   end
 
   def handle_event([:consensus, :discovery, :provider_request, :stop], measurements, meta, _) do
@@ -225,6 +241,15 @@ defmodule Consensus.Discovery.Telemetry do
   defp log(iodata) do
     Logger.log(level(), fn -> IO.iodata_to_binary([prefix(), iodata]) end)
   end
+
+  # Its own line, and deliberately tagged rather than folded into the summary
+  # above: `fly logs | grep repro` is then exactly the list of requests you can
+  # paste into a browser or curl, with nothing else to strip. The URL is built
+  # by the module that makes the request, never reassembled here, so a logged
+  # URL that works is evidence about the real one.
+  defp repro(nil), do: :ok
+  defp repro(url) when is_binary(url), do: log(["repro    ", url])
+  defp repro(_other), do: :ok
 
   defp prefix do
     case Logger.metadata()[:cid] do

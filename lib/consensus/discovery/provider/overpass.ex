@@ -175,6 +175,14 @@ defmodule Consensus.Discovery.Provider.Overpass do
 
   ## The request
 
+  @doc false
+  # The GET equivalent of the POST this adapter actually sends. Overpass accepts
+  # the program as a `data` query parameter, so this is pasteable into a browser
+  # or curl — which is the whole point: it turns "what did the app ask?" into
+  # something reproducible without reconstructing the QL by hand. Derived from
+  # the same `ql` that goes on the wire, never rebuilt independently.
+  def repro_url(ql), do: @endpoint <> "?" <> URI.encode_query(data: ql)
+
   defp safe_search(query, bbox, tags) do
     perform_search(query, bbox, tags)
   rescue
@@ -212,7 +220,7 @@ defmodule Consensus.Discovery.Provider.Overpass do
     # what tells "Overpass was slow" apart from "we were slow".
     :telemetry.span(
       [:consensus, :discovery, :provider_request],
-      %{provider: __MODULE__, ql: ql, bbox: bbox, tags: tags},
+      %{provider: __MODULE__, ql: ql, url: repro_url(ql), bbox: bbox, tags: tags},
       fn ->
         result =
           case http_module().post(@endpoint, ql, request_opts) do

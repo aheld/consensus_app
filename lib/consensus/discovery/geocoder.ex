@@ -86,6 +86,7 @@ defmodule Consensus.Discovery.Geocoder do
   defp geocode_stop_metadata(query, {:ok, %Area{} = area}, cache) do
     %{
       query: query,
+      url: request_url(query),
       outcome: :ok,
       cache: cache,
       name: area.name,
@@ -94,7 +95,13 @@ defmodule Consensus.Discovery.Geocoder do
   end
 
   defp geocode_stop_metadata(query, {:error, reason}, cache),
-    do: %{query: query, outcome: :error, reason: reason, cache: cache}
+    do: %{
+      query: query,
+      url: request_url(query),
+      outcome: :error,
+      reason: reason,
+      cache: cache
+    }
 
   ## Lookup
 
@@ -118,8 +125,16 @@ defmodule Consensus.Discovery.Geocoder do
       {:error, :geocode_failed}
   end
 
+  @doc false
+  # Public so the telemetry handler can log a pasteable URL, and so a test can
+  # pin the query string. Building it here — rather than in the handler — is
+  # what stops the logged URL and the sent URL drifting apart: there is one
+  # expression, and observability reads it rather than reimplementing it.
+  def request_url(query),
+    do: @endpoint <> "?" <> URI.encode_query(q: query, format: "jsonv2", limit: 1)
+
   defp perform_lookup(query) do
-    url = @endpoint <> "?" <> URI.encode_query(q: query, format: "jsonv2", limit: 1)
+    url = request_url(query)
 
     request_opts = [
       headers: [{"user-agent", @user_agent}],

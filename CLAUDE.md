@@ -221,7 +221,7 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
 │                                 #   Preview" file in the linked Claude Design project via
 │                                 #   headless Chrome; see D-050 for the recipe.
 ├── rel/overlays/bin/             # server, migrate (+ .bat pairs; migrate is unused — see invariants)
-├── test/                         # 1253 tests; support/ has ConnCase, DataCase, fixtures
+├── test/                         # 1256 tests; support/ has ConnCase, DataCase, fixtures
 │   │                             #   (accounts, activities, voting, feedback),
 │   │                             #   link_preview_stub.ex (walks $callers so a stub installed
 │   │                             #   by a test survives into a start_async Task), and — same
@@ -447,7 +447,7 @@ MVP is the dining module only. Explicitly Post-MVP, do not build early: ranked-c
 | `mix ecto.setup` | `ecto.create`, `ecto.migrate`, `run priv/repo/seeds.exs`. |
 | `mix ecto.reset` | `ecto.drop` then `ecto.setup`. Destroys the dev database. |
 | `mix ecto.gen.migration name_with_underscores` | Always generate migrations this way (correct timestamp + conventions). |
-| `mix test` | Full suite. Verified 2026-08-12: **1253 tests, 0 failures**, ~28s warm (~18.3s async, ~9.4s sync — `max_cases: 1`, see invariant 15 / D-033); budget more on the first run after a cold `_build`. The alias prepends `ecto.create --quiet` and `ecto.migrate --quiet`. **Set `MIX_TEST_PARTITION=<n>` if another agent or process may be running the suite against the same checkout** — this is no longer just a convenience: a shared, unpartitioned `consensus_test.db` hit by two concurrent `mix test` runs produces real failures (row-count and ordering assertions off by exactly the other run's rows), not flakiness. `mix precommit` honours the variable too (the alias runs in one OS process and `config/test.exs` reads it with `System.get_env/1`), so a partitioned `precommit` never touches `consensus_test.db`. |
+| `mix test` | Full suite. Verified 2026-08-12: **1256 tests, 0 failures**, ~28s warm (~18.3s async, ~9.4s sync — `max_cases: 1`, see invariant 15 / D-033); budget more on the first run after a cold `_build`. The alias prepends `ecto.create --quiet` and `ecto.migrate --quiet`. **Set `MIX_TEST_PARTITION=<n>` if another agent or process may be running the suite against the same checkout** — this is no longer just a convenience: a shared, unpartitioned `consensus_test.db` hit by two concurrent `mix test` runs produces real failures (row-count and ordering assertions off by exactly the other run's rows), not flakiness. `mix precommit` honours the variable too (the alias runs in one OS process and `config/test.exs` reads it with `System.get_env/1`), so a partitioned `precommit` never touches `consensus_test.db`. |
 | `mix test test/path/to/file.exs` / `mix test --failed` | Narrow a failure. |
 | `mix format --check-formatted` | Verified clean. What CI runs. |
 | `mix compile --warnings-as-errors` | Verified clean. What CI runs. |

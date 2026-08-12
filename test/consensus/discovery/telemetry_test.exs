@@ -107,6 +107,53 @@ defmodule Consensus.Discovery.TelemetryTest do
     end
   end
 
+  describe "the repro line" do
+    test "the geocode's URL is the one the geocoder actually requests" do
+      # Built by Geocoder.request_url/1 and read here, rather than reassembled:
+      # a logged URL that has drifted from the sent one is worse than none.
+      url = Consensus.Discovery.Geocoder.request_url("19147")
+
+      assert url =~ "https://nominatim.openstreetmap.org/search?"
+      assert url =~ "q=19147"
+      assert url =~ "format=jsonv2"
+      assert url =~ "limit=1"
+    end
+
+    test "the Overpass repro URL is a GET carrying the same program the adapter POSTs" do
+      ql =
+        Consensus.Discovery.Provider.Overpass.build_ql(
+          "emmy",
+          {39.8, -75.2, 40.1, -74.9},
+          [{"amenity", "restaurant"}]
+        )
+
+      url = Consensus.Discovery.Provider.Overpass.repro_url(ql)
+
+      assert url =~ "https://overpass-api.de/api/interpreter?data="
+      # Decoding it must give back the exact program, or the line is a lie.
+      assert %URI{query: query} = URI.parse(url)
+      assert URI.decode_query(query)["data"] == ql
+    end
+
+    test "a geocode logs a repro line even on a cache hit" do
+      # The URL is a pure function of the query, so it is available without a
+      # request having been made — which is when you most want to check upstream.
+      Consensus.GeocoderHTTPStub.stub_places([
+        %{
+          "name" => "19147",
+          "display_name" => "19147, Philadelphia, Pennsylvania",
+          "boundingbox" => ["39.8919218", "39.9820204", "-75.2139758", "-75.0969325"]
+        }
+      ])
+
+      capture_info(fn -> Consensus.Discovery.Geocoder.geocode("19147") end)
+      log = capture_info(fn -> Consensus.Discovery.Geocoder.geocode("19147") end)
+
+      assert log =~ "cache=hit"
+      assert log =~ "repro    https://nominatim.openstreetmap.org/search?q=19147"
+    end
+  end
+
   describe "the correlation id" do
     test "prefixes every line when Logger metadata carries one" do
       stub_results({:ok, []})
