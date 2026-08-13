@@ -2391,6 +2391,40 @@ Three smaller rules fall out, each with a test: pressing a chip abandons the pic
 
 ---
 
+## D-057 — The design pages are published to GitHub Pages from `docs/design/site`, and documentation stops redeploying production
+
+**Date:** 2026-08-13
+**Status:** settled
+
+**Context.** The design source of truth is a Claude Design project — `claude.ai/design/p/867b0685-278c-4ce4-ae2c-bce2135705af` — and it is reachable only by someone signed into that account. What the repo held was a partial mirror: three of the project's seven HTML files, exported by hand on 2026-08-09/10, plus `extract_screens.py` splitting one of them into `docs/design/screens/`. That mirror had gone stale in a way that mattered: the local `create-and-share.dc.html` stopped at turn `t4` and carried ten options, while the project had grown turns `t5` (the Assisted Add brief, D-052) and `t6` (the custom deadline picker, D-055) and now holds fourteen. A reviewer opening the repo's copy of "the design" was reading a document two features out of date, with nothing on the page to say so.
+
+**Decision.**
+
+1. **All seven of the project's HTML files are exported verbatim into `docs/design/site/`** — `create-and-share`, `all-vetoed`, `tie`, `user-flow`, `social-preview`, plus the two alternate exports of Create & Share (`create-and-share.html`, the bundled single file, and `standalone-src.dc.html`). They ship with `support.js` (the dc-runtime, byte-identical to the one already in `docs/design/`) and `icon.svg`, which is everything they load apart from Google Fonts and the React UMD build the runtime pulls from unpkg. A hand-written `index.html` in the app's own visual language is the entry point.
+
+2. **The export is the authored source, with the preview harness stripped.** Files fetched through the design app's `GetFile` RPC arrive wrapped in two `data-omelette-injected` blocks. One of them is `<style>html,body{background:transparent}</style>`, which is correct inside the design app's own iframe — the host supplies the ground — and *wrong* on a static host, where it drops every page onto white and discards the mint the whole system is built on. Both blocks are removed; the result matches what `DesignSync`'s `get_file` returns byte for byte on the files small enough for it to return whole.
+
+3. **`DesignSync.get_file` is not the extraction path for large documents.** It truncates at 256 KiB with `truncated: true`, and `Consensus - Create & Share.dc.html` is 326 KB — it came back cut off mid-element, inside option `1b`, still ending in a plausible-looking tag. The full files were pulled through the design app's own RPC in an authenticated browser session and written to disk as one bundle. **Anything re-exporting these files must check `truncated`**: the failure is silent and produces a file that opens.
+
+4. **A `Pages` workflow deploys `docs/design/site` on any push to `main` that touches it,** with `actions/upload-pages-artifact` — no build step, no Jekyll (`.nojekyll`). It deliberately does not gate on `ci.yml`: nothing in that directory is compiled, nothing reaches the Fly machine, and a red Elixir test says nothing about a static HTML export.
+
+5. **`fly-deploy.yml` gains `paths-ignore: ['docs/**', '**.md']`.** This app is one machine with one volume (invariant 4), so every deploy is a restart of the entire product — there is no second machine to take traffic. Paying that for a Markdown typo buys nothing. GitHub's semantics are the safe ones: a run is skipped only when *every* changed file matches, so a commit touching `lib/` and `docs/` still deploys.
+
+**Alternatives rejected.**
+
+- **Publishing from a `gh-pages` orphan branch.** Would have kept `main` untouched and dodged the deploy trigger without the `paths-ignore` — at the cost of the extracted HTML living outside `main`'s history, which is the opposite of what a design reference is for.
+- **Serving `docs/` wholesale as the Pages source.** The branch-folder option only accepts `/` or `/docs`, which would publish the PRD, the decision log and every plan as a website. The repo is public and none of it is secret, but a Jekyll build over Markdown that was written to be read in a diff is not a thing anyone asked for.
+- **Regenerating `docs/design/screens/` from the fresh export.** `extract_screens.py` still runs against the *old* local `create-and-share.dc.html`, so `screens/` is a 2026-08-09 snapshot with none of `t5`/`t6`. Deliberately left alone rather than half-updated in the same change — it is a separate artifact with its own consumers (the build-board critics open single screens side by side).
+
+**Consequences.**
+
+- The published site is public. It was already public in substance — the repo is public and the app is live — but the design *explorations* now have a URL: rejected branding directions, the "later phase" cards, and sample content like `Osteria Mozza` that never shipped.
+- The three `.dc.html` files at `docs/design/` are now the stale copies, and `IMPORT-NOTES.md` still points at them. Read `docs/design/site/` for what the design actually says today.
+- The pages need a network connection to draw at all: `support.js` loads React 18.3.1 from unpkg, and the type comes from Google Fonts. An offline reader gets a blank page, not a degraded one.
+- Nothing in `lib/`, `test/` or `fly.toml` changed, so the test count stands at 1256.
+
+---
+
 ## Still open
 
 D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).

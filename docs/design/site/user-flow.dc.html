@@ -1,0 +1,188 @@
+<!DOCTYPE html>
+<html>
+<head>
+
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<script src="./support.js"></script>
+</head>
+<body>
+<x-dc>
+<helmet><meta name="design_doc_mode" content="canvas"><link rel="preconnect" href="https://fonts.googleapis.com"><link rel="preconnect" href="https://fonts.gstatic.com" crossorigin><link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet"><link rel="icon" href="./icon.svg"><style>body{margin:0;background:#E8F1EA}a{color:#6B46F0}a:hover{color:#FF6A2B}</style></helmet>
+
+<div style="width:1920px;height:1080px;background:#F0F6F1;position:relative;overflow:hidden;font-family:'Instrument Sans',sans-serif;color:#17211C;display:flex;flex-direction:column">
+
+  <div style="flex:none;display:flex;align-items:flex-end;justify-content:space-between;padding:44px 56px 26px">
+    <div style="display:flex;flex-direction:column;gap:10px">
+      <div style="display:flex;align-items:center;gap:12px"><img src="./icon.svg" width="34" height="34" alt=""><span style="font:700 22px 'Instrument Sans',sans-serif;letter-spacing:-.02em">Consensus</span></div>
+      <h1 style="margin:0;font:700 52px/1 'Instrument Sans',sans-serif;letter-spacing:-.035em">User flow</h1>
+    </div>
+    <div style="display:flex;align-items:center;gap:26px;padding-bottom:6px">
+      <div style="display:flex;align-items:center;gap:9px"><span style="width:15px;height:15px;border:2px solid #17211C;border-radius:4px;background:#fff"></span><span style="font:500 14px 'DM Mono',monospace;color:#3B4A42">organizer</span></div>
+      <div style="display:flex;align-items:center;gap:9px"><span style="width:15px;height:15px;border:2px solid #17211C;border-radius:4px;background:#D6CCFB"></span><span style="font:500 14px 'DM Mono',monospace;color:#3B4A42">guest / voter</span></div>
+      <div style="display:flex;align-items:center;gap:9px"><span style="width:15px;height:15px;border:2px dashed rgba(23,33,28,.45);border-radius:4px;background:transparent"></span><span style="font:500 14px 'DM Mono',monospace;color:#3B4A42">later phase</span></div>
+      <div style="display:flex;align-items:center;gap:9px"><span style="width:26px;height:0;border-top:3px dotted #6B46F0"></span><span style="font:500 14px 'DM Mono',monospace;color:#3B4A42">optional</span></div>
+    </div>
+  </div>
+
+  <div style="flex:1;min-height:0;position:relative;padding:0 56px 40px">
+
+    <div style="position:absolute;left:56px;right:56px;top:118px;height:2px;background:repeating-linear-gradient(90deg,rgba(23,33,28,.22) 0 8px,transparent 8px 16px)"></div>
+    <div style="position:absolute;left:56px;right:56px;top:516px;height:2px;background:repeating-linear-gradient(90deg,rgba(23,33,28,.22) 0 8px,transparent 8px 16px)"></div>
+
+    <div style="position:absolute;left:56px;top:24px;font:500 13px 'DM Mono',monospace;letter-spacing:.14em;color:#8A968E">ENTRY</div>
+    <div style="position:absolute;left:56px;top:142px;font:500 13px 'DM Mono',monospace;letter-spacing:.14em;color:#8A968E">ORGANIZER · BUILD &amp; SHARE</div>
+    <div style="position:absolute;left:56px;top:540px;font:500 13px 'DM Mono',monospace;letter-spacing:.14em;color:#8A968E">GUEST · VOTE</div>
+
+    <div style="position:absolute;left:56px;top:52px;display:flex;align-items:center;gap:16px">
+      <div style="width:190px;background:#B9EFC9;border:2px solid #17211C;border-radius:14px;box-shadow:4px 4px 0 #17211C;padding:11px 14px">
+        <div style="font:500 10.5px 'DM Mono',monospace;color:#3B4A42">00a</div>
+        <div style="font:700 16px 'Instrument Sans',sans-serif;margin-top:2px">Intro</div>
+      </div>
+      <span style="font:600 22px 'Instrument Sans',sans-serif;color:#5E6D64">→</span>
+      <div style="width:190px;background:#fff;border:2px solid #17211C;border-radius:14px;box-shadow:4px 4px 0 #17211C;padding:11px 14px">
+        <div style="font:500 10.5px 'DM Mono',monospace;color:#3B4A42">00b</div>
+        <div style="font:700 16px 'Instrument Sans',sans-serif;margin-top:2px">How it works</div>
+      </div>
+      <span style="font:600 22px 'Instrument Sans',sans-serif;color:#5E6D64">→</span>
+      <div style="width:210px;background:#FFD84D;border:2px solid #17211C;border-radius:14px;box-shadow:4px 4px 0 #17211C;padding:11px 14px">
+        <div style="font:500 10.5px 'DM Mono',monospace;color:#3B4A42">00</div>
+        <div style="font:700 16px 'Instrument Sans',sans-serif;margin-top:2px">Home</div>
+        <div style="font:400 11.5px 'Instrument Sans',sans-serif;color:#3B4A42;margin-top:1px">active + past sessions</div>
+      </div>
+      <span style="font:600 22px 'Instrument Sans',sans-serif;color:#5E6D64">→</span>
+      <div style="display:flex;flex-direction:column;gap:4px;padding-left:4px">
+        <span style="font:500 11px 'DM Mono',monospace;color:#5E6D64">START SOMETHING</span>
+        <span style="font:600 26px 'Instrument Sans',sans-serif;color:#FF6A2B">↓</span>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:56px;top:180px;display:flex;align-items:flex-start;gap:14px">
+
+      <div style="width:206px;background:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+        <div style="font:500 11px 'DM Mono',monospace;color:#3B4A42">01</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Setup</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:5px">Title, group size, deadline</div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="width:236px;background:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+          <div style="font:500 11px 'DM Mono',monospace;color:#3B4A42">02</div>
+          <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Add options</div>
+          <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:5px">Type a name or paste a link</div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding-left:16px">
+          <span style="font:600 17px 'Instrument Sans',sans-serif;color:#6B46F0">↳</span>
+          <div style="flex:1;background:#fff;border:2px solid #17211C;border-radius:14px;box-shadow:3px 3px 0 #17211C;padding:9px 12px">
+            <div style="font:500 10.5px 'DM Mono',monospace;color:#3B4A42">02b</div>
+            <div style="font:700 14.5px 'Instrument Sans',sans-serif;margin-top:1px">Edit option</div>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:10px;padding-left:16px">
+          <span style="font:600 17px 'Instrument Sans',sans-serif;color:#8A968E">↳</span>
+          <div style="flex:1;border:2px dashed rgba(23,33,28,.45);border-radius:14px;padding:9px 12px;background:rgba(255,255,255,.5)">
+            <div style="font:500 10.5px 'DM Mono',monospace;color:#8A968E">PHASE 2</div>
+            <div style="font:700 14.5px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:1px">Discover</div>
+          </div>
+        </div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="width:206px;background:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+        <div style="font:500 11px 'DM Mono',monospace;color:#3B4A42">03</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Review pool</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:5px">Confirm, then open voting</div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="width:236px;background:#FF6A2B;color:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+          <div style="font:500 11px 'DM Mono',monospace;opacity:.85">04</div>
+          <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Share the link</div>
+          <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;opacity:.9;margin-top:5px">Native sheet, chat copy, or QR</div>
+        </div>
+        <div style="display:flex;gap:8px;padding-left:16px">
+          <div style="flex:1;background:#fff;border:2px solid #17211C;border-radius:12px;box-shadow:3px 3px 0 #17211C;padding:8px 10px;font:600 12px 'Instrument Sans',sans-serif">Chat copy</div>
+          <div style="flex:1;background:#fff;border:2px solid #17211C;border-radius:12px;box-shadow:3px 3px 0 #17211C;padding:8px 10px;font:600 12px 'Instrument Sans',sans-serif">QR handoff</div>
+        </div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="width:230px;background:#6B46F0;color:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+        <div style="font:500 11px 'DM Mono',monospace;opacity:.85">05</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Live results</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;opacity:.9;margin-top:5px">Countdown, tally, nudge</div>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:1024px;top:340px;width:2px;height:132px;background:repeating-linear-gradient(180deg,#6B46F0 0 7px,transparent 7px 14px)"></div>
+    <div style="position:absolute;left:220px;top:470px;width:806px;height:2px;background:repeating-linear-gradient(90deg,#6B46F0 0 7px,transparent 7px 14px)"></div>
+    <div style="position:absolute;left:220px;top:470px;width:2px;height:96px;background:repeating-linear-gradient(180deg,#6B46F0 0 7px,transparent 7px 14px)"></div>
+    <div style="position:absolute;left:211px;top:560px;font:600 20px/1 'Instrument Sans',sans-serif;color:#6B46F0">▼</div>
+    <div style="position:absolute;left:420px;top:442px;font:500 12.5px 'DM Mono',monospace;color:#6B46F0;background:#F0F6F1;padding:0 10px">link opened</div>
+
+    <div style="position:absolute;left:56px;top:580px;display:flex;align-items:flex-start;gap:14px">
+
+      <div style="width:230px;background:#D6CCFB;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+        <div style="font:500 11px 'DM Mono',monospace;color:#3B4A42">06</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Join screen</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#3B4A42;margin-top:5px">No app, no account</div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="display:flex;flex-direction:column;gap:12px">
+        <div style="width:266px;background:#D6CCFB;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+          <div style="display:flex;align-items:center;gap:8px"><span style="font:500 11px 'DM Mono',monospace;color:#3B4A42">VOTE</span><span style="background:#17211C;color:#fff;border-radius:99px;padding:1px 8px;font:600 9.5px 'Instrument Sans',sans-serif">MVP · RANKED LIST</span></div>
+          <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Rank your top 3</div>
+          <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#3B4A42;margin-top:5px">One veto each · anonymous</div>
+        </div>
+        <div style="display:flex;gap:8px;padding-left:16px">
+          <div style="flex:1;border:2px dashed rgba(23,33,28,.45);border-radius:12px;padding:8px 10px;font:600 12px 'Instrument Sans',sans-serif;color:#5E6D64;background:rgba(255,255,255,.5)">Swipe deck</div>
+          <div style="flex:1;border:2px dashed rgba(23,33,28,.45);border-radius:12px;padding:8px 10px;font:600 12px 'Instrument Sans',sans-serif;color:#5E6D64;background:rgba(255,255,255,.5)">Sticker grid</div>
+        </div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="width:266px;background:#6B46F0;color:#fff;border:2px solid #17211C;border-radius:16px;box-shadow:5px 5px 0 #17211C;padding:14px 15px">
+        <div style="font:500 11px 'DM Mono',monospace;opacity:.85">05b</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;margin-top:3px">Live results</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;opacity:.9;margin-top:5px">Same screen, no nudge · re-rank any time</div>
+      </div>
+
+      <span style="font:600 24px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:34px">→</span>
+
+      <div style="width:250px;border:2px dashed rgba(23,33,28,.45);border-radius:16px;padding:14px 15px;background:rgba(255,255,255,.5)">
+        <div style="font:500 11px 'DM Mono',monospace;color:#8A968E">NOT YET DESIGNED</div>
+        <div style="font:700 18px 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:3px">Result</div>
+        <div style="font:400 12.5px/1.4 'Instrument Sans',sans-serif;color:#5E6D64;margin-top:5px">Timer ends · winner to everyone at once</div>
+      </div>
+    </div>
+
+    <div style="position:absolute;left:56px;right:56px;top:748px;height:2px;background:repeating-linear-gradient(90deg,rgba(23,33,28,.22) 0 8px,transparent 8px 16px)"></div>
+    <div style="position:absolute;left:56px;top:776px;display:flex;align-items:center;gap:34px">
+      <span style="font:500 13px 'DM Mono',monospace;letter-spacing:.14em;color:#8A968E">ON EVERY SCREEN</span>
+      <div style="display:flex;align-items:center;gap:10px;background:#fff;border:2px solid #17211C;border-radius:12px;box-shadow:3px 3px 0 #17211C;padding:9px 13px">
+        <img src="./icon.svg" width="17" height="17" alt=""><span style="font:600 13px 'Instrument Sans',sans-serif">Header</span><span style="font:400 12px 'Instrument Sans',sans-serif;color:#5E6D64">back · mark · context · ⋯</span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;background:#fff;border:2px solid #17211C;border-radius:12px;box-shadow:3px 3px 0 #17211C;padding:9px 13px">
+        <span style="font:600 13px 'Instrument Sans',sans-serif">Footer</span><span style="font:400 12px 'Instrument Sans',sans-serif;color:#5E6D64">feedback faces · about · how it works · privacy</span>
+        <span style="width:20px;height:20px;border:2px solid #17211C;border-radius:50%;background:#B9EFC9;display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 14.6c1 1.2 2.4 1.8 4 1.8s3-.6 4-1.8"/></svg></span>
+        <span style="width:20px;height:20px;border:2px solid #17211C;border-radius:50%;background:#FFC2A3;display:grid;place-items:center"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="#17211C" stroke-width="2.2" stroke-linecap="round"><circle cx="9" cy="10" r="1.2" fill="#17211C" stroke="none"/><circle cx="15" cy="10" r="1.2" fill="#17211C" stroke="none"/><path d="M8 16.4c1-1.2 2.4-1.8 4-1.8s3 .6 4 1.8"/></svg></span>
+      </div>
+      <div style="display:flex;align-items:center;gap:10px;border:2px dashed rgba(23,33,28,.45);border-radius:12px;padding:9px 13px">
+        <span style="font:600 13px 'Instrument Sans',sans-serif;color:#5E6D64">Guest header</span><span style="font:400 12px 'Instrument Sans',sans-serif;color:#5E6D64">mark · “Create your own →”</span>
+      </div>
+    </div>
+  </div>
+</div>
+</x-dc>
+<script type="text/x-dc" data-dc-script data-props="{&quot;$preview&quot;:{&quot;width&quot;:1920,&quot;height&quot;:1080}}"></script>
+</body>
+</html>

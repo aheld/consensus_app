@@ -7,7 +7,7 @@ Consensus is a Phoenix 1.8 / LiveView 1.2 application on Elixir 1.20 and SQLite,
 | Doc | Authority |
 |---|---|
 | [AGENTS.md](AGENTS.md) | **How to write code here.** Official Phoenix/LiveView/Ecto/HEEx usage rules injected by `phx.gen.auth`, plus a short Consensus-specific appendix. Read before touching `lib/`. This file does not restate it. |
-| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-056. Anything recorded here beats the drafts. |
+| [docs/decisions.md](docs/decisions.md) | **North star for technical.** ADR-lite log, currently D-001 through D-057. Anything recorded here beats the drafts. |
 | [docs/PRD.md](docs/PRD.md) | **North star for product.** Personas, functional requirements, success metrics. Ratified. Contains no stack, schema, vendor, or algorithm decisions — by design. |
 | [docs/open-questions.md](docs/open-questions.md) | What still needs a product/technical decision. |
 | [docs/technical-roadmap-v1-draft.md](docs/technical-roadmap-v1-draft.md) | **Not ratified.** First-pass stack proposal (NestJS/Socket.io/Redis). Reference only — do not implement from it. |
@@ -53,8 +53,13 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
 │   │                             #   `docker` job: build, boot + smoke test, and boot twice
 │   │                             #   on one volume (see invariant 10)
 │   │                             #   on: pull_request + workflow_call ONLY — never push
-│   └── fly-deploy.yml            # on push to main: calls ci.yml, then
-│                                 #   flyctl deploy --remote-only --ha=false
+│   ├── fly-deploy.yml            # on push to main: calls ci.yml, then
+│   │                             #   flyctl deploy --remote-only --ha=false
+│   │                             #   paths-ignore: docs/** and **.md — a docs-only
+│   │                             #   push must not restart the one machine (D-057)
+│   └── pages.yml                 # on push to main touching docs/design/site: uploads
+│                                 #   that directory to GitHub Pages, no build step and
+│                                 #   deliberately no ci.yml gate (D-057)
 ├── .claude/
 │   ├── skills/{phoenix,elixir,sqlite,fly-io}/SKILL.md
 │   ├── agents/                   # empty
@@ -280,8 +285,20 @@ Four skills live in [.claude/skills/](.claude/skills/). Each is written against 
     │                             #   research behind D-052; §3's licence traps are why no
     │                             #   commercial place API may ever be proposed on price alone
     ├── design/                   # DESIGN-SPEC.md (the visual source of truth) + screens/
-    │                             #   + assisted-add-ux-brief.md, the product brief frame t5
-    │                             #   was designed against (D-052)
+    │   │                         #   + assisted-add-ux-brief.md, the product brief frame t5
+    │   │                         #   was designed against (D-052). NOTE: the three .dc.html
+    │   │                         #   files here and everything under screens/ are a
+    │   │                         #   2026-08-09/10 hand export and predate turns t5 (D-052)
+    │   │                         #   and t6 (D-055) — site/ is the current one (D-057).
+    │   ├── site/                 # what GitHub Pages serves (D-057): all SEVEN HTML files
+    │   │                         #   from the Claude Design project, exported verbatim with
+    │   │                         #   the data-omelette-injected preview harness stripped
+    │   │                         #   (one of its two blocks sets body{background:transparent},
+    │   │                         #   which is right in the design app's iframe and wrong on a
+    │   │                         #   static host), + support.js, icon.svg, .nojekyll and a
+    │   │                         #   hand-written index.html. Re-exporting? DesignSync's
+    │   │                         #   get_file truncates at 256 KiB and Create & Share is
+    │   │                         #   326 KB — check `truncated`, the cut file still opens.
     │   └── social-preview/       # the og:image sources (D-050): three HTML panels
     │                             #   transcribed from the linked Claude Design project,
     │                             #   plus render.sh, which rewrites the PNGs in

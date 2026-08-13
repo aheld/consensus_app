@@ -1,0 +1,93 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Consensus — design pages</title>
+<link rel="icon" href="./icon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Instrument+Sans:wght@400;500;600;700&family=DM+Mono:wght@400;500&display=swap" rel="stylesheet">
+<style>
+  :root{--ink:#17211C;--mint:#DDF0E2;--paper:#fff;--muted:#5E6D64;--violet:#6B46F0;--orange:#FF6A2B}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--mint);color:var(--ink);
+       font-family:'Instrument Sans',system-ui,sans-serif;padding:48px 24px 80px}
+  main{max-width:920px;margin:0 auto}
+  .brand{display:flex;align-items:center;gap:12px;margin-bottom:26px}
+  .brand img{width:34px;height:34px}
+  .brand span{font-weight:700;font-size:22px;letter-spacing:-.02em}
+  h1{margin:0;font-size:44px;line-height:1.05;letter-spacing:-.035em}
+  .lede{margin:14px 0 6px;font-size:17px;line-height:1.55;color:#2C3B33;max-width:62ch}
+  .meta{margin:0 0 36px;font:500 12.5px/1.7 'DM Mono',ui-monospace,monospace;color:var(--muted)}
+  .meta a{color:var(--violet)}
+  h2{font:500 12px/1 'DM Mono',ui-monospace,monospace;letter-spacing:.14em;
+     text-transform:uppercase;color:#8A968E;margin:38px 0 16px}
+  ul{list-style:none;padding:0;margin:0;display:grid;gap:14px;
+     grid-template-columns:repeat(auto-fill,minmax(280px,1fr))}
+  a.card{display:block;background:var(--paper);border:2px solid var(--ink);border-radius:16px;
+         box-shadow:5px 5px 0 var(--ink);padding:16px 18px;text-decoration:none;color:inherit;
+         transition:transform .08s ease,box-shadow .08s ease}
+  a.card:hover{transform:translate(-2px,-2px);box-shadow:7px 7px 0 var(--ink)}
+  a.card:active{transform:translate(3px,3px);box-shadow:2px 2px 0 var(--ink)}
+  .name{font-weight:700;font-size:18px;letter-spacing:-.01em}
+  .desc{margin-top:5px;font-size:13.5px;line-height:1.45;color:var(--muted)}
+  .file{margin-top:9px;font:500 11px 'DM Mono',ui-monospace,monospace;color:#8A968E;word-break:break-all}
+  footer{margin-top:52px;font-size:13px;line-height:1.6;color:var(--muted);max-width:62ch}
+  footer a{color:var(--violet)}
+</style>
+</head>
+<body>
+<main>
+  <div class="brand"><img src="./icon.svg" alt=""><span>Consensus</span></div>
+  <h1>Design pages</h1>
+  <p class="lede">Every page from the Consensus design project, exported verbatim and served as
+  static HTML. Wide canvases — scroll sideways, or zoom out.</p>
+  <p class="meta">source · <a href="https://claude.ai/design/p/867b0685-278c-4ce4-ae2c-bce2135705af">claude.ai/design</a> · exported 2026-08-13</p>
+
+  <h2>Screen sets</h2>
+  <ul>
+    <li><a class="card" href="./create-and-share.dc.html">
+      <div class="name">Create &amp; Share</div>
+      <div class="desc">The main doc: setup, add options, the assisted add, review, share, live results, the recipient's view, and the branding/logo explorations. Five turns, fourteen options.</div>
+      <div class="file">create-and-share.dc.html</div></a></li>
+    <li><a class="card" href="./all-vetoed.dc.html">
+      <div class="name">All Vetoed</div>
+      <div class="desc">The endgame takeover for a pool where every option got vetoed — the fire scene, the poke toy, THE CARNAGE list.</div>
+      <div class="file">all-vetoed.dc.html</div></a></li>
+    <li><a class="card" href="./tie.dc.html">
+      <div class="name">Tie</div>
+      <div class="desc">The other endgame takeover — the tug-of-war scene, and the organizer's two ways out of a dead heat.</div>
+      <div class="file">tie.dc.html</div></a></li>
+    <li><a class="card" href="./user-flow.dc.html">
+      <div class="name">User Flow</div>
+      <div class="desc">One 1920×1080 board: entry, organizer build &amp; share, guest vote, and what rides on every screen.</div>
+      <div class="file">user-flow.dc.html</div></a></li>
+    <li><a class="card" href="./social-preview.dc.html">
+      <div class="name">Social Preview</div>
+      <div class="desc">The og:image card at 1200×630, plus the square and story crops.</div>
+      <div class="file">social-preview.dc.html</div></a></li>
+  </ul>
+
+  <h2>Alternate exports of Create &amp; Share</h2>
+  <ul>
+    <li><a class="card" href="./create-and-share.html">
+      <div class="name">Create &amp; Share — bundled</div>
+      <div class="desc">The same doc as a single self-contained file, with the runtime inlined instead of loaded from support.js.</div>
+      <div class="file">create-and-share.html</div></a></li>
+    <li><a class="card" href="./standalone-src.dc.html">
+      <div class="name">Create &amp; Share — standalone source</div>
+      <div class="desc">The project's standalone-src snapshot. Near-identical to the main doc; kept because it is a separate file in the project.</div>
+      <div class="file">standalone-src.dc.html</div></a></li>
+  </ul>
+
+  <footer>
+    <p>These are design references, not the running app. The app itself lives at
+    <a href="https://dinner.isourthing.com">dinner.isourthing.com</a>; the code is in
+    <a href="https://github.com/aheld/consensus_app">aheld/consensus_app</a>.</p>
+    <p>Pages render through the design runtime in <code>support.js</code>, which pulls React
+    from unpkg — they need a network connection to draw.</p>
+  </footer>
+</main>
+</body>
+</html>

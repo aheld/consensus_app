@@ -14,6 +14,13 @@ on:
   push:
     branches:
       - main
+    # Documentation is not deployed. This app is one machine with one volume, so every
+    # deploy is a restart of the whole product — paying that for a typo fix in a Markdown
+    # file buys nothing. A push that touches code *and* docs still deploys: `paths-ignore`
+    # skips a run only when every changed file matches (D-057).
+    paths-ignore:
+      - 'docs/**'
+      - '**.md'
   workflow_dispatch:
 
 # Nothing in this workflow writes to the repository.
