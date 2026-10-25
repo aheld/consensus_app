@@ -119,26 +119,66 @@ defmodule Consensus.Discovery.TelemetryTest do
       assert url =~ "limit=1"
     end
 
-    test "the Overpass repro URL is a GET carrying the same program the adapter POSTs" do
-      ql =
-        Consensus.Discovery.Provider.Overpass.build_ql(
-          "emmy",
-          {39.8, -75.2, 40.1, -74.9},
-          [{"amenity", "restaurant"}]
-        )
+    test "the provider's repro URL is the one the client sends, logged with the category allowlist" do
+      # The real adapter, registered at runtime, with the client's HTTP seam
+      # stubbed: the logged URL must be the requested URL, byte for byte.
+      original = Application.get_env(:consensus, Consensus.Discovery)
 
-      url = Consensus.Discovery.Provider.Overpass.repro_url(ql)
+      Application.put_env(
+        :consensus,
+        Consensus.Discovery,
+        Keyword.put(original, :providers, %{
+          "restaurant" =>
+            {Consensus.Discovery.Provider.Nominatim,
+             categories: [{"amenity", "restaurant"}, {"amenity", "cafe"}]}
+        })
+      )
 
-      assert url =~ "https://overpass-api.de/api/interpreter?data="
-      # Decoding it must give back the exact program, or the line is a lie.
-      assert %URI{query: query} = URI.parse(url)
-      assert URI.decode_query(query)["data"] == ql
+      on_exit(fn -> Application.put_env(:consensus, Consensus.Discovery, original) end)
+
+      test_pid = self()
+      body = Consensus.NominatimHTTPStub.recorded!("vernick")
+
+      Consensus.NominatimHTTPStub.stub(fn url, _opts ->
+        send(test_pid, {:requested, url})
+        {:ok, %{status: 200, body: body}}
+      end)
+
+      log = capture_info(fn -> Discovery.search("restaurant", "Vernick", area()) end)
+      assert_receive {:requested, url}
+
+      assert url =~ "https://nominatim.openstreetmap.org/search?"
+      assert log =~ "provider Nominatim categories=amenity=restaurant,amenity=cafe"
+      assert log =~ "repro    " <> url
+      assert log =~ "provider -> 200 2 results filtered=0"
+    end
+
+    test "the provider's stop line reports what the allowlist dropped, and an error's reason" do
+      log =
+        capture_info(fn ->
+          Consensus.Discovery.Telemetry.handle_event(
+            [:consensus, :discovery, :provider_request, :stop],
+            %{duration: 0},
+            %{outcome: :ok, status: 200, count: 0, filtered: 3},
+            nil
+          )
+
+          Consensus.Discovery.Telemetry.handle_event(
+            [:consensus, :discovery, :provider_request, :stop],
+            %{duration: 0},
+            %{outcome: :error, status: 403, reason: {:http, 403}},
+            nil
+          )
+        end)
+
+      assert log =~ "provider -> 200 0 results filtered=3"
+      assert log =~ "provider -> 403 reason={:http, 403}"
     end
 
     test "a geocode logs a repro line even on a cache hit" do
       # The URL is a pure function of the query, so it is available without a
       # request having been made — which is when you most want to check upstream.
-      Consensus.GeocoderHTTPStub.stub_places([
+      Consensus.NominatimHTTPStub.stub_places([
         %{
           "name" => "19147",
           "display_name" => "19147, Philadelphia, Pennsylvania",

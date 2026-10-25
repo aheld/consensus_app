@@ -10,12 +10,12 @@ defmodule Consensus.Discovery do
 
       config :consensus, Consensus.Discovery,
         providers: %{
-          "bowling" => {SomeProvider, tags: [{"leisure", "bowling_alley"}]}
+          "bowling" => {SomeProvider, categories: [{"leisure", "bowling_alley"}]}
         }
 
   In dev/prod the registry resolves four types to
-  `Consensus.Discovery.Provider.Overpass` — one module, four different tag
-  lists (see `config/config.exs`) — and a type with no entry is a
+  `Consensus.Discovery.Provider.Nominatim` — one module, four different
+  category lists (see `config/config.exs`) — and a type with no entry is a
   **normal state, not an error**:
   `search/3` answers `{:ok, []}` and the typed/paste path stands, which is what
   makes the whole feature optional (research §4.1, "Discovery is never
@@ -27,7 +27,9 @@ defmodule Consensus.Discovery do
   3 before return (the brief: never more than 3 suggestion rows), and cached
   in `Consensus.Discovery.Cache` per the adapter's `cache_policy/0` — a
   `ttl_ms: :none` policy bypasses the cache entirely, and errors are cached on
-  the policy's separate (shorter) error TTL.
+  the policy's separate (shorter) error TTL, except `{:error, :busy}`: an
+  adapter that refused to send anything (its rate gate was full) has no answer
+  worth remembering.
 
   Like `Consensus.LinkPreview.fetch/1`, `search/3` and
   `Consensus.Discovery.Geocoder.geocode/1` make network requests with
@@ -177,7 +179,15 @@ defmodule Consensus.Discovery do
 
           :miss ->
             result = do_search(module, provider_opts, query, area)
-            Cache.put(cache_key, result, ttl_ms: ttl_ms, error_ttl_ms: error_ttl_ms)
+
+            # `:busy` is a provider declining to ask upstream at all (a local
+            # rate gate — see Consensus.Discovery.Nominatim). There is no
+            # answer to remember, and caching the refusal would silence the
+            # same lookup for the whole error TTL after the gate frees up.
+            unless result == {:error, :busy} do
+              Cache.put(cache_key, result, ttl_ms: ttl_ms, error_ttl_ms: error_ttl_ms)
+            end
+
             {result, :miss}
         end
 

@@ -5,7 +5,7 @@ defmodule Consensus.Discovery.GeocoderTest do
 
   alias Consensus.Discovery.Area
   alias Consensus.Discovery.Geocoder
-  alias Consensus.GeocoderHTTPStub, as: StubHTTP
+  alias Consensus.NominatimHTTPStub, as: StubHTTP
 
   # safe_lookup logs a double's raise at :error before degrading it to a tuple.
   @moduletag :capture_log
@@ -126,7 +126,7 @@ defmodule Consensus.Discovery.GeocoderTest do
   end
 
   describe "geocode/1 — the request itself" do
-    test "hits Nominatim's search endpoint with q, format=jsonv2, limit=1 and a User-Agent" do
+    test "hits Nominatim's search endpoint with q, format=jsonv2, limit=1, countrycodes and a User-Agent" do
       test_pid = self()
 
       StubHTTP.stub(fn url, opts ->
@@ -145,7 +145,9 @@ defmodule Consensus.Discovery.GeocoderTest do
       assert URI.decode_query(uri.query) == %{
                "q" => "Fishtown, Philadelphia",
                "format" => "jsonv2",
-               "limit" => "1"
+               "limit" => "1",
+               # config.exs's default — a bare ZIP is otherwise a global question.
+               "countrycodes" => "us"
              }
 
       # Nominatim's usage policy requires an identifying User-Agent.
@@ -153,6 +155,23 @@ defmodule Consensus.Discovery.GeocoderTest do
                List.keyfind(Keyword.fetch!(opts, :headers), "user-agent", 0)
 
       assert user_agent =~ "Consensus"
+    end
+
+    test "countrycodes follows config, and nil sends no restriction at all" do
+      original = Application.get_env(:consensus, Geocoder)
+      on_exit(fn -> Application.put_env(:consensus, Geocoder, original) end)
+
+      Application.put_env(:consensus, Geocoder, Keyword.put(original, :countrycodes, "us,ca"))
+
+      assert URI.decode_query(URI.parse(Geocoder.request_url("19125")).query)["countrycodes"] ==
+               "us,ca"
+
+      Application.put_env(:consensus, Geocoder, Keyword.put(original, :countrycodes, nil))
+
+      refute Map.has_key?(
+               URI.decode_query(URI.parse(Geocoder.request_url("19125")).query),
+               "countrycodes"
+             )
     end
   end
 
@@ -200,6 +219,39 @@ defmodule Consensus.Discovery.GeocoderTest do
 
       assert Geocoder.geocode("Fishtown") == {:error, :geocode_failed}
       refute_receive {:requested, _url}
+    end
+
+    test "a gate refusal is never cached — nothing was asked, so the next submit really tries" do
+      test_pid = self()
+
+      StubHTTP.stub(fn url, _opts ->
+        send(test_pid, {:requested, url})
+        {:ok, %{status: 200, body: Jason.encode!([fishtown_place()])}}
+      end)
+
+      # Hold the app-wide gate's slot far enough out that the next reservation
+      # must be refused, by swapping in a gate with a huge interval.
+      gate = Consensus.Discovery.Nominatim.Gate
+      :ok = Supervisor.terminate_child(Consensus.Supervisor, gate)
+
+      on_exit(fn ->
+        _ = Supervisor.terminate_child(Consensus.Supervisor, gate)
+        {:ok, _} = Supervisor.restart_child(Consensus.Supervisor, gate)
+      end)
+
+      {:ok, _pid} = gate.start_link(interval_ms: :timer.minutes(10))
+      assert {:ok, 0} = gate.reserve(0)
+
+      assert Geocoder.geocode("Fishtown") == {:error, :geocode_failed}
+      refute_receive {:requested, _url}
+
+      # Free the slot: the same lookup now reaches the network, which it could
+      # not if the refusal had been cached.
+      GenServer.stop(gate)
+      {:ok, _} = Supervisor.restart_child(Consensus.Supervisor, gate)
+
+      assert {:ok, %Area{}} = Geocoder.geocode("Fishtown")
+      assert_receive {:requested, _url}
     end
   end
 end

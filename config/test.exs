@@ -51,15 +51,17 @@ config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreviewStub
 config :consensus, Consensus.Discovery,
   providers: %{"restaurant" => {Consensus.DiscoveryStub, []}}
 
-# Consensus.Discovery.Geocoder never touches the network in test either; the double
-# lives in test/support/geocoder_http_stub.ex, same $callers idiom.
-config :consensus, Consensus.Discovery.Geocoder, http: Consensus.GeocoderHTTPStub
+# Nominatim never answers the suite: both of its callers (the geocoder and the POI
+# provider) share one client, and its HTTP seam is the double in
+# test/support/nominatim_http_stub.ex, same $callers idiom. Note the providers map
+# above already replaced the prod registry wholesale (Config does not deep-merge
+# maps), so nothing in the suite reaches the live provider by accident.
+config :consensus, Consensus.Discovery.Nominatim, http: Consensus.NominatimHTTPStub
 
-# Neither does the Overpass adapter: its tests feed it canned Overpass JSON through
-# this double (test/support/overpass_http_stub.ex, same $callers idiom). Note the
-# providers map above already replaced the prod registry wholesale (Config does not
-# deep-merge maps), so nothing in the suite reaches the live adapter by accident.
-config :consensus, Consensus.Discovery.Provider.Overpass, http: Consensus.OverpassHTTPStub
+# The app-wide one-request-per-second gate in front of that client would make every
+# test that geocodes or searches sleep a second; the suite runs it with no interval.
+# test/consensus/discovery/nominatim/gate_test.exs starts its own instance with one.
+config :consensus, Consensus.Discovery.Nominatim.Gate, interval_ms: 0
 
 # The tie takeover's "Let the app break the tie" shuffle runs the design's clock in
 # dev/prod (a 110ms step landing at ~1.9s — `ConsensusWeb.Endgame.Tie`); the suite

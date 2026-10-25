@@ -255,12 +255,12 @@ defmodule Consensus.LinkPreview do
   # security decision, and the fetcher will fail on it naturally (as
   # `:fetch_failed`) without this guard pretending to know why.
   #
-  # Public (`@doc false`) since the Overpass adapter landed, per
+  # Public (`@doc false`) since the first Discovery adapter landed (D-052), per
   # docs/research/activity-discovery.md trap J: a URL that comes *back* from a
   # provider is attacker-influenceable input, and every Discovery adapter must run
   # it through this same check before it enters a `Result` — one SSRF allowlist,
   # never two that drift. Behaviour for this module's own callers is unchanged;
-  # `test/consensus/discovery/provider/overpass_test.exs` pins the export so a
+  # `test/consensus/discovery/provider/nominatim_test.exs` pins the export so a
   # tidy-up cannot silently re-privatise it and un-guard every adapter.
   @doc false
   @spec check_host(String.t()) :: :ok | {:error, :blocked_host}

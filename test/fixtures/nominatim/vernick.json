@@ -1,0 +1,84 @@
+[
+  {
+    "place_id": 344959665,
+    "osm_type": "node",
+    "osm_id": 6376952525,
+    "lat": "39.9508060",
+    "lon": "-75.1748920",
+    "category": "amenity",
+    "type": "restaurant",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Vernick Food & Drink",
+    "display_name": "Vernick Food & Drink, 2031, Walnut Street, Fitler Square, Center City, Philadelphia, Philadelphia County, Pennsylvania, 19103, United States",
+    "address": {
+      "amenity": "Vernick Food & Drink",
+      "house_number": "2031",
+      "road": "Walnut Street",
+      "neighbourhood": "Fitler Square",
+      "suburb": "Center City",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19103",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "phone": "+1-267-639-6644",
+      "cuisine": "american",
+      "website": "https://www.vernickphilly.com/",
+      "opening_hours": "Tu-Fr 13:00-21:00; Sa 11:00-21:00"
+    },
+    "boundingbox": [
+      "39.9507560",
+      "39.9508560",
+      "-75.1749420",
+      "-75.1748420"
+    ]
+  },
+  {
+    "place_id": 344605216,
+    "osm_type": "node",
+    "osm_id": 9385011517,
+    "lat": "39.9547700",
+    "lon": "-75.1701480",
+    "category": "amenity",
+    "type": "cafe",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Vernick Coffee Bar",
+    "display_name": "Vernick Coffee Bar, 1800, Arch Street, Logan Square, Center City, Philadelphia, Philadelphia County, Pennsylvania, 19103, United States",
+    "address": {
+      "amenity": "Vernick Coffee Bar",
+      "house_number": "1800",
+      "road": "Arch Street",
+      "neighbourhood": "Logan Square",
+      "suburb": "Center City",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19103",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "phone": "+1-215-419-5052",
+      "cuisine": "coffee_shop",
+      "website": "https://www.vernickcoffeebar.com",
+      "check_date": "2026-10-20",
+      "description": "located in the Comcast Technology Center, 2nd floor lobby; building entrance on 18th between JFK & Arch streets",
+      "opening_hours": "Mo-Fr 07:30-16:00"
+    },
+    "boundingbox": [
+      "39.9547200",
+      "39.9548200",
+      "-75.1701980",
+      "-75.1700980"
+    ]
+  }
+]

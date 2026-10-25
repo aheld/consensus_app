@@ -67,6 +67,12 @@ defmodule Consensus.Application do
       # results cannot boot. Same start-range constraint as the child above;
       # test/consensus/application_test.exs asserts it.
       Consensus.Discovery.Cache,
+      # The app-wide one-request-per-second slot in front of Nominatim, shared by the
+      # geocoder and the POI provider (its usage policy is per application, not per
+      # module). Holds one integer and does no work of its own — not a scheduler
+      # (D-029). Directly after the Discovery cache, before the endpoint;
+      # test/consensus/application_test.exs asserts the position.
+      Consensus.Discovery.Nominatim.Gate,
       # Start to serve requests, typically the last entry
       ConsensusWeb.Endpoint
     ]

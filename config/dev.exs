@@ -74,8 +74,8 @@ config :consensus, ConsensusWeb.Endpoint,
 # scripted_provider.ex — its moduledoc documents the QUERY VOCABULARY: which typed
 # name produces one match, three matches, no match, an error, a timeout, or a
 # multi-second SLOW answer) so browser and pixel work never depends on the public
-# Overpass instance. Same registry shape as prod, different data — invariant 12
-# holds either way. Start dev with ASSIST_LIVE=1 to swap the real Overpass adapter
+# Nominatim instance. Same registry shape as prod, different data — invariant 12
+# holds either way. Start dev with ASSIST_LIVE=1 to swap the real Nominatim adapter
 # back in (config/runtime.exs).
 config :consensus, Consensus.Discovery,
   providers: %{"restaurant" => {Consensus.Dev.ScriptedProvider, []}}

@@ -1,0 +1,43 @@
+[
+  {
+    "place_id": 345598005,
+    "osm_type": "node",
+    "osm_id": 6374481270,
+    "lat": "39.9463060",
+    "lon": "-75.1451870",
+    "category": "amenity",
+    "type": "restaurant",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Zahav",
+    "display_name": "Zahav, 237, Saint James Place, Society Hill Towers, Center City, Philadelphia, Philadelphia County, Pennsylvania, 19106, United States",
+    "address": {
+      "amenity": "Zahav",
+      "house_number": "237",
+      "road": "Saint James Place",
+      "residential": "Society Hill Towers",
+      "suburb": "Center City",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19106",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "email": "info@zahavrestaurant.com",
+      "phone": "+1-215-625-8800",
+      "cuisine": "israeli",
+      "website": "https://www.zahavrestaurant.com/",
+      "opening_hours": "Su-Th 17:00-22:00; Fr-Sa 17:00-23:00"
+    },
+    "boundingbox": [
+      "39.9462560",
+      "39.9463560",
+      "-75.1452370",
+      "-75.1451370"
+    ]
+  }
+]

@@ -1,0 +1,174 @@
+[
+  {
+    "place_id": 344452193,
+    "osm_type": "way",
+    "osm_id": 1253791238,
+    "lat": "39.9642256",
+    "lon": "-75.1490851",
+    "category": "amenity",
+    "type": "restaurant",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Federal Donuts",
+    "display_name": "Federal Donuts, 701, North 7th Street, Ludlow, North Philadelphia, Philadelphia, Philadelphia County, Pennsylvania, 19123, United States",
+    "address": {
+      "amenity": "Federal Donuts",
+      "house_number": "701",
+      "road": "North 7th Street",
+      "neighbourhood": "Ludlow",
+      "suburb": "North Philadelphia",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19123",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "height": "5.18",
+      "cuisine": "new american;donut;fried_chicken",
+      "building": "yes",
+      "delivery": "no",
+      "takeaway": "yes",
+      "opening_hours": "Mo-Su 07:00-19:00",
+      "outdoor_seating": "yes"
+    },
+    "boundingbox": [
+      "39.9641677",
+      "39.9642817",
+      "-75.1492293",
+      "-75.1489408"
+    ]
+  },
+  {
+    "place_id": 344479268,
+    "osm_type": "node",
+    "osm_id": 10722831983,
+    "lat": "39.9562399",
+    "lon": "-75.1691479",
+    "category": "amenity",
+    "type": "fast_food",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Federal Donuts",
+    "display_name": "Federal Donuts, 1776, Benjamin Franklin Parkway, Logan Square, Center City, Philadelphia, Philadelphia County, Pennsylvania, 19103, United States",
+    "address": {
+      "amenity": "Federal Donuts",
+      "house_number": "1776",
+      "road": "Benjamin Franklin Parkway",
+      "neighbourhood": "Logan Square",
+      "suburb": "Center City",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19103",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "phone": "+1-215-560-8112",
+      "cuisine": "donut;chicken",
+      "website": "https://www.federaldonuts.com/",
+      "payment:cash": "yes",
+      "drive_through": "no",
+      "opening_hours": "07:00-20:00",
+      "outdoor_seating": "yes",
+      "payment:contactless": "yes",
+      "payment:debit_cards": "yes",
+      "payment:credit_cards": "yes"
+    },
+    "boundingbox": [
+      "39.9561899",
+      "39.9562899",
+      "-75.1691979",
+      "-75.1690979"
+    ]
+  },
+  {
+    "place_id": 344400087,
+    "osm_type": "node",
+    "osm_id": 5976183421,
+    "lat": "39.9629821",
+    "lon": "-75.1742083",
+    "category": "amenity",
+    "type": "restaurant",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Federal Donuts",
+    "display_name": "Federal Donuts, 2101, Pennsylvania Avenue, Spring Garden, North Philadelphia, Philadelphia, Philadelphia County, Pennsylvania, 19130, United States",
+    "address": {
+      "amenity": "Federal Donuts",
+      "house_number": "2101",
+      "road": "Pennsylvania Avenue",
+      "neighbourhood": "Spring Garden",
+      "suburb": "North Philadelphia",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19130",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "cuisine": "fried_chicken;donut",
+      "takeaway": "yes",
+      "opening_hours": "Mo-Su 08:00-20:00",
+      "outdoor_seating": "no"
+    },
+    "boundingbox": [
+      "39.9629321",
+      "39.9630321",
+      "-75.1742583",
+      "-75.1741583"
+    ]
+  },
+  {
+    "place_id": 344481006,
+    "osm_type": "node",
+    "osm_id": 2709149666,
+    "lat": "39.9322408",
+    "lon": "-75.1475670",
+    "category": "amenity",
+    "type": "restaurant",
+    "place_rank": 30,
+    "importance": 8.138017853051068e-05,
+    "addresstype": "amenity",
+    "name": "Federal Donuts",
+    "display_name": "Federal Donuts, 1219, Federal Street, Pennsport, South Philadelphia, Philadelphia, Philadelphia County, Pennsylvania, 19147, United States",
+    "address": {
+      "amenity": "Federal Donuts",
+      "house_number": "1219",
+      "road": "Federal Street",
+      "neighbourhood": "Pennsport",
+      "suburb": "South Philadelphia",
+      "city": "Philadelphia",
+      "county": "Philadelphia County",
+      "state": "Pennsylvania",
+      "ISO3166-2-lvl4": "US-PA",
+      "postcode": "19147",
+      "country": "United States",
+      "country_code": "us"
+    },
+    "extratags": {
+      "phone": "+1 267 687 8258",
+      "cuisine": "donut;fried_chicken",
+      "smoking": "no",
+      "website": "https://federaldonuts.com/",
+      "takeaway": "yes",
+      "opening_hours": "Mo-Fr 07:00-15:00; Sa-Su 07:00-17:00",
+      "outdoor_seating": "no"
+    },
+    "boundingbox": [
+      "39.9321908",
+      "39.9322908",
+      "-75.1476170",
+      "-75.1475170"
+    ]
+  }
+]

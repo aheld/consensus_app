@@ -392,7 +392,7 @@ specified. (See [prd-technical-extracts.md](prd-technical-extracts.md) § From �
 commercial place API — Google, Yelp, Foursquare, Brave, Mapbox — is rejected **on its terms, not
 its price** (each forbids storing the fields the durable `activities` row is made of; see
 [research/activity-discovery.md](research/activity-discovery.md) §3), the provider is
-OpenStreetMap via Overpass with a local Overture extract as the destination, and the caching
+OpenStreetMap via Overpass (Nominatim since D-059) with a local Overture extract as the destination, and the caching
 question dissolves because the retention boundary is URL-only — what gets stored is a name, a
 URL, and what the venue's own page says, which no provider's terms can reach. The budget half
 also answers itself: $0 at any volume this product can reach, no key, no card on file. The
