@@ -147,7 +147,7 @@ defmodule ConsensusWeb.AdminLive.Users do
   # **The return trip is real now (D-045), and the flash may promise it again.** It could
   # not before: `user_return_to` was only ever written by `maybe_store_return_to/1`, a plug
   # on GET requests, and this navigation originates in a LiveView with no conn to write —
-  # so `UserAuth.log_in_user/3` fell through to `signed_in_path/1`, which for an
+  # so `UserAuth.log_in_user/4` fell through to `signed_in_path/1`, which for an
   # already-authenticated conn is `/users/settings`. The copy said "You will come back to
   # Admin → Users." and the app delivered Account settings. That was corrected once by
   # *removing* the promise; it is corrected properly here by building it, which is what

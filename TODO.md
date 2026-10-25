@@ -815,10 +815,12 @@ gh run list --workflow="Fly Deploy"
 ```
 
 **Stop there on purpose.** The creation-flow check above gets you to a working share link
-(`/groups/:id/share`); there is nothing on the other end of it yet. The recipient's join screen
-(`/join/:slug`), voting, ranking, tallying and the results screen are not built, so do not go
-looking for them on a fresh deploy — see the *What you can do in the app right now* section of
-[README.md](README.md) for the current line between built and not.
+(`/groups/:id/share`). ~~There is nothing on the other end of it yet~~ — that was true when this
+runbook was written; the recipient's join screen (`/join/:slug`), voting and live results have
+since shipped (D-034 onward), and since D-058 the wizard itself works with no account, so a
+private window can build and publish a session too. This runbook does not walk them; see the
+*What you can do in the app right now* section of [README.md](README.md) for the current line
+between built and not.
 
 ### The promotion test — the admin account can actually administer
 
@@ -962,7 +964,8 @@ The lever you actually have is **Delete**, on `/admin/users`. Deleting the accou
 email address and its username, so the person can simply register again. Session tokens go
 with the row and the deleted user's live sessions are disconnected. **This also destroys every
 activity group that person organized** — `activity_groups.organizer_id` cascades on delete, and
-each group's own activities cascade with it — so Delete is not a safe recovery lever for an
+each group's own activities, participants and votes cascade with it; that includes any session
+they claimed from a browser where they organized without an account (D-058) — so Delete is not a safe recovery lever for an
 organizer with a live or completed session; only use it for an account that has not built
 anything yet, or accept that its groups go with it. The guard rails: the button only appears for a
 non-admin who is not you, and `Consensus.Accounts.delete_user/2` refuses both cases

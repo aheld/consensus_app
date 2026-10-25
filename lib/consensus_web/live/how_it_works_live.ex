@@ -30,14 +30,14 @@ defmodule ConsensusWeb.HowItWorksLive do
   substitution is recorded in `docs/design/DESIGN-SPEC.md` under `00b` the way `00a`'s
   is, and in D-042.
 
-  ## The CTA has to know who is reading it
+  ## The CTA goes to the same place for everyone
 
-  Frame `00b`'s **Start something** links to `#1b`, the mockup's start page. A signed-in
-  organizer goes to `/groups/new`; a signed-out visitor cannot, because creating a
-  session needs an account. Sending them into a login wall with no warning is the "no way
-  back / unpredictable outcome" pair from the acceptance bar, so the button says where it
-  goes and a line beneath it says what it will ask for — and that voting itself never
-  needs one, which is the thing a reader of this page most needs to know.
+  Frame `00b`'s **Start something** links to `#1b`, the mockup's start page. Here it goes
+  to `/groups/new`, signed in or not: organizing needs no account (D-058), so there is no
+  login wall to warn about. It used to branch — a signed-out reader was sent to
+  `/users/register`, with a line beneath the button saying what that would ask for — and
+  both the branch and the line went when the wall did. A warning about a cost the app no
+  longer charges is the same false promise as the frame's three above.
   """
 
   use ConsensusWeb, :live_view
@@ -57,8 +57,7 @@ defmodule ConsensusWeb.HowItWorksLive do
   # single tangerine **Start something** dropped the reader onto `/groups/new`, whose only
   # two inputs are exactly the two things the page never named. A page describing a
   # four-step product and handing the reader an unannounced fifth screen is the
-  # "unpredictable outcome" failure, and it is the same standard the CTA's own sub-line
-  # already applies to accounts.
+  # "unpredictable outcome" failure.
   #
   # Every sentence here is checkable against the code: see the moduledoc for the three the
   # frame got wrong.
@@ -280,14 +279,10 @@ defmodule ConsensusWeb.HowItWorksLive do
             variant="primary"
             class="w-full"
             id="how-it-works-cta"
-            navigate={if @current_scope, do: ~p"/groups/new", else: ~p"/users/register"}
+            navigate={~p"/groups/new"}
           >
             Start something
           </.button>
-          <p :if={!@current_scope} class="text-center text-[11.5px] leading-[1.4] text-muted">
-            Starting one asks for an email, a username and a password. Voting in someone
-            else's never does.
-          </p>
         </div>
       </div>
     </Layouts.app>

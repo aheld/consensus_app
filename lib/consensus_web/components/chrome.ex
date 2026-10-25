@@ -20,7 +20,9 @@ defmodule ConsensusWeb.Chrome do
     * `:app` — this app's own screens, signed in or out. Back circle (when `back` is
       given), wordmark, context slot, and the `⋯` menu, whose contents adapt: a
       signed-in visitor gets their email, Admin (administrators only), Settings and Log
-      out; a signed-out one gets Log in and Start something (plan ruling 4). The auth
+      out; a signed-out one gets Log in, Sign up and Start something (plan ruling 4, split
+      in three by D-058 once organizing stopped needing an account); an organizer with no
+      account, on the wizard, gets Save your sessions and Log in (D-058). The auth
       screens are `:app` too — they are app screens a signed-out person is standing on,
       not marketing.
     * `:public` — the `/join` tree, reached from a shared link by someone who may have
@@ -67,12 +69,13 @@ defmodule ConsensusWeb.Chrome do
   confusion this chrome exists to remove, not a harmless no-op:
 
     * the `⋯` menu drops the entry pointing at the page you are standing on. **All of
-      them**: Log in on the log-in form, Start something on the register form, Settings on
-      Settings, Admin on `/admin/users`. The signed-in pair shipped without the guard and
-      the docs claimed it anyway;
-    * the whole `⋯` is dropped when it would open on a single entry. Signed out it holds
-      only Log in and Start something, so on either auth screen one survives — and that one
-      duplicates the form's own "Already have one? Log in" 40px below it;
+      them**: Log in on the log-in form, Sign up on the register form, Start something
+      anywhere under `/groups/`, Settings on Settings, Admin on `/admin/users`. The
+      signed-in pair shipped without the guard and the docs claimed it anyway;
+    * the whole `⋯` is dropped when it would open on a single entry (see
+      `menu_worth_opening?/2`). That used to remove it from both auth screens, when the
+      signed-out menu was two entries; since D-058 it is three, two survive on either
+      auth screen, and the menu stays;
     * the wordmark goes inert (see `wordmark_link?/1`) on any screen that has a `‹` at all,
       and on `/` itself. It is a link home only where there is no back control, which is
       where a home affordance earns its place;
@@ -492,6 +495,25 @@ defmodule ConsensusWeb.Chrome do
               Log out
             </.link>
           <% else %>
+            <%!-- The third state (D-058): an organizer with no account, which only the
+                  wizard's `live_session :organizer` ever hands this header. They already
+                  have sessions, so registering *saves* them rather than starting anything —
+                  hence the label — and "Start something" is dropped: on step 1 it would
+                  point at the page they are on, and anywhere later it would open a second
+                  draft mid-wizard. Log in comes second because it is the less likely door
+                  for someone who has never had an account here. --%>
+            <.link
+              :if={
+                anonymous_organizer?(@current_scope) and
+                  not on_path?(@current_path, ~p"/users/register")
+              }
+              id="chrome-menu-save-sessions"
+              navigate={~p"/users/register"}
+              data-confirm={@back_confirm}
+              class={menu_item_class()}
+            >
+              Save your sessions
+            </.link>
             <.link
               :if={not on_path?(@current_path, ~p"/users/log-in")}
               navigate={~p"/users/log-in"}
@@ -500,16 +522,37 @@ defmodule ConsensusWeb.Chrome do
             >
               Log in
             </.link>
+            <%!-- Signed out, with no organizer identity, the menu is three doors (D-058):
+                  Log in, Sign up and Start something. They used to be two, because "Start
+                  something" *was* `/users/register` — organizing cost an account, so the
+                  label and the registration screen were one destination under two names
+                  until D-047 §4 / D-048 settled on the one. Now organizing needs no account,
+                  so the two come apart again: Sign up is the account, Start something is
+                  the wizard, and each is dropped where it would point at the page you are
+                  on (Sign up on the register form, Start something anywhere under
+                  `/groups/`, where it would start a second draft). --%>
             <.link
-              :if={not on_path?(@current_path, ~p"/users/register")}
+              :if={
+                not anonymous_organizer?(@current_scope) and
+                  not on_path?(@current_path, ~p"/users/register")
+              }
+              id="chrome-menu-sign-up"
               navigate={~p"/users/register"}
               data-confirm={@back_confirm}
               class={menu_item_class()}
             >
-              <%!-- D-047 §4 renamed this destination's label to `Start something` on `/`,
-                    `/how-it-works` and `/privacy` and recorded it as "everywhere"; this
-                    entry was the one that did not move, so the app's front door and the
-                    menu one tap above it named the same registration screen two ways. --%>
+              Sign up
+            </.link>
+            <.link
+              :if={
+                not anonymous_organizer?(@current_scope) and
+                  not under_groups?(@current_path)
+              }
+              id="chrome-menu-start"
+              navigate={~p"/groups/new"}
+              data-confirm={@back_confirm}
+              class={menu_item_class()}
+            >
               Start something
             </.link>
           <% end %>
@@ -576,6 +619,13 @@ defmodule ConsensusWeb.Chrome do
 
   defp path_only(current_path), do: current_path |> String.split("?", parts: 2) |> hd()
 
+  # The organizer wizard and the organizer's results screen — everywhere "Start something"
+  # would either point at the page you are on or open a second draft.
+  defp under_groups?(nil), do: false
+
+  defp under_groups?(current_path) when is_binary(current_path),
+    do: current_path |> path_only() |> String.starts_with?("/groups/")
+
   # The wordmark is a link home only on a screen that has no back control at all — which is
   # where a "home" affordance actually earns its place. Four cases make it inert:
   #
@@ -594,17 +644,32 @@ defmodule ConsensusWeb.Chrome do
   defp wordmark_link?(%{back_patch: back_patch}) when is_binary(back_patch), do: false
   defp wordmark_link?(%{current_path: current_path}), do: not on_path?(current_path, "/")
 
-  # A `⋯` that opens to reveal a single link the body already carries 40px lower reads as
-  # broken. Signed in the menu always earns its place (the email line plus Log out are never
-  # suppressed); signed out it holds only Log in and Start something, so on either auth screen
-  # exactly one entry survives `on_path?` — and that one duplicates "Already have one? Log
-  # in" / "Don't have an account? Sign up" in the form below it.
+  # A `⋯` that opens to reveal a single link reads as broken. Signed in the menu always earns
+  # its place (the email line plus Log out are never suppressed). Signed out it is counted,
+  # mirroring the `:if`s in `header/1`: when it held only Log in and Start something (which
+  # was `/users/register`), each auth screen left exactly one entry, duplicating the form's
+  # own cross-link 40px below, and the whole menu was dropped there. Since D-058 split Sign
+  # up from Start something, an auth screen keeps two — the form's cross-link and a way to
+  # organize without the account the form is asking for — so the ⋯ renders there too. The
+  # rule did not change; the count did.
   defp menu_worth_opening?(scope, current_path) do
-    if signed_in?(scope) do
-      true
+    signed_in?(scope) or length(signed_out_entries(scope, current_path)) >= 2
+  end
+
+  defp signed_out_entries(scope, current_path) do
+    if anonymous_organizer?(scope) do
+      [
+        save_sessions: not on_path?(current_path, "/users/register"),
+        log_in: not on_path?(current_path, "/users/log-in")
+      ]
     else
-      not (on_path?(current_path, "/users/log-in") or on_path?(current_path, "/users/register"))
+      [
+        log_in: not on_path?(current_path, "/users/log-in"),
+        sign_up: not on_path?(current_path, "/users/register"),
+        start_something: not under_groups?(current_path)
+      ]
     end
+    |> Enum.filter(fn {_entry, shown?} -> shown? end)
   end
 
   # `/users/log-in` renders for a *signed-in* visitor in exactly one situation: a sudo
@@ -625,6 +690,11 @@ defmodule ConsensusWeb.Chrome do
 
   defp signed_in?(%{user: user}) when not is_nil(user), do: true
   defp signed_in?(_scope), do: false
+
+  # An organizer with no account (D-058). Matched on the shape rather than asked of
+  # `Scope`, like `signed_in?/1` beside it: a display predicate, never the authorization.
+  defp anonymous_organizer?(%Scope{user: nil, anonymous_organizer: %{}}), do: true
+  defp anonymous_organizer?(_scope), do: false
 
   defp menu_label(scope) do
     if signed_in?(scope), do: "Account menu for #{scope.user.username}", else: "Menu"

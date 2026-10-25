@@ -84,11 +84,11 @@ defmodule ConsensusWeb.JoinLive.Results do
 
   use ConsensusWeb, :live_view
 
-  alias Consensus.Accounts
   alias Consensus.Activities
   alias Consensus.Deadlines
   alias Consensus.Voting
   alias ConsensusWeb.Endgame
+  alias ConsensusWeb.OrganizerLabel
 
   import ConsensusWeb.EndgameComponents, only: [takeover: 2]
   import ConsensusWeb.ResultsComponents
@@ -104,7 +104,11 @@ defmodule ConsensusWeb.JoinLive.Results do
       Process.send_after(self(), :tick, @tick_interval)
     end
 
-    organizer = Accounts.get_user!(group.organizer_id)
+    # Nil-or-name, from the owner `get_group_by_slug/1` already preloaded — a group may
+    # be owned by an accountless organizer with no `organizer_id` at all (D-058), so
+    # there is no user to fetch. Every sentence below picks its own casing for the
+    # nameless case through `OrganizerLabel`; nothing here pre-defaults it.
+    organizer_name = Activities.organizer_custom_name(group)
 
     {:ok,
      socket
@@ -117,11 +121,12 @@ defmodule ConsensusWeb.JoinLive.Results do
      |> assign(:og_title, "#{group.title} · results")
      |> assign(
        :og_description,
-       "#{organizer.username} called this vote on Consensus. Open the link to see where it landed."
+       "#{OrganizerLabel.label(organizer_name, :start)} called this vote on Consensus. " <>
+         "Open the link to see where it landed."
      )
      |> assign(:now, DateTime.utc_now())
      |> assign(:slug, slug)
-     |> assign(:organizer_username, organizer.username)
+     |> assign(:organizer_username, organizer_name)
      # Did *this* mount arrive while the vote was still open? Set once and never cleared:
      # the LiveView re-renders in place when the deadline passes, so a reader who was
      # sitting here watching the countdown must not be told they arrived too late. See
@@ -180,17 +185,22 @@ defmodule ConsensusWeb.JoinLive.Results do
         socket
 
       %{status: :draft} ->
+        organizer = OrganizerLabel.label(socket.assigns.organizer_username, :start)
+
         socket
         |> put_flash(
           :info,
-          "#{socket.assigns.organizer_username} reopened the option pool, so voting is " <>
-            "paused. Keep your link — it works again the moment round 2 is published."
+          "#{organizer} reopened the option pool, so voting is paused. " <>
+            "Keep your link — it works again the moment round 2 is published."
         )
         |> push_navigate(to: ~p"/")
 
       group ->
         socket
         |> assign(:group, group)
+        # A claim (D-058) moves an anonymous-owned group to an account mid-vote, and the
+        # name guests read changes with it; the owner is preloaded, so this costs nothing.
+        |> assign(:organizer_username, Activities.organizer_custom_name(group))
         |> refresh_participant()
         |> load_tally()
     end
@@ -319,6 +329,11 @@ defmodule ConsensusWeb.JoinLive.Results do
         )
       )
       |> assign(:closes_at, closes_at_text(assigns.group, assigns.now, assigns.clock))
+      # The footer's copy names the organizer at a sentence start ("X called it off") or
+      # mid-sentence ("not even for x"); the nameless fallback is cased per position, so
+      # both are derived here from the one nil-or-name assign (D-058, plan §5.2).
+      |> assign(:organizer_start, OrganizerLabel.label(assigns.organizer_username, :start))
+      |> assign(:organizer_mid, OrganizerLabel.label(assigns.organizer_username, :mid))
 
     ~H"""
     <%!-- `:public` — this is still the `/join` tree, reached by someone who may have no
@@ -428,7 +443,7 @@ defmodule ConsensusWeb.JoinLive.Results do
                   close time and set a voter up to find the session over three hours early,
                   which is the same class of surprise this screen exists to remove. --%>
             <p :if={@closes_at} class="mt-1">
-              {@closes_at}, and the winner is picked then without anyone pressing anything. {@organizer_username} can also close it early.
+              {@closes_at}, and the winner is picked then without anyone pressing anything. {@organizer_start} can also close it early.
             </p>
           </div>
 
@@ -474,7 +489,7 @@ defmodule ConsensusWeb.JoinLive.Results do
             <p class="text-[13px] font-bold text-ink">Voting closed before your votes went in.</p>
             <p class="mt-1">
               You opened the ballot but never sent it, so nothing of yours is counted below.
-              There is no way to add a vote to a session that has finished — not even for {@organizer_username}.
+              There is no way to add a vote to a session that has finished — not even for {@organizer_mid}.
             </p>
           </div>
 
@@ -499,12 +514,12 @@ defmodule ConsensusWeb.JoinLive.Results do
                   organizer's own half of this screen. --%>
             <p class="mt-1">
               <%= if closed_early?(@group) do %>
-                {@organizer_username} closed it while you were on this page, so this is the
+                {@organizer_start} closed it while you were on this page, so this is the
                 final result.
               <% else %>
                 The deadline passed while you were on this page, so this is the final result.
               <% end %>
-              There is no way to add a vote to a session that has finished — not even for {@organizer_username}.
+              There is no way to add a vote to a session that has finished — not even for {@organizer_mid}.
             </p>
           </div>
 
@@ -520,7 +535,7 @@ defmodule ConsensusWeb.JoinLive.Results do
             <p class="text-[13px] font-bold text-ink">Voting closed before you got here.</p>
             <p class="mt-1">
               This is the final result. There is no way to add a vote to a session that has
-              finished — not even for {@organizer_username}.
+              finished — not even for {@organizer_mid}.
             </p>
           </div>
 
@@ -531,7 +546,7 @@ defmodule ConsensusWeb.JoinLive.Results do
           >
             <p class="text-[13px] font-bold text-ink">This session was cancelled.</p>
             <p class="mt-1">
-              {@organizer_username} called it off, so no winner was picked. If that was a
+              {@organizer_start} called it off, so no winner was picked. If that was a
               mistake, they can start a new one — this session cannot be reopened.
             </p>
           </div>

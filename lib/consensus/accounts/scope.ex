@@ -14,11 +14,26 @@ defmodule Consensus.Accounts.Scope do
 
   Feel free to extend the fields on this struct to fit the needs of
   growing application requirements.
+
+  ## Two kinds of caller (D-058)
+
+  A scope carries a signed-in `:user`, **or** an `:anonymous_organizer` — an organizer
+  with no account, resolved from a token in their own browser cookie. Never both: a
+  `defstruct` cannot make the two fields exclusive, so `Consensus.Activities` enforces
+  it in its function heads instead (every user head pins `anonymous_organizer: nil`,
+  every anonymous head pins `user: nil`), and a scope with both set matches neither
+  and raises. Build scopes with `for_user/1` and `for_anonymous_organizer/1`, never by
+  hand.
+
+  Outside the organizer wizard's `live_session`, `@current_scope` is still only ever
+  `nil` or a user scope — two dozen templates read its truthiness as "signed in". Code
+  that genuinely needs that question answered asks `authenticated?/1`.
   """
 
   alias Consensus.Accounts.User
+  alias Consensus.Activities.AnonymousOrganizer
 
-  defstruct user: nil
+  defstruct user: nil, anonymous_organizer: nil
 
   @doc """
   Creates a scope for the given user.
@@ -30,6 +45,29 @@ defmodule Consensus.Accounts.Scope do
   end
 
   def for_user(nil), do: nil
+
+  @doc """
+  Creates a scope for an organizer with no account (D-058).
+
+  The organizer must be a persisted row — an integer `id` — because ownership is
+  matched on that id, and an unsaved `id: nil` would otherwise equal the `nil`
+  `anonymous_organizer_id` of every user-owned group. Returns nil if no organizer is
+  given, mirroring `for_user/1`.
+  """
+  def for_anonymous_organizer(%AnonymousOrganizer{id: id} = organizer) when is_integer(id) do
+    %__MODULE__{anonymous_organizer: organizer}
+  end
+
+  def for_anonymous_organizer(nil), do: nil
+
+  @doc """
+  Returns true only when the scope belongs to a signed-in user.
+
+  An anonymous organizer's scope is **not** authenticated: it has no account, no
+  settings page and nothing to log out of. Safe to call with `nil`.
+  """
+  def authenticated?(%__MODULE__{user: %User{}}), do: true
+  def authenticated?(_scope), do: false
 
   @doc """
   Returns true when the scope belongs to a signed-in administrator.

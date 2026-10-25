@@ -1018,10 +1018,6 @@ defmodule ConsensusWeb.GroupLive.Options do
     end)
   end
 
-  defp added_by_you_count(%Group{activities: activities}, current_scope) do
-    Enum.count(activities, &(&1.added_by_id == current_scope.user.id))
-  end
-
   ## Assist rendering helpers (frame t5). All read the socket assigns handed to
   ## `render/1`, so a stream re-insert re-evaluates them against current state.
 
@@ -1754,9 +1750,15 @@ defmodule ConsensusWeb.GroupLive.Options do
           <%!-- "N yours", not "N added by you" — both the original 02 frame
                 ("2 yours · 1 from friends") and t5 ("3 yours") word it this way; the
                 longer copy was an app deviation. The "· N from friends" half stays
-                unbuilt: co-creation is Post-MVP sample garnish (frame-review §e-4). --%>
+                unbuilt: co-creation is Post-MVP sample garnish (frame-review §e-4).
+
+                "Yours" is therefore every option in the pool: only the organizer can add
+                one until co-creation exists. It used to count `added_by_id ==
+                @current_scope.user.id`, which crashed step 02 for an organizer with no
+                account (D-058) — `added_by_id` references `users` and an anonymous
+                organizer's options carry `nil` there, so there is nothing to compare. --%>
           <span class="text-[11px] text-muted">
-            {added_by_you_count(@group, @current_scope)} yours
+            {length(@group.activities)} yours
           </span>
         </div>
         <button

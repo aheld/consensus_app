@@ -28,6 +28,7 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
                live(conn, ~p"/groups/#{group}/results")
 
       assert flash["error"] =~ "isn't yours, or it no longer exists"
+      assert flash["error"] =~ "Here is everything you organize."
       refute flash["error"] =~ group.title
     end
 
@@ -576,5 +577,135 @@ defmodule ConsensusWeb.GroupLive.ResultsTest do
       assert html =~ "https://example.com/booking"
       assert html =~ "copy-summary"
     end
+  end
+
+  # D-058: an organizer with no account reaches `05 results` through the organizer
+  # cookie. The screen used to hand `current_scope.user.username` to the panel and
+  # crashed on mount for such an organizer; the name now comes off the group.
+  describe "a group owned by an organizer with no account" do
+    # The module-wide `conn` stays the signed-in user's, for the cross-owner case.
+    setup do
+      %{conn: conn, scope: scope} =
+        create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+
+      %{anon_conn: conn, anon_scope: scope}
+    end
+
+    test "renders an open group", %{anon_conn: conn, anon_scope: scope} do
+      {group, [a, _b]} = voting_group_fixture(scope, 2)
+
+      {:ok, _lv, html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert html =~ group.title
+      assert html =~ "Running tally"
+      assert html =~ a.name
+      assert html =~ "Close now"
+    end
+
+    test "a resolved tie names a display name as its tie-breaker",
+         %{anon_conn: conn, anon_scope: scope} do
+      {:ok, _organizer} =
+        Activities.update_organizer_display_name(scope, %{display_name: "Priya"})
+
+      %{group: group, b: b} = resolved_tie(scope)
+
+      {:ok, lv, html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert html =~ "Priya picked #{b.name} to break the tie"
+
+      assert has_element?(
+               lv,
+               ~s(#copy-summary[data-copy*="Priya picked #{b.name} to break the tie."])
+             )
+    end
+
+    # The name is passed down nil, never pre-defaulted, so the component's own fallback
+    # is what cases it — "The organizer picked", at the start of the sentence.
+    test "a resolved tie with no name falls back to \"The organizer\"",
+         %{anon_conn: conn, anon_scope: scope} do
+      %{group: group, b: b} = resolved_tie(scope)
+
+      {:ok, lv, html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert html =~ "The organizer picked #{b.name} to break the tie"
+
+      assert has_element?(
+               lv,
+               ~s(#copy-summary[data-copy*="The organizer picked #{b.name} to break the tie."])
+             )
+    end
+
+    test "a different organizer with no account is refused, without the promise about `/`",
+         %{anon_scope: scope} do
+      {group, _activities} = voting_group_fixture(scope, 2)
+
+      %{conn: stranger_conn} = create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+
+      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+               live(stranger_conn, ~p"/groups/#{group}/results")
+
+      assert flash["error"] == "That session isn't yours, or it no longer exists."
+      refute flash["error"] =~ group.title
+    end
+
+    test "a signed-in user is refused it too", %{conn: conn, anon_scope: scope} do
+      {group, _activities} = voting_group_fixture(scope, 2)
+
+      assert {:error, {:live_redirect, %{to: "/", flash: flash}}} =
+               live(conn, ~p"/groups/#{group}/results")
+
+      assert flash["error"] =~ "isn't yours, or it no longer exists"
+    end
+
+    # Plan §7.1's quiet one-liner: 04 carried the full warning, 05 just reminds.
+    test "carries the one-line save prompt", %{anon_conn: conn, anon_scope: scope} do
+      {group, _activities} = voting_group_fixture(scope, 2)
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert text_of(lv, "#results-save-prompt") == "Only in this browser — save these"
+      assert has_element?(lv, ~s(#results-save-register[href="/users/register"]), "save these")
+    end
+
+    # Outside the panel, so a takeover — the case only this browser can settle — keeps it.
+    test "keeps the save prompt under a tie takeover", %{anon_conn: conn, anon_scope: scope} do
+      {group, [a, b, _c]} = voting_group_fixture(scope, 3)
+      {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+      {:ok, group} = Activities.complete_group(scope, group)
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/results")
+
+      assert has_element?(lv, "#endgame-tie")
+      assert has_element?(lv, "#results-save-prompt")
+    end
+  end
+
+  describe "the save prompt for a signed-in organizer" do
+    test "is absent", %{conn: conn, scope: scope} do
+      {group, _activities} = voting_group_fixture(scope, 2)
+
+      {:ok, lv, html} = live(conn, ~p"/groups/#{group}/results")
+
+      refute has_element?(lv, "#results-save-prompt")
+      refute html =~ "Only in this browser"
+    end
+  end
+
+  defp text_of(lv, selector) do
+    lv
+    |> element(selector)
+    |> render()
+    |> LazyHTML.from_fragment()
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
+  end
+
+  defp resolved_tie(scope) do
+    {group, [a, b, _c]} = voting_group_fixture(scope, 3)
+    {:ok, _} = Voting.cast_ballot(participant_fixture(group), [a.id, b.id])
+    {:ok, group} = Activities.complete_group(scope, group)
+    {:ok, group} = Activities.resolve_group(scope, group, b.id, "organizer_pick")
+    %{group: group, b: b}
   end
 end

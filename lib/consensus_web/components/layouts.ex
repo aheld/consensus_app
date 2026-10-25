@@ -50,7 +50,11 @@ defmodule ConsensusWeb.Layouts do
 
   attr :current_scope, :map,
     default: nil,
-    doc: "the current [scope](https://phoenix.hexdocs.pm/scopes.html)"
+    doc: """
+    the current [scope](https://phoenix.hexdocs.pm/scopes.html) — `nil` or a user's, except
+    inside the wizard, where it may be an anonymous organizer's (D-058); passed through to
+    `Chrome.header/1`, which picks the `⋯` menu's contents from it
+    """
 
   attr :width, :atom, values: [:phone, :wide], default: :phone
   attr :background, :string, default: "bg-surface", doc: "canvas behind the column"

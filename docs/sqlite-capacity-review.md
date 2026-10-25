@@ -202,7 +202,7 @@ Related, same reasoning: [mix.exs](../mix.exs) declares `{:ecto_sqlite3, ">= 0.0
 
 ### S5 — MEDIUM: two `Activities` writes crash instead of returning a tuple
 
-[lib/consensus/activities.ex](../lib/consensus/activities.ex) has two `Repo.transact/1` calls (`delete_activity/2` at line 347 and `reorder_activities/3` at 396) and **no `rescue`** anywhere in the file. `Consensus.Accounts` rescues `Exqlite.Error` on both admin writes; `Consensus.Voting` rescues both `Exqlite.Error` and `DBConnection.ConnectionError` on both voter entry points (D-034).
+[lib/consensus/activities.ex](../lib/consensus/activities.ex) has two `Repo.transact/1` calls (`delete_activity/2` at line 347 and `reorder_activities/3` at 396) and **no `rescue`** anywhere in the file. *(Amended 2026-10-24: D-058 added three rescues of `Exqlite.Error`/`DBConnection.ConnectionError` to the file — the anonymous organizer's `last_seen_at` touch, `claim_anonymous_groups/2` and the boot sweep — and the file now has more `Repo.transact/1` calls, so "no `rescue` anywhere" and the line numbers are history. `delete_activity/2` and `reorder_activities/3` themselves still do not rescue, so the finding below stands.)* `Consensus.Accounts` rescues `Exqlite.Error` on both admin writes; `Consensus.Voting` rescues both `Exqlite.Error` and `DBConnection.ConnectionError` on both voter entry points (D-034).
 
 So an organizer reordering their pool while the database is contended gets a crashed LiveView rather than a flash. D-034's consequences note this gap for `Accounts` and call widening "a reasonable follow-up"; the `Activities` pair is not mentioned anywhere and is the more reachable of the two, because reordering happens during the same wizard session in which a link-preview fetch and other writes are in flight. The `sqlite` skill already documents the gap — worth closing now that §1 shows how easily contention arises.
 
@@ -275,12 +275,12 @@ This is the honest ordering. **The operational constraints of one machine will r
 | `lib/consensus/repo.ex` | one line (`adapter: Ecto.Adapters.Postgres`) |
 | `mix.exs` / `mix.lock` | swap `ecto_sqlite3` for `postgrex` |
 | `config/{dev,test,runtime}.exs` | rewrite the repo blocks: hostname/username/password/database in place of `database:` path; drop `journal_mode`, `busy_timeout`, `default_transaction_mode` |
-| `priv/repo/migrations/` | the `home_page` pair uses literal SQLite DDL (`20260808040000` up, `20260808183755` down). Both concern a dropped table. Simplest path: collapse to a fresh initial migration, which F-1 already establishes is this project's stance (down migrations are not maintained, the answer to a bad migration is a fresh database) |
+| `priv/repo/migrations/` | the `home_page` pair uses literal SQLite DDL (`20260808040000` up, `20260808183755` down). Both concern a dropped table. *(Amended 2026-10-24: so does D-058's `20261024012242_accountless_organizers`, which rebuilds the live `activity_groups` table in literal SQLite DDL — a named CHECK, and reads and writes `sqlite_sequence` to carry the `AUTOINCREMENT` high-water mark — in both up and down.)* Simplest path: collapse to a fresh initial migration. ~~which F-1 already establishes is this project's stance (down migrations are not maintained, the answer to a bad migration is a fresh database)~~ — D-058 amended F-1: downs *are* maintained in practice, because `release_test.exs` and CI's boot-twice step execute them, so a collapse is a deliberate break with that, not a continuation of it |
 | `Consensus.BootCheck`, `Consensus.Release` preflight | delete or heavily rewrite — volume/WAL-set probing is meaningless against a network database |
 | `fly.toml`, `Dockerfile` | drop `[[mounts]]`, drop the `/data` `RUN`, add `DATABASE_URL` |
 | `test/test_helper.exs` `max_cases: 1` | can revert to the default; D-033's whole cause disappears |
 | `test/consensus/voting_concurrency_test.exs` | keep it, retune it — it stops being about a single write lock |
-| rescues for `Exqlite.Error` in `Accounts` and `Voting` | become `Postgrex.Error`; the `{:database_busy, _}` contract can stay |
+| rescues for `Exqlite.Error` in `Accounts`, `Voting` and (since D-058) `Activities`' claim, resolver touch and sweep, plus the organizer mint plug | become `Postgrex.Error`; the `{:database_busy, _}` contract can stay |
 | CI's `docker` job, D-009's no-`release_command` rule | reopens — with a network database, a Fly `release_command` becomes the *correct* place for migrations again |
 | docs | D-003, D-009, D-012, D-013, D-019, D-033, D-034 all need supersession entries; CLAUDE.md invariants 3, 4, 10, 15 all change |
 

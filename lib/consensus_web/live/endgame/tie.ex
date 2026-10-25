@@ -25,7 +25,15 @@ defmodule ConsensusWeb.Endgame.Tie do
   `role={:guest}` (from `ConsensusWeb.JoinLive.Results`) gets the same scene and the
   same list with **no tap affordance** — no dots, no state chip, no buttons — a
   waiting line naming the organizer as the only one who can break it, and the join
-  tree's standing `Create your own →` exit.
+  tree's standing `Create your own →` exit. `organizer_username` is nil-or-name
+  (`Consensus.Activities.organizer_custom_name/1`): an accountless organizer may have
+  given none, and both places it lands fall mid-sentence ("Only the organizer can…"),
+  so the fallback goes through `ConsensusWeb.OrganizerLabel` at `:mid` — never a
+  pre-defaulted string from the caller (D-058, plan §5.2). For an anonymous-owned group
+  the waiting line also drops "this page flips on its own the moment they do": the
+  organizer's only key is a cookie in one browser, which may be gone, so the line says
+  plainly that they have to come back to settle it (plan §7.5). The check reads
+  `anonymous_organizer_id`, the ownership column.
 
   ## The spin is server-driven state, not a client animation
 
@@ -57,6 +65,7 @@ defmodule ConsensusWeb.Endgame.Tie do
   use ConsensusWeb, :live_component
 
   alias Consensus.Activities
+  alias ConsensusWeb.OrganizerLabel
 
   import ConsensusWeb.EndgameComponents
 
@@ -261,8 +270,10 @@ defmodule ConsensusWeb.Endgame.Tie do
   # The design's three sublines, verbatim — plus the guest's, which swaps "Only you"
   # for the organizer's name, and a count that stays honest past two.
   defp subline(%{role: :guest} = assigns) do
+    organizer = OrganizerLabel.label(assigns.organizer_username, :mid)
+
     "Voting is closed and #{count_word(length(assigns.rows))} options finished on the " <>
-      "same score. Only #{assigns.organizer_username} can break it."
+      "same score. Only #{organizer} can break it."
   end
 
   defp subline(%{spinning?: false, selected_id: id, picked?: true}) when not is_nil(id) do
@@ -449,8 +460,13 @@ defmodule ConsensusWeb.Endgame.Tie do
           id="endgame-waiting"
           class="rounded-2xl border-2 border-ink-30 bg-white/65 p-3.5 text-[12.5px] leading-[1.45] text-ink-soft"
         >
-          Only {@organizer_username} can break this tie — they can pick one of the tied
-          options, or let the app decide. This page flips on its own the moment they do.
+          <%= if @group.anonymous_organizer_id do %>
+            Only {OrganizerLabel.label(@organizer_username, :mid)} can break this tie, from the browser they set it
+            up in. If they come back, this page updates on its own.
+          <% else %>
+            Only {OrganizerLabel.label(@organizer_username, :mid)} can break this tie — they can pick one of the tied
+            options, or let the app decide. This page flips on its own the moment they do.
+          <% end %>
         </p>
         <.button navigate={~p"/"} id="results-start-your-own" variant="primary" class="w-full">
           Create your own <span aria-hidden="true">→</span>

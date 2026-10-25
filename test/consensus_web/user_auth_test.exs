@@ -106,6 +106,211 @@ defmodule ConsensusWeb.UserAuthTest do
     end
   end
 
+  # D-058, plan §6. Every log-in claims what this browser organized with no account. The
+  # outcome table is §6.3's; the one rule over all of it is that the person is logged in
+  # whatever the claim answers.
+  describe "log_in_user/3 — claiming the browser's accountless sessions" do
+    import Consensus.ActivitiesFixtures
+
+    alias Consensus.Activities.{AnonymousOrganizer, Group}
+    alias Consensus.Repo
+    alias ConsensusWeb.OrganizerAuth
+
+    @organizer_cookie OrganizerAuth.cookie_name()
+
+    setup %{conn: conn} do
+      {raw_token, organizer} = anonymous_organizer_fixture()
+
+      %{
+        conn: conn |> fetch_flash() |> put_organizer_token(raw_token),
+        raw_token: raw_token,
+        organizer: organizer,
+        anonymous_scope: Scope.for_anonymous_organizer(organizer)
+      }
+    end
+
+    defp cookie_deleted?(conn), do: match?(%{max_age: 0}, conn.resp_cookies[@organizer_cookie])
+
+    test "moves the groups, deletes the cookie, says how many, and disconnects the tabs", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token,
+      anonymous_scope: anonymous_scope
+    } do
+      group = group_fixture(anonymous_scope)
+      topic = OrganizerAuth.live_socket_id(raw_token)
+      ConsensusWeb.Endpoint.subscribe(topic)
+
+      conn = UserAuth.log_in_user(conn, user)
+
+      assert get_session(conn, :user_token)
+
+      assert %Group{organizer_id: user_id, anonymous_organizer_id: nil} =
+               Repo.get!(Group, group.id)
+
+      assert user_id == user.id
+      assert cookie_deleted?(conn)
+      refute get_session(conn, "organizer_token")
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "1 session saved to your account."
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^topic}
+    end
+
+    test "counts in the plural, after whatever the controller already said", %{
+      conn: conn,
+      user: user,
+      anonymous_scope: anonymous_scope
+    } do
+      group_fixture(anonymous_scope)
+      group_fixture(anonymous_scope)
+
+      conn = conn |> put_flash(:info, "Welcome back!") |> UserAuth.log_in_user(user)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) ==
+               "Welcome back! 2 sessions saved to your account."
+    end
+
+    # The common case, not an edge: the identity is minted on `GET /groups/new` and owns
+    # nothing until step 1 is submitted. The claim still settles it, so a `/groups/new`
+    # tab open in this browser must be told to go — or it creates a group on a claimed
+    # identity nobody can ever reach.
+    test "an identity that owns nothing: cookie deleted, no flash, but tabs disconnected", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token
+    } do
+      topic = OrganizerAuth.live_socket_id(raw_token)
+      ConsensusWeb.Endpoint.subscribe(topic)
+
+      conn = UserAuth.log_in_user(conn, user)
+
+      assert get_session(conn, :user_token)
+      assert cookie_deleted?(conn)
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^topic}
+    end
+
+    test "claim: false skips the claim and leaves the cookie for a later log-in", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token,
+      organizer: organizer,
+      anonymous_scope: anonymous_scope
+    } do
+      group = group_fixture(anonymous_scope)
+      topic = OrganizerAuth.live_socket_id(raw_token)
+      ConsensusWeb.Endpoint.subscribe(topic)
+
+      conn = UserAuth.log_in_user(conn, user, %{}, claim: false)
+
+      assert get_session(conn, :user_token)
+      refute conn.resp_cookies[@organizer_cookie]
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+      assert Repo.get!(Group, group.id).anonymous_organizer_id == organizer.id
+      assert Repo.get!(AnonymousOrganizer, organizer.id).claimed_at == nil
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic}
+    end
+
+    test "claimed by another account: logged in, cookie deleted, nothing said or moved", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token,
+      anonymous_scope: anonymous_scope
+    } do
+      group = group_fixture(anonymous_scope)
+      other = user_fixture()
+      assert {:ok, 1} = Consensus.Activities.claim_anonymous_groups(other, raw_token)
+
+      conn = UserAuth.log_in_user(conn, user)
+
+      assert get_session(conn, :user_token)
+      assert cookie_deleted?(conn)
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+      assert Repo.get!(Group, group.id).organizer_id == other.id
+    end
+
+    test "an unknown token: logged in, cookie deleted, no flash", %{conn: conn, user: user} do
+      conn =
+        conn
+        |> put_organizer_token("not-a-token-anyone-minted")
+        |> UserAuth.log_in_user(user)
+
+      assert get_session(conn, :user_token)
+      assert cookie_deleted?(conn)
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+    end
+
+    # The same TEMP-trigger technique `activities_anonymous_test.exs` uses: SQLite's own
+    # busy message, raised as `Exqlite.Error`, without a mock. DDL — this file is
+    # `async: false` (no flag), so it shares the sandbox connection the conn runs on.
+    @tag :capture_log
+    test "a busy database: logged in, cookie KEPT so the next log-in retries", %{
+      conn: conn,
+      user: user,
+      organizer: organizer,
+      anonymous_scope: anonymous_scope
+    } do
+      group = group_fixture(anonymous_scope)
+
+      Repo.query!("""
+      CREATE TEMP TRIGGER d058_busy_login_claim BEFORE UPDATE ON anonymous_organizers
+      BEGIN SELECT RAISE(ABORT, 'database is locked'); END
+      """)
+
+      conn = UserAuth.log_in_user(conn, user)
+      Repo.query!("DROP TRIGGER d058_busy_login_claim")
+
+      assert get_session(conn, :user_token)
+      assert redirected_to(conn) == ~p"/"
+      refute conn.resp_cookies[@organizer_cookie]
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+      assert Repo.get!(Group, group.id).anonymous_organizer_id == organizer.id
+      assert Repo.get!(AnonymousOrganizer, organizer.id).claimed_at == nil
+    end
+
+    test "no organizer cookie: nothing to claim, nothing written", %{user: user} do
+      conn =
+        build_conn()
+        |> Map.replace!(:secret_key_base, ConsensusWeb.Endpoint.config(:secret_key_base))
+        |> init_test_session(%{})
+        |> fetch_flash()
+        |> UserAuth.log_in_user(user)
+
+      assert get_session(conn, :user_token)
+      refute conn.resp_cookies[@organizer_cookie]
+      refute Phoenix.Flash.get(conn.assigns.flash, :info)
+    end
+
+    # D-045's exception stays as narrow as D-045 wrote it: the organizer token is not
+    # carried through `renew_session/2` — it never was in the session to begin with.
+    test "the participant-key exception still holds, and carries no organizer token", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token
+    } do
+      conn =
+        conn
+        |> put_session("participant_token:42", "receipt")
+        |> put_session("organizer_token", raw_token)
+        |> UserAuth.log_in_user(user)
+
+      assert get_session(conn, "participant_token:42") == "receipt"
+      refute get_session(conn, "organizer_token")
+    end
+
+    test "log-out leaves the organizer cookie alone", %{conn: conn, user: user} do
+      user_token = Accounts.generate_user_session_token(user)
+
+      conn =
+        conn
+        |> put_session(:user_token, user_token)
+        |> put_session("participant_token:42", "receipt")
+        |> UserAuth.log_out_user()
+
+      refute conn.resp_cookies[@organizer_cookie]
+      assert get_session(conn, "participant_token:42") == "receipt"
+    end
+  end
+
   describe "logout_user/1" do
     test "erases session and cookies", %{conn: conn, user: user} do
       user_token = Accounts.generate_user_session_token(user)

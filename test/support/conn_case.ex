@@ -57,6 +57,42 @@ defmodule ConsensusWeb.ConnCase do
   end
 
   @doc """
+  Setup helper that gives the conn an organizer with no account (D-058).
+
+      setup :create_anonymous_organizer
+
+  The accountless twin of `register_and_log_in_user/1`: mints an identity through the
+  real write path and puts its token on the conn the way a browser would carry it. It
+  stores `:conn`, `:anonymous_organizer`, the raw `:organizer_token` and the anonymous
+  `:scope` in the test context.
+  """
+  def create_anonymous_organizer(%{conn: conn}) do
+    {raw_token, organizer} = Consensus.ActivitiesFixtures.anonymous_organizer_fixture()
+
+    %{
+      conn: put_organizer_token(conn, raw_token),
+      anonymous_organizer: organizer,
+      organizer_token: raw_token,
+      scope: Consensus.Accounts.Scope.for_anonymous_organizer(organizer)
+    }
+  end
+
+  @doc """
+  Puts an organizer token on the `conn` as the signed cookie a browser would send.
+
+  A request cookie rather than a session key, because that is what a real browser
+  carries: `ConsensusWeb.OrganizerAuth.fetch_organizer_token/2` verifies it and mirrors
+  it into the session on the dead render, and the connected mount then reads it from
+  the session like any other LiveView — so both halves of `live/2` see the identity.
+  Signed with the endpoint's own secret, so a tampered value is still refused.
+  """
+  def put_organizer_token(conn, raw_token) do
+    conn
+    |> Map.put(:secret_key_base, ConsensusWeb.Endpoint.config(:secret_key_base))
+    |> Plug.Test.put_req_cookie(ConsensusWeb.OrganizerAuth.cookie_name(), raw_token, sign: true)
+  end
+
+  @doc """
   Logs the given `user` into the `conn`.
 
   It returns an updated `conn`.

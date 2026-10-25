@@ -57,6 +57,7 @@ defmodule ConsensusWeb.GroupLive.Results do
 
   use ConsensusWeb, :live_view
 
+  alias Consensus.Accounts.Scope
   alias Consensus.Activities
   alias Consensus.Deadlines
   alias Consensus.Voting
@@ -113,11 +114,22 @@ defmodule ConsensusWeb.GroupLive.Results do
     Ecto.NoResultsError ->
       {:ok,
        socket
-       |> put_flash(
-         :error,
-         "That session isn't yours, or it no longer exists. Here is everything you organize."
-       )
+       |> put_flash(:error, not_yours_message(socket.assigns.current_scope))
        |> push_navigate(to: ~p"/")}
+  end
+
+  @doc """
+  The flash for a `/groups/:id/*` screen that refused a group as "not yours, or gone".
+
+  Shared with `GroupLive.Share`, which rescues the same raise. "Here is everything you
+  organize" is a promise about `/`, and only an account keeps it: an organizer with no
+  account whose only session was somebody else's lands on a splash that lists nothing,
+  so the anonymous variant stops after the first sentence (D-058, plan §4.3).
+  """
+  def not_yours_message(scope) do
+    if Scope.authenticated?(scope),
+      do: "That session isn't yours, or it no longer exists. Here is everything you organize.",
+      else: "That session isn't yours, or it no longer exists."
   end
 
   # There is deliberately no `"nudge"` clause. The control that pushed it is now `disabled`
@@ -190,6 +202,7 @@ defmodule ConsensusWeb.GroupLive.Results do
     |> assign(:outcome, outcome)
     |> assign(:takeover, takeover(group, outcome))
     |> assign(:participants, Voting.participants(group))
+    |> assign(:organizer_name, Activities.organizer_custom_name(group))
   end
 
   # A group can return to `:draft` under an open results tab now:
@@ -408,7 +421,10 @@ defmodule ConsensusWeb.GroupLive.Results do
       <%!-- `organizer_username` is the viewer's own name: `Activities.get_group!/2`
             scopes by organizer, so whoever mounted this screen is the organizer — and a
             broken tie's note/summary name them ("aheld picked X to break the tie"),
-            matching the guest waiting copy that already names the human. --%>
+            matching the guest waiting copy that already names the human. It is read off
+            the group, not the scope, because an organizer with no account has no
+            username (D-058): `organizer_custom_name/1` hands down their chosen name or
+            `nil`, never a defaulted string, and the component's fallback cases it. --%>
       <.results_panel
         :if={@takeover == nil}
         group={@group}
@@ -417,7 +433,7 @@ defmodule ConsensusWeb.GroupLive.Results do
         participants={@participants}
         avatar_caption="WHO'S VOTED"
         countdown_text={Deadlines.countdown(@group.deadline_at, @now)}
-        organizer_username={@current_scope.user.username}
+        organizer_username={@organizer_name}
       >
         <:footer>
           <%!-- The one link back to `04 share`, and the reason this screen needs it: `/`
@@ -555,6 +571,25 @@ defmodule ConsensusWeb.GroupLive.Results do
           </div>
         </:footer>
       </.results_panel>
+      <%!-- The quiet version of `04 share`'s save warning (D-058, plan §7.1), for an
+            organizer with no account. Outside the panel so it survives both takeovers —
+            a tie or an all-vetoed session is exactly what this browser alone can settle.
+            One line and muted on purpose: the full disclosure was on `04`, and this
+            screen's tangerine already belongs to its forward action. --%>
+      <p
+        :if={@group.anonymous_organizer_id}
+        id="results-save-prompt"
+        class="px-5 pb-4 text-center text-[12px] leading-[1.4] text-muted"
+      >
+        Only in this browser —
+        <.link
+          navigate={~p"/users/register"}
+          id="results-save-register"
+          class="font-semibold text-violet underline decoration-2 underline-offset-2 hover:text-ink active:text-ink"
+        >
+          save these
+        </.link>
+      </p>
     </Layouts.app>
     """
   end

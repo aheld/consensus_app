@@ -7,7 +7,9 @@ defmodule ConsensusWeb.GroupLive.NewTest do
 
   alias Consensus.Accounts.Scope
   alias Consensus.Activities
+  alias Consensus.Activities.AnonymousOrganizer
   alias Consensus.Deadlines
+  alias Consensus.Repo
   alias Consensus.Deadlines.Clock
 
   setup :register_and_log_in_user
@@ -340,11 +342,18 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       assert_in_delta DateTime.diff(group.deadline_at, expected_deadline, :second), 0, 5
     end
 
-    test "a signed-out visitor is redirected to log in", %{} do
+    # D-058 inverted this: it used to assert a redirect to `/users/log-in`. Organizing
+    # needs no account, so a cookieless visitor is let in and the mint plug gives the
+    # browser an identity of its own on the way.
+    test "a signed-out visitor is let in and gets an organizer identity", %{} do
       conn = Phoenix.ConnTest.build_conn()
+      before = Repo.aggregate(AnonymousOrganizer, :count)
 
-      assert {:error, {:redirect, %{to: to}}} = live(conn, ~p"/groups/new")
-      assert to == ~p"/users/log-in"
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      assert has_element?(lv, "h1", "plan?")
+      assert has_element?(lv, "#organizer_display_name")
+      assert Repo.aggregate(AnonymousOrganizer, :count) == before + 1
     end
   end
 
@@ -453,5 +462,265 @@ defmodule ConsensusWeb.GroupLive.NewTest do
 
       refute has_element?(lv, "#chrome-back[data-confirm]")
     end
+
+    test "a signed-in organizer's prompt does not mention a name it never asked for", %{
+      conn: conn
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> form("#group-form", group: %{"title" => "Dinner Friday?"}) |> render_change()
+
+      assert lv |> element("#chrome-back") |> render() =~ "The title and deadline aren"
+    end
+  end
+
+  describe "a signed-in organizer" do
+    test "gets no name field — guests see their username", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      refute has_element?(lv, "#organizer-name")
+      refute has_element?(lv, "#organizer_display_name")
+      assert has_element?(lv, "#group-form", "Just you so far · invite by link")
+    end
+  end
+
+  # D-058: an organizer with no account runs the same step, with the same form, plus an
+  # optional "Your name" field (plan §7.3).
+  describe "an organizer with no account" do
+    setup do
+      create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+    end
+
+    test "creates a draft they own, and goes on to the options step", %{
+      conn: conn,
+      scope: scope,
+      anonymous_organizer: organizer
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      assert {:ok, _options_lv, _html} =
+               lv
+               |> form("#group-form", group: %{title: "Dinner Friday?"})
+               |> render_submit()
+               |> follow_redirect(conn)
+
+      assert [group] = Activities.list_groups(scope)
+      assert group.title == "Dinner Friday?"
+      assert group.anonymous_organizer_id == organizer.id
+      assert group.organizer_id == nil
+    end
+
+    # The ordinary "start in one tab, log in from another" flow. The identity still owns
+    # nothing, so the claim moves zero groups — and must still send the open tab away, or
+    # its submit creates a group on a claimed identity nobody can ever reach.
+    test "an open tab leaves when another tab's log-in claims the empty identity", %{
+      conn: conn,
+      user: user,
+      anonymous_organizer: organizer
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      log_in_conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"login" => user.username, "password" => valid_user_password()}
+        })
+
+      assert get_session(log_in_conn, :user_token)
+      assert %DateTime{} = Repo.get!(AnonymousOrganizer, organizer.id).claimed_at
+      assert_redirect(lv, ~p"/groups/new")
+    end
+
+    # The guarantee under the broadcast: a tab that missed it is refused by the context
+    # and sent to start again, rather than stranding the group.
+    test "a submit on an identity claimed underneath it saves nothing and starts again", %{
+      conn: conn,
+      user: user,
+      organizer_token: raw_token
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      # Claimed directly, so no disconnect reaches this tab.
+      assert {:ok, 0} = Activities.claim_anonymous_groups(user, raw_token)
+
+      assert {:error, {:redirect, _}} =
+               lv
+               |> form("#group-form", group: %{title: "Dinner Friday?"})
+               |> render_submit()
+
+      flash = assert_redirect(lv, ~p"/groups/new")
+      assert flash["error"] =~ "You logged in from another tab"
+      assert Repo.aggregate(Consensus.Activities.Group, :count) == 0
+    end
+
+    test "edits a draft they own", %{conn: conn, scope: scope} do
+      group = group_fixture(scope, title: "Old title", deadline_at: future_deadline())
+
+      {:ok, lv, html} = live(conn, ~p"/groups/#{group}/edit")
+      assert html =~ "Old title"
+
+      lv
+      |> form("#group-form", group: %{title: "New title"})
+      |> render_submit()
+
+      assert Activities.get_group!(scope, group.id).title == "New title"
+    end
+
+    test "cannot open another organizer's draft", %{conn: conn} do
+      {_other_scope, other_group} = anonymous_group_fixture()
+
+      assert {:error, {:live_redirect, %{to: to}}} =
+               live(conn, ~p"/groups/#{other_group.id}/edit")
+
+      assert to == ~p"/"
+    end
+
+    test "the name typed with the session is saved on the organizer", %{
+      conn: conn,
+      anonymous_organizer: organizer
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      lv
+      |> form("#group-form", group: %{title: "Dinner"}, organizer: %{display_name: "  Sam  "})
+      |> render_submit()
+
+      assert Repo.get!(AnonymousOrganizer, organizer.id).display_name == "Sam"
+    end
+
+    test "the name is optional — blank creates the session and stores no name", %{
+      conn: conn,
+      scope: scope,
+      anonymous_organizer: organizer
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      lv
+      |> form("#group-form", group: %{title: "Dinner"}, organizer: %{display_name: ""})
+      |> render_submit()
+
+      assert [_group] = Activities.list_groups(scope)
+      assert Repo.get!(AnonymousOrganizer, organizer.id).display_name == nil
+    end
+
+    test "a returning organizer finds their name already in the field", %{} do
+      %{conn: conn} =
+        create_anonymous_organizer_named(Phoenix.ConnTest.build_conn(), "Robin")
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      assert has_element?(lv, "#organizer_display_name[value='Robin']")
+      assert has_element?(lv, "#organizer-avatar", "R")
+      assert has_element?(lv, "#organizer-name-count", "5/40")
+    end
+
+    test "editing a draft leaves an untouched name alone", %{} do
+      %{conn: conn, scope: scope, anonymous_organizer: organizer} =
+        create_anonymous_organizer_named(Phoenix.ConnTest.build_conn(), "Robin")
+
+      group = group_fixture(scope, title: "Old title", deadline_at: future_deadline())
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/edit")
+
+      # Another tab renames the person after this one mounted. Resubmitting the
+      # untouched field must not write the stale "Robin" back over it.
+      {:ok, _} = Activities.update_organizer_display_name(scope, %{display_name: "Rob"})
+
+      lv |> form("#group-form", group: %{title: "New title"}) |> render_submit()
+
+      assert Repo.get!(AnonymousOrganizer, organizer.id).display_name == "Rob"
+    end
+
+    test "the avatar follows the typed name and shows ? when it is blank", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      assert has_element?(lv, "#organizer-avatar", "?")
+
+      lv |> form("#group-form", organizer: %{display_name: "zoë"}) |> render_change()
+      assert has_element?(lv, "#organizer-avatar", "Z")
+
+      lv |> form("#group-form", organizer: %{display_name: "   "}) |> render_change()
+      assert has_element?(lv, "#organizer-avatar", "?")
+    end
+
+    # Invariant 11: no `maxlength` — a browser's counts UTF-16 code units and silently
+    # truncates a paste — so the counter reads what the changeset reads and the changeset
+    # is the cap. Invariant 18: the field is at least 16px.
+    test "the name field has no maxlength, is 16px, and counts live", %{conn: conn} do
+      {:ok, lv, html} = live(conn, ~p"/groups/new")
+
+      refute html =~ ~r/id="organizer_display_name"[^>]*maxlength/s
+      refute html =~ ~r/maxlength[^>]*id="organizer_display_name"/s
+      assert html =~ ~r/id="organizer_display_name"[^>]*class="[^"]*\btext-base\b/s
+      assert has_element?(lv, "#organizer-name-count", "0/40")
+      assert has_element?(lv, "#organizer-name-count.text-muted")
+
+      lv |> form("#group-form", organizer: %{display_name: "Sam"}) |> render_change()
+      assert has_element?(lv, "#organizer-name-count", "3/40")
+    end
+
+    test "an over-limit name turns the counter tangerine and saves nothing", %{
+      conn: conn,
+      scope: scope,
+      anonymous_organizer: organizer
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+      too_long = String.duplicate("a", AnonymousOrganizer.max_display_name_length() + 1)
+
+      lv |> form("#group-form", organizer: %{display_name: too_long}) |> render_change()
+
+      assert has_element?(lv, "#organizer-name-count.text-tangerine", "41/40")
+
+      lv |> element("#group-form button[phx-value-key='tomorrow']") |> render_click()
+
+      html =
+        lv
+        |> form("#group-form", group: %{title: "Dinner"}, organizer: %{display_name: too_long})
+        |> render_submit()
+
+      assert html =~ "should be at most 40 character"
+      assert Activities.list_groups(scope) == []
+      assert Repo.get!(AnonymousOrganizer, organizer.id).display_name == nil
+    end
+
+    test "a typed name alone arms the unsaved-draft guard, and the prompt names it", %{
+      conn: conn
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      refute has_element?(lv, "#chrome-back[data-confirm]")
+
+      lv |> form("#group-form", organizer: %{display_name: "Sam"}) |> render_change()
+
+      assert lv |> element("#chrome-back") |> render() =~
+               "The title, deadline and your name aren"
+
+      assert has_element?(lv, "footer a[data-confirm]")
+    end
+
+    test "an untouched prefilled name does not arm the guard", %{} do
+      %{conn: conn} =
+        create_anonymous_organizer_named(Phoenix.ConnTest.build_conn(), "Robin")
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      refute has_element?(lv, "#chrome-back[data-confirm]")
+    end
+  end
+
+  defp create_anonymous_organizer_named(conn, name) do
+    {raw_token, organizer} = anonymous_organizer_fixture(display_name: name)
+
+    %{
+      conn: put_organizer_token(conn, raw_token),
+      anonymous_organizer: organizer,
+      scope: Scope.for_anonymous_organizer(organizer)
+    }
   end
 end

@@ -5,6 +5,11 @@ votes. Voting, ranking, results and the recipient's view are explicitly **not** 
 
 Relevant decisions: D-003 (stack), D-004/D-005/D-015/D-017 (auth and magic-link recovery),
 D-011 (admin authorization), D-021 (sudo mode on admin writes). Nothing here contradicts them.
+**Amended by D-058** (`docs/plans/accountless-organizer.md`): this plan was written when every
+wizard route required an account. Since D-058 they live in `live_session :organizer` and an
+organizer may have no account at all — a group is owned by a user *or* an anonymous organizer
+identity carried in its own browser cookie. The lines below that assumed an account are
+corrected in place.
 The product invariants in `CLAUDE.md` — especially **2, the engine is activity-agnostic** and
 **4, results are real-time** — bind this work.
 
@@ -12,8 +17,8 @@ The product invariants in `CLAUDE.md` — especially **2, the engine is activity
 
 | Design frame | Route | Module |
 |---|---|---|
-| `00a` splash (signed out) | `/` | `ConsensusWeb.HomeLive` |
-| `00` home (signed in) | `/` | `ConsensusWeb.HomeLive` |
+| `00a` splash (signed out, no sessions in this browser) | `/` | `ConsensusWeb.HomeLive` |
+| `00` home (signed in, *or* an accountless organizer with ≥1 session — D-058) | `/` | `ConsensusWeb.HomeLive` |
 | `01` setup | `/groups/new`, `/groups/:id/edit` | `ConsensusWeb.GroupLive.New` |
 | `02` add options | `/groups/:id/options` | `ConsensusWeb.GroupLive.Options` |
 | `02b` edit an option | `/groups/:id/options/:activity_id` | `ConsensusWeb.GroupLive.Options` (`:edit_activity`) |
@@ -39,7 +44,7 @@ list_groups(%Scope{})            # newest first, activities preloaded
 list_active_groups(%Scope{})     # status in [:draft, :voting]
 list_past_groups(%Scope{})       # status in [:completed, :cancelled]
 
-get_group!(%Scope{}, id)         # raises unless the scope's user organizes it
+get_group!(%Scope{}, id)         # raises unless the scope's owner (user or anonymous organizer, D-058) owns it
 get_group_by_slug(slug)          # unscoped, for the public /join link; nil when missing
 
 change_group(%Scope{}, %Group{}, attrs \\ %{})
@@ -61,7 +66,10 @@ count_activities(%Group{} | group_id)
 
 `%Group{}`: `title`, `slug`, `status` (`:draft | :voting | :completed | :cancelled`),
 `activity_type`, `deadline_at`, `anonymous`, `veto_allowed`, `expected_voter_count`,
-`completed_at`, `cancelled_at`, `organizer_id`, `activities`.
+`completed_at`, `cancelled_at`, `organizer_id`, `activities` — and since D-058
+`anonymous_organizer_id`: exactly one of the two owner columns is set (the
+`organizer_xor_anonymous_organizer` CHECK), and every owning function has a user head and
+an anonymous head.
 
 `%Activity{}`: `group_id`, `position`, `name`, `description` (≤140), `image_url`,
 `source_url`, `metadata_fetched_at`, `added_by_id`.
@@ -101,8 +109,11 @@ hour off in a `phx-no-connect` render, which is acceptable and self-corrects on 
 
 ## Decisions this plan makes
 
-1. **`/` is one route with two faces.** Signed out renders `00a`; signed in renders `00`.
-   A bookmark must not 404 after logging out, and the design treats them as one place.
+1. **`/` is one route with two faces.** ~~Signed out renders `00a`; signed in renders `00`.~~
+   Since D-058 the choice is `@home_mode`: `00` (`:list`) for a signed-in user **or** for an
+   accountless organizer whose browser owns at least one session, `00a` (`:splash`)
+   otherwise — so a drive-by visit to `/groups/new` followed by `‹` still lands on the
+   splash. A bookmark must not 404 after logging out, and the design treats them as one place.
 2. **No global navigation bar.** ~~Each screen draws its own header, because the design's
    headers differ per screen. `Layouts.app/1` is canvas, column and flash only.~~
    **Reversed by D-041** (`docs/plans/chrome-and-feedback.md`, piece P1): `Layouts.app/1` now

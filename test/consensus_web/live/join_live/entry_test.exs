@@ -6,6 +6,7 @@ defmodule ConsensusWeb.JoinLive.EntryTest do
   import Phoenix.LiveViewTest
 
   import Consensus.AccountsFixtures
+  import Consensus.ActivitiesFixtures, only: [anonymous_scope_fixture: 1]
   import Consensus.VotingFixtures
 
   alias Consensus.Voting
@@ -17,6 +18,24 @@ defmodule ConsensusWeb.JoinLive.EntryTest do
     conn
     |> Phoenix.ConnTest.init_test_session(%{})
     |> Plug.Conn.put_session(JoinAuth.participant_session_key(group.id), participant.token)
+  end
+
+  # Whitespace-collapsed text of the one node `selector` matches — HEEx keeps the
+  # template's line breaks inside a `<p>`, and these assertions are about the sentence.
+  defp text_of(html, selector) do
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query(selector)
+    |> LazyHTML.text()
+    |> String.split()
+    |> Enum.join(" ")
+  end
+
+  defp meta_content(html, attr, key) do
+    html
+    |> LazyHTML.from_document()
+    |> LazyHTML.query(~s(meta[#{attr}="#{key}"]))
+    |> LazyHTML.attribute("content")
   end
 
   describe "mount — nobody has joined yet" do
@@ -83,6 +102,75 @@ defmodule ConsensusWeb.JoinLive.EntryTest do
       assert html =~ "Continue as #{voter.username}"
       # Never required — the guest path is still fully usable.
       assert html =~ "Start voting"
+    end
+  end
+
+  # D-058 plan §5.2: a group can be owned by nobody with an account, and its organizer may
+  # or may not have given a name. Every place this screen names the organizer has to read
+  # right both ways — and the og: card (D-050) has to survive, because the pasted link is
+  # the whole distribution model.
+  describe "mount — an organizer with no account" do
+    test "named: the pill, the hint and the card all use the chosen name", %{conn: conn} do
+      scope = anonymous_scope_fixture(display_name: "Sam")
+      {group, _activities} = voting_group_fixture(scope, 3)
+
+      {:ok, _view, html} = live(conn, ~p"/join/#{group.slug}")
+
+      assert text_of(html, "#organizer-invite") == "Sam invited you"
+      assert text_of(html, "#organizer-initial") == "S"
+      assert text_of(html, "#display-name-hint") =~ "Nobody sees what you picked — not even Sam."
+      assert html =~ group.title
+
+      dead = conn |> get(~p"/join/#{group.slug}") |> html_response(200)
+
+      assert meta_content(dead, "property", "og:title") == ["#{group.title} · 3 spots"]
+
+      assert meta_content(dead, "property", "og:description") == [
+               "Sam set up a vote. 3 spots, one tap each, and your picks stay anonymous. " <>
+                 "No app, no account."
+             ]
+
+      assert meta_content(dead, "name", "twitter:card") == ["summary_large_image"]
+    end
+
+    test "unnamed: subjectless where the organizer speaks, 'the organizer' mid-sentence", %{
+      conn: conn
+    } do
+      scope = anonymous_scope_fixture(%{})
+      {group, _activities} = voting_group_fixture(scope, 3)
+
+      {:ok, _view, html} = live(conn, ~p"/join/#{group.slug}")
+
+      assert text_of(html, "#organizer-invite") == "You're invited"
+      assert text_of(html, "#organizer-initial") == "?"
+
+      assert text_of(html, "#display-name-hint") =~
+               "Nobody sees what you picked — not even the organizer."
+
+      refute html =~ "The organizer invited you"
+      assert html =~ group.title
+      assert html =~ "Start voting"
+
+      dead = conn |> get(~p"/join/#{group.slug}") |> html_response(200)
+
+      assert meta_content(dead, "property", "og:title") == ["#{group.title} · 3 spots"]
+
+      assert meta_content(dead, "property", "og:description") == [
+               "A vote is open. 3 spots, one tap each, and your picks stay anonymous. " <>
+                 "No app, no account."
+             ]
+
+      assert meta_content(dead, "name", "twitter:card") == ["summary_large_image"]
+    end
+
+    test "a user-owned group still reads its organizer's username mid-sentence", %{conn: conn} do
+      scope = user_scope_fixture()
+      {group, _activities} = voting_group_fixture(scope, 3)
+
+      {:ok, _view, html} = live(conn, ~p"/join/#{group.slug}")
+
+      assert text_of(html, "#display-name-hint") =~
+               "not even #{scope.user.username}."
     end
   end
 

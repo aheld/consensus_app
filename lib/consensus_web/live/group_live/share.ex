@@ -46,7 +46,7 @@ defmodule ConsensusWeb.GroupLive.Share do
        |> assign(:activity_count, length(group.activities))
        |> assign(:now, DateTime.utc_now())
        |> assign_clock()
-       |> assign(:organizer_username, socket.assigns.current_scope.user.username)
+       |> assign(:share_text, share_text(Activities.organizer_custom_name(group)))
        |> assign(:join_url, join_url(group))}
     end
   rescue
@@ -59,9 +59,20 @@ defmodule ConsensusWeb.GroupLive.Share do
        socket
        |> put_flash(
          :error,
-         "That session isn't yours, or it no longer exists. Here is everything you organize."
+         ConsensusWeb.GroupLive.Results.not_yours_message(socket.assigns.current_scope)
        )
        |> push_navigate(to: ~p"/")}
+  end
+
+  # The invite card's line and the text pasted into the chat are the same sentence, and
+  # the organizer sends it from their own phone. A named organizer keeps "aheld set up a
+  # vote."; an unnamed one gets no subject at all rather than "The organizer set up a
+  # vote." — nobody introduces themselves in the third person (D-058, plan §5.2), which
+  # is why this does not go through `ConsensusWeb.OrganizerLabel`.
+  defp share_text(name) do
+    if is_binary(name) and String.trim(name) != "",
+      do: "#{name} set up a vote. Tap to pick.",
+      else: "A vote is open. Tap to pick."
   end
 
   @impl true
@@ -159,7 +170,7 @@ defmodule ConsensusWeb.GroupLive.Share do
             </div>
             <div class="flex flex-col gap-[3px] px-3.5 py-[11px]">
               <p class="text-[13.5px] font-semibold text-ink">
-                {@organizer_username} set up a vote. Tap to pick.
+                {@share_text}
               </p>
               <p id="join-url" class="truncate font-mono text-[11px] font-medium text-muted">
                 {@join_url}
@@ -195,7 +206,7 @@ defmodule ConsensusWeb.GroupLive.Share do
             hidden
             phx-hook="NativeShare"
             data-share-title={@group.title}
-            data-share-text={"#{@organizer_username} set up a vote. Tap to pick."}
+            data-share-text={@share_text}
             data-share-url={@join_url}
             class="press-2 flex w-full flex-col items-center gap-2 rounded-2xl border-2 border-ink bg-white p-2.5 shadow-sticker-2 transition-colors hover:bg-yellow"
           >
@@ -217,6 +228,44 @@ defmodule ConsensusWeb.GroupLive.Share do
               Open your phone's share sheet <span aria-hidden="true">→</span>
             </span>
           </button>
+
+          <%!-- D-058 obliges these words, and only for an organizer with no account: the
+                organizer cookie is the only key to this session, so clearing it or
+                switching devices strands the three things an organizer can still do after
+                publish (the pool is frozen — invariant 16 — so not "edit"). Directly above
+                `Copy link` rather than in the header, because "Link copied" flashes by that
+                control and this is the moment the organizer is about to walk away with the
+                link. Two doors, never a gate, and neither one tangerine: `See live results`
+                is still this screen's only forward control. The log-in door carries
+                `return_to` back here; registration has none, and lands on `/`, which lists
+                the saved session (plan §7.1). --%>
+          <.sticker_card
+            :if={@group.anonymous_organizer_id}
+            id="share-save-warning"
+            tone={:yellow}
+            depth={2}
+            class="flex flex-col gap-2 px-3.5 py-3"
+          >
+            <p class="text-[12.5px] leading-[1.45] text-ink">
+              Without an account, this session can only be managed from this browser. If you clear your browser data or switch devices, you won't be able to close it early, call it off or break a tie. Everyone can still vote and see results at the link.
+            </p>
+            <div class="flex flex-wrap items-center gap-x-3.5 gap-y-1">
+              <.link
+                navigate={~p"/users/register"}
+                id="share-save-register"
+                class="press-2 inline-flex min-h-[44px] items-center rounded-full border-2 border-ink bg-white px-3.5 text-[12.5px] font-semibold text-ink shadow-sticker-2"
+              >
+                Create an account
+              </.link>
+              <.link
+                navigate={~p"/users/log-in?#{[return_to: ~p"/groups/#{@group}/share"]}"}
+                id="share-save-log-in"
+                class="inline-flex min-h-[44px] items-center text-[12.5px] font-semibold text-ink underline decoration-2 underline-offset-2 hover:text-violet active:text-violet"
+              >
+                Already have one? Log in
+              </.link>
+            </div>
+          </.sticker_card>
 
           <div class="flex gap-[9px]">
             <button

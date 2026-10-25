@@ -3,6 +3,9 @@ defmodule ConsensusWeb.Router do
 
   import ConsensusWeb.UserAuth
 
+  import ConsensusWeb.OrganizerAuth,
+    only: [fetch_organizer_token: 2, ensure_organizer_identity: 2]
+
   pipeline :browser do
     plug :accepts, ["html"]
     plug :fetch_session
@@ -11,6 +14,9 @@ defmodule ConsensusWeb.Router do
     plug :protect_from_forgery
     plug :put_secure_browser_headers
     plug :fetch_current_scope_for_user
+    # Read-only: copies the accountless organizer's signed cookie into the session so a
+    # LiveView can see it (D-058). No database access; it never mints.
+    plug :fetch_organizer_token
   end
 
   pipeline :api do
@@ -96,28 +102,58 @@ defmodule ConsensusWeb.Router do
       on_mount: [{ConsensusWeb.UserAuth, :require_authenticated}] do
       live "/users/settings", UserLive.Settings, :edit
       live "/users/settings/confirm-email/:token", UserLive.Settings, :confirm_email
+    end
 
-      # The organizer's creation flow. Every one of these is a step in the wizard the
-      # design calls 01 → 02 → 02b → 03 → 04; they share a live_session so that moving
-      # between them is a `push_navigate` inside one connected socket rather than a full
-      # page load, which is what makes the wizard feel like one screen.
-      live "/groups/new", GroupLive.New, :new
+    post "/users/update-password", UserSessionController, :update_password
+  end
+
+  ## The organizer's creation flow (D-058: no account required)
+  #
+  # Every one of these is a step in the wizard the design calls 01 → 02 → 02b → 03 → 04,
+  # plus `05`, the organizer's live results. They share a live_session so that moving
+  # between them is a `push_navigate` inside one connected socket rather than a full page
+  # load, which is what makes the wizard feel like one screen.
+  #
+  # Since D-058 organizing costs no account, so this is a plain `:browser` scope and
+  # **must never pipe through `:require_authenticated_user`** —
+  # `test/consensus_web/organizing_needs_no_account_test.exs` reads this file and fails
+  # if any of the seven routes moves back under it. The owner is a signed-in user *or*
+  # an accountless organizer: `:mount_current_scope` runs first, then
+  # `ConsensusWeb.OrganizerAuth`'s `:require_organizer` swaps in the anonymous scope when
+  # no user is signed in, and bounces a visitor who is neither (to `/` on `/groups/new`,
+  # to log-in with `return_to` on every other step). `@current_scope` is anonymous only
+  # inside this live_session; everywhere else it stays user-or-nil.
+  #
+  # Only `GET /groups/new` mints an identity — the nested scope's
+  # `:ensure_organizer_identity` writes the long-lived cookie before the LiveView mounts,
+  # because a LiveView cannot. The other six only resolve one, so a crawler probing
+  # `/groups/:id/*` never inserts a row. (A `scope` nested inside a `live_session`
+  # contributes its `pipe_through` to the routes it holds and nothing else.)
+  scope "/", ConsensusWeb do
+    pipe_through [:browser]
+
+    live_session :organizer,
+      on_mount: [
+        {ConsensusWeb.UserAuth, :mount_current_scope},
+        {ConsensusWeb.OrganizerAuth, :require_organizer}
+      ] do
+      scope "/" do
+        pipe_through [:ensure_organizer_identity]
+
+        live "/groups/new", GroupLive.New, :new
+      end
+
       live "/groups/:id/edit", GroupLive.New, :edit
       live "/groups/:id/options", GroupLive.Options, :index
       live "/groups/:id/options/:activity_id", GroupLive.Options, :edit_activity
       live "/groups/:id/review", GroupLive.Review, :show
       live "/groups/:id/share", GroupLive.Share, :show
 
-      # Design frame `05` — the organizer's live-results screen. In the existing
-      # `:require_authenticated_user` live_session (not a new one — AGENTS.md: a
-      # live_session name is declared once) because only the organizer, signed in,
-      # reaches it; the participant-side twin of this screen is `JoinLive.Results`
-      # below, under `/join/:slug/results`, which a guest with no account reaches
-      # instead.
+      # Design frame `05` — the organizer's live-results screen. The participant-side
+      # twin is `JoinLive.Results` below, under `/join/:slug/results`, which a guest
+      # reaches instead.
       live "/groups/:id/results", GroupLive.Results, :show
     end
-
-    post "/users/update-password", UserSessionController, :update_password
   end
 
   ## The recipient's public join flow
@@ -156,8 +192,16 @@ defmodule ConsensusWeb.Router do
   scope "/", ConsensusWeb do
     pipe_through [:browser]
 
+    # `:mount_organizer_scope` is for `/`, which lists an accountless organizer's
+    # sessions (D-058). It is read-only — it never mints and never touches
+    # `@current_scope`, which stays user-or-nil on every page here — and only `HomeLive`
+    # reads the `@organizer_scope` it assigns. It sits in the shared list because a route
+    # cannot carry its own `on_mount`, and a `live_session` name is declared once.
     live_session :current_user,
-      on_mount: [{ConsensusWeb.UserAuth, :mount_current_scope}] do
+      on_mount: [
+        {ConsensusWeb.UserAuth, :mount_current_scope},
+        {ConsensusWeb.OrganizerAuth, :mount_organizer_scope}
+      ] do
       # `/` is two screens behind one route: the 00a splash for a signed-out visitor and
       # the 00 home list for a signed-in organizer. One route because the design treats
       # them as the same place, and because a bookmark must not 404 after logging out.

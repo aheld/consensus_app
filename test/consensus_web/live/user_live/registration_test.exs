@@ -136,6 +136,49 @@ defmodule ConsensusWeb.UserLive.RegistrationTest do
     end
   end
 
+  # Plan §7.4. Conditioned on this browser's organizer identity owning a session — the
+  # magic link may be opened somewhere else, and only this browser can bring them along.
+  describe "the sent screen with an organizer cookie (D-058)" do
+    setup :create_anonymous_organizer
+
+    defp register_by_magic_link(conn) do
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+      render_click(lv, "choose_mode", %{"mode" => "magic_link"})
+
+      lv
+      |> form("#registration_form",
+        user: %{"email" => unique_user_email(), "username" => unique_username()}
+      )
+      |> render_submit()
+
+      lv
+    end
+
+    test "says to open the link in this same browser when the identity owns a session", %{
+      conn: conn,
+      scope: scope
+    } do
+      Consensus.ActivitiesFixtures.group_fixture(scope)
+
+      lv = register_by_magic_link(conn)
+
+      assert has_element?(
+               lv,
+               "#registration-sent #registration-sent-bring-sessions",
+               "Open the link in this same browser to bring your sessions with you"
+             )
+
+      assert render(lv) =~ "you&#39;ll be asked before they&#39;re saved"
+    end
+
+    test "says nothing about sessions when the identity owns none", %{conn: conn} do
+      lv = register_by_magic_link(conn)
+
+      assert has_element?(lv, "#registration-sent")
+      refute has_element?(lv, "#registration-sent-bring-sessions")
+    end
+  end
+
   describe "the two registration paths" do
     test "the username & password path is the default and shows a password field", %{
       conn: conn
@@ -182,6 +225,8 @@ defmodule ConsensusWeb.UserLive.RegistrationTest do
       assert html =~ email
       assert html =~ "Send the link again"
       refute has_element?(lv, "#registration_form")
+      # No organizer cookie in this browser, so no line about bringing sessions (D-058).
+      refute has_element?(lv, "#registration-sent-bring-sessions")
 
       user = Accounts.get_user_by_username(username)
       assert user.email == email

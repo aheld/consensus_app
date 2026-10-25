@@ -43,9 +43,21 @@ removes most of what this item used to worry about — "a `down` that is not a f
 `up`" is not a risk the project is carrying. Do not reintroduce reversibility as a requirement
 without revisiting that decision.
 
+> **Amended by D-058 (2026-10-23), three ways.** (1) *The trigger has fired:* real accounts exist in
+> production, and D-058's migration is the first that knowingly runs against populated data — it
+> answers the risk below not by preserving rows but by deliberately wiping `activity_groups` and its
+> children inside one transaction, an owner decision recorded there. (2) *"Downs are not
+> maintained" was never true in practice:* `test/consensus/release_test.exs` rolls the whole chain
+> back to zero and CI's boot-twice step and `scripts/release-upgrade-test.sh` execute the newest
+> `down`, so every `down` is load-bearing for the suite. D-058's migration keeps its `down` working
+> for that reason, and so should every later one. (3) *The sentence below about copy-and-swap is
+> wrong for the pinned version:* `ecto_sqlite3` **raises** on `ALTER COLUMN` and `ADD CONSTRAINT`
+> rather than emulating them — a migration that needs either rebuilds the table by hand. It is kept,
+> struck through, as history.
+
 What remains, narrower and still real: a new `up` migration is never exercised against a database
-that has rows in it. ecto_sqlite3 emulates `ALTER COLUMN` and `ADD CONSTRAINT` by copy-and-swap, and
-those rebuilds can fail against real data or a real foreign key while passing cleanly against the
+that has rows in it. ~~ecto_sqlite3 emulates `ALTER COLUMN` and `ADD CONSTRAINT` by copy-and-swap, and
+those rebuilds~~ Hand-written table rebuilds can fail against real data or a real foreign key while passing cleanly against the
 empty database `mix test` and the CI smoke step both use. Migrating at boot is this app's *only*
 migration path (D-009) on a single machine with no `release_command` fallback, so a migration that
 fails there fails the boot.
@@ -316,6 +328,52 @@ can join again and vote again, which is the integrity hole point 2 names, in a m
 a fresh browser context rather than a `localStorage.clear()`). Whether a voter with no cookie may
 re-claim a row at all — and on what evidence — is undecided, and nothing should invent an answer
 without deciding it here first.
+
+**D-058 gives this question a twin on the organizer's side, with higher stakes.** Once organizing
+needs no account, an accountless organizer is also just a cookie — a signed organizer cookie
+resolving to an `anonymous_organizers` row, re-issued on every request that carries it, so its 90
+days are an *idle* window (90 days since last use, not since the first visit). The cookie-loss paths
+apply (an in-app webview with its own jar, cleared browser data, a different device — though not a
+browser quit, which the cookie's own `max_age` survives), but where a voter who loses their cookie
+can merely vote twice, an organizer who loses theirs can **never again close that session early,
+call it off, break a tie or reopen it** (or, for a draft, ever edit or publish it). D-058 accepts
+this and `04 share` discloses it (with `/` and `05` repeating it in one muted line), which is a
+mitigation for the organizer who reads the screen, not an answer to the question.
+
+How the cookie becomes an account, as shipped: a **password** log-in or a **registration** from the
+browser holding it claims its sessions automatically and flashes the count; a **magic-link** log-in
+claims them **only if the person ticks an unticked consent box** on the confirmation screen ("Also
+save the N sessions started in this browser to …", shown only when there is at least one), because a
+magic link is a forwardable URL and an automatic claim there would let an attacker's link collect a
+victim's sessions. Unticked, or opened in a different cookie jar, nothing is lost — the cookie stays
+and the next log-in from the original browser claims — and the "check your email" screen now says so
+before the link is sent. Four things stay genuinely open:
+
+1. **May an organizer with no cookie re-claim a session, and on what evidence?** Exactly Q-4's
+   question with the blast radius inverted. Note that the two cannot share an answer: a voter
+   re-claim grants a ballot that is already locked (D-036), an organizer re-claim grants write
+   access to everyone's pool. Whatever evidence is someday deemed sufficient for the first is not
+   automatically sufficient for the second.
+2. **A shared or kiosk browser hands organizer access to the next visitor,** bounded only by a
+   90-day *idle* expiry (the row's `last_seen_at` and the sliding cookie both reset on use, so a
+   busy shared browser never expires) — and since the claim runs on every password or registration
+   log-in, an account that logs in there inherits those sessions permanently (with a flash saying
+   so). A magic-link log-in there asks first; a password one does not. D-058 accepts it on the grounds that
+   the alternative is an account, which is the thing being removed — but nothing has measured how
+   often a session is organized on a borrowed device, and the acceptance is reasoning, not evidence.
+   A confirm step before claiming on a plain password log-in is the deferred mitigation — the
+   magic-link path already has one, which is the shape it would take.
+3. **An orphaned endgame never ends.** A tie or all-vetoed session whose anonymous organizer lost
+   the cookie stays in its D-051 takeover forever, because only the organizer can exit one. That is
+   product invariant 3 ("a winner is declared without organizer intervention") failing in exactly
+   the case D-058 creates. D-058 chose honest guest copy over auto-resolution; whether the D-029
+   lazy read should eventually record an `app_pick`/`app_rescue` itself after a grace period —
+   for every session, or only anonymous-owned ones — is undecided.
+4. **No admin can act on an anonymous session.** Every public session used to trace to an account
+   `Accounts.delete_user/2` could remove. An anonymous one traces to nothing an admin can reach, so
+   abusive content in a title, an option or a display name has no remedy short of a SQL session on
+   the machine. The shape, when built, is a function-head-guarded admin cancel with an `audit/4`
+   line (invariant 5's idiom); whether and when is open.
 
 ### Q-5. Do booking deep-links actually exist?
 

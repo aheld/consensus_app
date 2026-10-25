@@ -77,9 +77,10 @@ defmodule ConsensusWeb.JoinLive.Entry do
 
   use ConsensusWeb, :live_view
 
-  alias Consensus.Accounts
+  alias Consensus.Activities
   alias Consensus.Voting
   alias Consensus.Voting.Participant
+  alias ConsensusWeb.OrganizerLabel
 
   @impl true
   def mount(_params, _session, socket) do
@@ -105,13 +106,16 @@ defmodule ConsensusWeb.JoinLive.Entry do
 
   defp assign_entry(socket, group) do
     voted_participants = group |> Voting.participants() |> Enum.filter(& &1.voted?)
-    organizer = Accounts.get_user!(group.organizer_id)
+    # The owner is already preloaded by `JoinAuth`'s `get_group_by_slug/1` — narrowly, for
+    # an accountless one (D-058), so this costs no query and never puts a token hash in a
+    # guest's assigns. `nil` means unnamed: there may be no account behind this group.
+    organizer_name = Activities.organizer_custom_name(group)
     activity_count = length(group.activities)
 
     socket
     |> assign(:page_title, group.title)
-    |> assign_social_preview(group, organizer, activity_count)
-    |> assign(:organizer, organizer)
+    |> assign_social_preview(group, organizer_name, activity_count)
+    |> assign(:organizer_name, organizer_name)
     |> assign(:activity_count, activity_count)
     |> assign(:voted_participants, voted_participants)
     |> assign(:voted_count, length(voted_participants))
@@ -130,12 +134,16 @@ defmodule ConsensusWeb.JoinLive.Entry do
   # reasons (there is no timezone on a dead render, and unfurl caches outlive a countdown).
   # `closes_pill_text/3` below still renders it on the page itself, where the socket has a
   # real `tz_offset` and the value is recomputed on every mount.
-  defp assign_social_preview(socket, group, organizer, activity_count) do
+  #
+  # An unnamed organizer (D-058, plan §5.2) gets a subjectless opener rather than "The
+  # organizer set up a vote." — the organizer is the one pasting this link, so a card that
+  # introduces them in the third person to their own friends reads wrong.
+  defp assign_social_preview(socket, group, organizer_name, activity_count) do
     socket
     |> assign(:og_title, "#{group.title} · #{spots_pill_text(activity_count)}")
     |> assign(
       :og_description,
-      "#{organizer.username} set up a vote. #{activity_count} #{pluralize(activity_count, "spot")}, " <>
+      "#{og_opener(organizer_name)} #{activity_count} #{pluralize(activity_count, "spot")}, " <>
         "one tap each, and your picks stay anonymous. No app, no account."
     )
     |> assign(:og_url, ConsensusWeb.Endpoint.url() <> ~p"/join/#{group.slug}")
@@ -197,11 +205,19 @@ defmodule ConsensusWeb.JoinLive.Entry do
     end
   end
 
-  defp organizer_initial(%{username: username}) when is_binary(username) and username != "" do
-    String.upcase(String.first(username))
+  defp og_opener(nil), do: "A vote is open."
+  defp og_opener(name), do: "#{name} set up a vote."
+
+  # Subjectless when unnamed, for the same reason as `og_opener/1`: "The organizer invited
+  # you" names nobody, while "You're invited" says the same thing without pretending to.
+  defp invite_text(nil), do: "You're invited"
+  defp invite_text(name), do: "#{name} invited you"
+
+  defp organizer_initial(name) when is_binary(name) and name != "" do
+    String.upcase(String.first(name))
   end
 
-  defp organizer_initial(_organizer), do: "?"
+  defp organizer_initial(_name), do: "?"
 
   defp subhead(activity_count) do
     "#{activity_count} #{pluralize(activity_count, "spot")}, one tap each. Your picks stay anonymous."
@@ -313,12 +329,15 @@ defmodule ConsensusWeb.JoinLive.Entry do
         <div class="relative z-10 flex flex-1 flex-col gap-[18px] px-[22px] pt-[22px]">
           <div class="inline-flex w-fit items-center gap-2 rounded-full border-2 border-ink bg-white py-[5px] pl-[6px] pr-3 shadow-sticker-2">
             <span
+              id="organizer-initial"
               aria-hidden="true"
               class="grid size-6 shrink-0 place-items-center rounded-full border-2 border-ink bg-yellow text-[10px] font-bold text-ink"
             >
-              {organizer_initial(@organizer)}
+              {organizer_initial(@organizer_name)}
             </span>
-            <span class="text-xs font-semibold text-ink">{@organizer.username} invited you</span>
+            <span id="organizer-invite" class="text-xs font-semibold text-ink">
+              {invite_text(@organizer_name)}
+            </span>
           </div>
 
           <h1 class="text-pretty text-[36px] font-bold leading-[1.02] tracking-[-0.032em] text-ink">
@@ -443,9 +462,9 @@ defmodule ConsensusWeb.JoinLive.Entry do
                   makes the claim now says it in this same order: who voted is public, what
                   they picked is nobody's. See D-035 for why the second half is structural
                   rather than a setting. --%>
-            <p class="-mt-1 text-[11.5px] leading-[1.4] text-ink-soft">
+            <p id="display-name-hint" class="-mt-1 text-[11.5px] leading-[1.4] text-ink-soft">
               Anyone with this link can see who has voted, under whatever you type here.
-              Nobody sees what you picked — not even {@organizer.username}. Skip it and you
+              Nobody sees what you picked — not even {OrganizerLabel.label(@organizer_name, :mid)}. Skip it and you
               show up as a guest.
             </p>
             <div class="flex items-stretch gap-2 rounded-2xl border-2 border-ink bg-white px-4 shadow-field">

@@ -57,7 +57,11 @@ LiveView tutorial — it assumes you know LiveView and only records what is *tru
 ```
 lib/consensus_web.ex                       # __using__(:live_view|:html|:controller|:router)
 lib/consensus_web/router.ex                # pipelines, scopes, live_sessions
-lib/consensus_web/user_auth.ex             # plugs + on_mount hooks (extended: admin)
+lib/consensus_web/user_auth.ex             # plugs + on_mount hooks (extended: admin; log_in_user/4 claims, D-058)
+lib/consensus_web/organizer_auth.ex        # the accountless organizer (D-058): its cookie, the
+                                           #   fetch/mint plugs, :require_organizer and
+                                           #   :mount_organizer_scope — see "Scopes" below
+lib/consensus_web/organizer_label.ex       # "The organizer"/"the organizer" for a nil name
 lib/consensus_web/endpoint.ex
 lib/consensus_web/components/
   layouts.ex                               # Layouts.app/1, avatar/1, flash_group/1
@@ -65,9 +69,10 @@ lib/consensus_web/components/
   layouts/root.html.heex                   # the ONLY .heex layout file — no <script> theme toggle
   core_components.ex                       # flash, button, input, header, table, list, icon, ...
   sticker.ex                               # ConsensusWeb.Sticker — see the design-system skill
-lib/consensus_web/live/home_live.ex        # "/" — splash (signed out) or group list (signed in)
+lib/consensus_web/live/home_live.ex        # "/" — splash, or the group list for a signed-in user OR an
+                                           #   accountless organizer with ≥1 session (@home_mode, D-058)
 lib/consensus_web/live/admin_live/         # users.ex — home_page.ex is gone (D-027)
-lib/consensus_web/live/group_live/         # new.ex, options.ex, review.ex, share.ex — the
+lib/consensus_web/live/group_live/         # new.ex, options.ex, review.ex, share.ex, results.ex — the
                                            #   organizer's creation wizard, see "Router" below
 lib/consensus_web/live/user_live/          # login, registration, confirmation, settings (all edited)
 lib/consensus_web/controllers/             # error_html.ex, error_json.ex,
@@ -208,7 +213,11 @@ of that:
   control, inside `Chrome.header/1`, and a screen never places it. It is the same `<details>`
   element as before (works before LiveView connects, closes on `Escape`, no JS of ours),
   restyled as a 29px circle. Signed in it shows the email, `Admin` (administrators only),
-  `Settings` and `Log out`; signed out it shows `Log in` and `Start something`. **Every entry is
+  `Settings` and `Log out`; signed out it shows `Log in`, `Sign up` (→ `/users/register`) and
+  `Start something` (→ `/groups/new`, hidden under `/groups/`); and for an **accountless
+  organizer inside the wizard** (D-058 — the only place `@current_scope` can be anonymous) it
+  shows `Save your sessions` (→ `/users/register`, `#chrome-menu-save-sessions`) and `Log in`,
+  with no `Start something`. **Every entry is
   dropped when it points at the page you are already standing on**, and the whole `⋯` is dropped
   when that would leave a single entry (which is exactly the two auth screens — the survivor
   duplicates the form's own cross-link 40px below). `Layouts.admin?/1` is **gone**: it moved to
@@ -285,17 +294,47 @@ the default classes entirely — no merge.
 
 ## Scopes: `@current_scope`, never `@current_user`
 
-`phx.gen.auth` on 1.8 generates **scopes**. `Consensus.Accounts.Scope` is a struct with one field today:
+`phx.gen.auth` on 1.8 generates **scopes**. Since D-058 `Consensus.Accounts.Scope` has two fields —
+a user, or an accountless organizer identity, never both:
 
 ```elixir
-%Consensus.Accounts.Scope{user: %Consensus.Accounts.User{} | nil}
+%Consensus.Accounts.Scope{user: %User{} | nil, anonymous_organizer: %AnonymousOrganizer{} | nil}
 Scope.for_user(%User{}) # => %Scope{user: user}
 Scope.for_user(nil)     # => nil          <-- note: nil, not %Scope{user: nil}
+Scope.for_anonymous_organizer(%AnonymousOrganizer{id: id}) # => %Scope{anonymous_organizer: o}
+Scope.for_anonymous_organizer(nil)                          # => nil
+Scope.authenticated?(scope) # true only for %Scope{user: %User{}}
 ```
 
+**Where the anonymous scope can appear — and where it cannot.** `@current_scope` is still `nil`
+or a user scope on every `:browser` page *except* inside `live_session :organizer` (the wizard),
+where `ConsensusWeb.OrganizerAuth`'s `:require_organizer` hook replaces it with the anonymous scope
+when no user is signed in, so every wizard screen has one code path for both kinds of owner. That
+split is deliberate: about two dozen templates read `@current_scope`'s truthiness as "signed in",
+and on `/users/log-in` a truthy scope makes the identity fields read-only — for exactly the
+person trying to save their sessions. `HomeLive` sees the anonymous identity through a separate,
+read-only **`@organizer_scope`** assign (`OrganizerAuth`'s `:mount_organizer_scope` hook in
+`live_session :current_user`); nothing else does. Inside the wizard, prefer
+`Scope.authenticated?/1` over truthiness when you mean "has an account".
+
+**The organizer cookie.** The anonymous identity is a server-minted 32-byte token (stored
+SHA-256-hashed in `anonymous_organizers.token_hash`) carried in its **own signed cookie** —
+`OrganizerAuth.cookie_name/0`, `__Host-consensus_organizer` in prod, `_consensus_organizer` in
+dev/test — with a 90-day `max_age`, `http_only`, `same_site: "Lax"`. Not the Phoenix session,
+whose cookie dies when the browser quits. `OrganizerAuth.fetch_organizer_token/2`, the last plug in
+`:browser` (no database access), mirrors a verified cookie into session `"organizer_token"`
+(LiveView reads only the session at connect), **re-issues** it so the 90 days are an *idle*
+window, and — with no user signed in — writes `OrganizerAuth.live_socket_id/1`
+(`"organizer_sessions:" <> base64url(sha256(token))`) as the session's `live_socket_id`. A session
+copy is trusted only when the same request carried the cookie: an absent or tampered cookie
+removes it. Only `GET /groups/new` mints, via `:ensure_organizer_identity` (a LiveView cannot write
+a cookie — the same reason `JoinController` exists); a busy database there redirects to `/` with a
+flash instead of a 500. The other six wizard routes only resolve.
 There is **no `current_user` assign anywhere in this app** — not on the conn, not on the socket.
 `fetch_current_scope_for_user/2` (browser pipeline) assigns `:current_scope`; the `on_mount` hooks assign
-the same key on the socket. Read the user as `@current_scope.user`.
+the same key on the socket. Read the user as `@current_scope.user` — and inside the wizard remember it may be `nil` for an
+accountless organizer; read the owner's name through `Activities.organizer_custom_name/1` and
+never `@current_scope.user.username`.
 
 Because `for_user(nil)` returns `nil`, guard both levels — `socket.assigns.current_scope &&
 socket.assigns.current_scope.user` — which is exactly what `UserAuth.on_mount(:require_authenticated, ...)`
@@ -327,10 +366,14 @@ registration, i.e. by the very password under suspicion.) Two web-layer conseque
   offer it as a way to *keep* the password — it is not one.
 
 **Context functions take a scope, not a user.** `Consensus.Activities.update_group/3` binds the
-scope's `user_id` and the group's `organizer_id` to the same variable name in the head —
-`update_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group, attrs)`
-— so a call on someone else's group fails to match any clause and raises `FunctionClauseError`
-rather than falling through a branch. Follow that shape for new write functions; see the `elixir`
+scope's owner id and the group's owner column to the same variable name in the head — and since
+D-058 there are **two heads**, one per kind of owner, each pinning the other identity to `nil` and
+guarding `when is_integer(id)`:
+`update_group(%Scope{user: %User{id: id}, anonymous_organizer: nil}, %Group{organizer_id: id} = group, attrs)`
+and `update_group(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}}, %Group{anonymous_organizer_id: id} = group, attrs)`
+— so a call on someone else's group (or with a both-set or unsaved-id scope) fails to match any
+clause and raises `FunctionClauseError` rather than falling through a branch. A LiveView just
+passes `@current_scope`; it never branches on which kind it holds. Follow that shape for new write functions; see the `elixir`
 skill for the one exception (`update_activity/3`/`delete_activity/2`, which re-read the owning
 group from the database instead, because an `%Activity{}` carries no organizer field to pattern
 match against). `Consensus.Content` — the module this section used to point at — is deleted
@@ -359,6 +402,11 @@ GET     /groups/:id/options                    ConsensusWeb.GroupLive.Options :i
 GET     /groups/:id/options/:activity_id       ConsensusWeb.GroupLive.Options :edit_activity
 GET     /groups/:id/review                     ConsensusWeb.GroupLive.Review :show
 GET     /groups/:id/share                      ConsensusWeb.GroupLive.Share :show
+GET     /groups/:id/results                    ConsensusWeb.GroupLive.Results :show
+GET     /join/:slug                            ConsensusWeb.JoinLive.Entry :show
+GET     /join/:slug/vote                       ConsensusWeb.JoinLive.Ballot :show
+GET     /join/:slug/results                    ConsensusWeb.JoinLive.Results :show
+POST    /join/:slug/enter                      ConsensusWeb.JoinController :enter
 GET     /                                      ConsensusWeb.HomeLive :show
 GET     /users/register                        ConsensusWeb.UserLive.Registration :new
 GET     /users/log-in                          ConsensusWeb.UserLive.Login :new
@@ -368,38 +416,49 @@ DELETE  /users/log-out                         ConsensusWeb.UserSessionControlle
 WS      /live/websocket                        Phoenix.LiveView.Socket
 ```
 
-**`/admin/home-page` is gone** (D-027, the admin-editable home page was deleted) — do not
-document it as a route. **`/join/:slug` does not exist yet** either: `docs/plans/creation-flow.md`
-names `Consensus.Activities.get_group_by_slug/1` as "the `/join/<slug>` lookup a guest voter
-follows", but there is no route or LiveView behind it in `router.ex` today — it is a public,
-unauthenticated screen for a future pass, not part of the `:require_authenticated_user`
-live_session below. Don't imply a shared join link resolves to a page; it does not yet.
+(Abridged further: `/admin/feedback`, `/how-it-works`, `/about`, `/privacy` and `/feedback` are
+real too — `mix phx.routes` is the authority.) **`/admin/home-page` is gone** (D-027, the
+admin-editable home page was deleted) — do not document it as a route. The `/join` tree is real
+(the voting loop) and lives in its own `live_session :participant`.
 
-Three `live_session`s, each with its own `on_mount`:
+Five `live_session`s, each with its own `on_mount`:
 
 | live_session | on_mount | who |
 |---|---|---|
-| `:current_user` | `{UserAuth, :mount_current_scope}` | public; `@current_scope` may be `nil` |
-| `:require_authenticated_user` | `{UserAuth, :require_authenticated}` | signed-in |
+| `:current_user` | `{UserAuth, :mount_current_scope}`, `{OrganizerAuth, :mount_organizer_scope}` | public; `@current_scope` may be `nil`; `@organizer_scope` (read by `HomeLive` only) is the accountless identity or `nil` |
+| `:organizer` | `{UserAuth, :mount_current_scope}`, `{OrganizerAuth, :require_organizer}` | the wizard: a signed-in user **or** an accountless organizer (D-058) |
+| `:participant` | `{UserAuth, :mount_current_scope}`, `{JoinAuth, :resolve_participant}` | the `/join` tree; no account ever |
+| `:require_authenticated_user` | `{UserAuth, :require_authenticated}` | signed-in — account screens only (`/users/settings`, …) |
 | `:require_admin` | `{UserAuth, :require_admin}` | `%User{is_admin: true}` |
 
-**The organizer's creation wizard lives inside `:require_authenticated_user`, alongside
-`/users/settings` — it does not get its own live_session.** `router.ex`'s own comment says why:
-all six wizard routes (`GroupLive.New` at `:new`/`:edit`, `GroupLive.Options` at
-`:index`/`:edit_activity`, `GroupLive.Review`, `GroupLive.Share`) are steps in one flow — the
-design calls them `01 → 02 → 02b → 03 → 04` — and sharing one live_session means moving between
-them is a `push_navigate` inside a single connected socket, never a full page reload. Adding a
-`live` route for a new wizard step means adding it inside this existing block, not a new
-`live_session` — see "Adding an authenticated LiveView route" below for why a second block with
-the same name raises.
+**The organizer's creation wizard lives in its own `live_session :organizer` (D-058), in a plain
+`:browser` scope — it no longer lives inside `:require_authenticated_user`.** All seven routes
+(`GroupLive.New` at `:new`/`:edit`, `GroupLive.Options` at `:index`/`:edit_activity`,
+`GroupLive.Review`, `GroupLive.Share`, `GroupLive.Results`) are steps in one flow — the design
+calls them `01 → 02 → 02b → 03 → 04 → 05` — and sharing one live_session means moving between
+them is a `push_navigate` inside a single connected socket, never a full page reload. Only
+`/groups/new` sits in a nested `scope` piping through `:ensure_organizer_identity` (the mint); a
+nested `scope` inside a `live_session` contributes its `pipe_through` to its own routes only.
+`:require_organizer` assigns the anonymous scope when no user is signed in, and when neither
+identity resolves it bounces: on `/groups/new` to `/` with a "cookies needed" flash (or, for a
+token that went stale under an open tab, to `/groups/new` itself), on `/groups/:id/*` to
+`/users/log-in?return_to=<path>` — never to the group's `/join` page, which would make sequential
+ids a slug oracle. `on_mount` is handed no URI, so it tells the routes apart by `socket.view` and
+`live_action`. **Never move a wizard route back under `:require_authenticated_user`:**
+`test/consensus_web/organizing_needs_no_account_test.exs` reads `router.ex` and fails if any of the
+seven sits in a scope piping through it. Adding a `live` route for a new wizard step means adding
+it inside this existing block, not a new `live_session` — see "Adding an authenticated LiveView
+route" below for why a second block with the same name raises.
 
 `UserAuth` also exposes `:require_sudo_mode` for sensitive actions. It calls
 `Accounts.sudo_mode?(user, -10)` — **10 minutes**, passed explicitly. Do not read the window off
 `Accounts.sudo_mode?/2`, whose own default is `-20`; the hook overrides it.
 
-**Every route is guarded twice on purpose.** The plug pipeline
+**Every authenticated route is guarded twice on purpose.** The plug pipeline
 (`:require_authenticated_user` / `:require_admin_user`) rejects the initial HTTP request; the `on_mount`
-hook rejects the LiveView websocket mount. Plugs do **not** run for the socket connection, so the
+hook rejects the LiveView websocket mount. (The wizard is the exception by design since D-058: it has
+no auth plug, `:require_organizer` is its guard on both the dead render and the socket, and the
+real ownership check is the context's function heads.) Plugs do **not** run for the socket connection, so the
 `on_mount` is not redundant — dropping it is a real auth hole.
 
 `test/consensus_web/router_test.exs` exists to keep that honest: it asserts that every `/admin` route
@@ -421,7 +480,9 @@ block; it takes `on_mount: [{ConsensusWeb.UserAuth, :require_admin}]` directly. 
    the right `on_mount`** — do not create a new `live_session` per page. Redefining a name raises
    `attempting to redefine live_session :x. live_session routes must be declared in a single named block.`
 4. Make sure the enclosing `scope` pipes through the matching plugs
-   (`[:browser, :require_authenticated_user]`, plus `:require_admin_user` for `/admin`).
+   (`[:browser, :require_authenticated_user]`, plus `:require_admin_user` for `/admin`). A new
+   wizard step is the exception: it goes in `live_session :organizer`'s plain `:browser` scope,
+   because organizing needs no account (D-058).
 5. Template opens with `<Layouts.app flash={@flash} current_scope={@current_scope}>`.
 
 Navigating between two different `live_session`s always causes a **full page reload**, not a
@@ -476,6 +537,22 @@ Four rules that come with it:
 - The same pattern already appears twice in `UserSessionController` — after a password change
   (`update_user_password/2` returns `expired_tokens`) and after a magic-link login. Follow those,
   and note none of them broadcasts from inside the context.
+
+**The accountless organizer's twin (D-058).** Every log-in funnels through
+`UserAuth.log_in_user/4` (`opts`: `claim:` defaults to `true`), which reads the organizer cookie
+before `renew_session/2` and calls `Activities.claim_anonymous_groups/2` — automatically for a
+password or post-registration log-in, and for a magic link only when the person ticks the unticked
+`#claim-consent` box on `UserLive.Confirmation` (`UserSessionController` passes `claim: false`
+otherwise: a forwarded magic link for an attacker's account must not collect the victim's
+sessions). Every settled outcome (`{:ok, n}` with 0 included, `:already_claimed`, `:not_found`)
+deletes the cookie and broadcasts `"disconnect"` on `OrganizerAuth.live_socket_id(token)`; the
+"N session(s) saved to your account." flash appears only for `n > 0`; `{:error,
+{:database_busy, _}}` keeps the cookie and sends nothing, so the next log-in retries. Because the
+transport's `live_socket_id` is read from the session as it stood at connect, `:require_organizer`
+**also** subscribes each connected anonymous LiveView to that topic and attaches a `handle_info`
+hook that redirects the tab to its own route on the broadcast. The guarantee behind the prompt is
+again in the context: the anonymous `create_group` heads re-read the identity and refuse a claimed
+one with `{:error, :claimed}`.
 
 ## LiveView lifecycle here
 
@@ -535,7 +612,8 @@ rather than patching the broadcast payload into the socket directly — the same
 handles a rejected client-side reorder snapping back to the saved order, so one code path covers
 both "a friend changed something" and "my own optimistic UI guess was wrong". `HomeLive` follows
 the same PubSub-subscribe shape for its list of groups (see its own moduledoc for the exact
-topics it joins across all of a signed-in organizer's active groups).
+topics it joins across all of an organizer's active groups — signed in or, since D-058, an
+accountless organizer's via `@organizer_scope`).
 
 Do not call `Phoenix.PubSub.broadcast/3` from a LiveView. Do not subscribe outside `connected?/1` — the
 dead render would leak a subscription in the HTTP process.
@@ -751,8 +829,12 @@ link fail with `{:error, :not_configured}`, for a reason that has nothing to do 
 under test — context tests would still pass, because there `fetch/1` runs in the test process
 itself.
 
-`ConsensusWeb.ConnCase` provides `log_in_user/3` and `register_and_log_in_user/1` (which also accepts a
-`:token_authenticated_at` context key for sudo-mode tests). Fixtures in `Consensus.AccountsFixtures`:
+`ConsensusWeb.ConnCase` provides `log_in_user/4` and `register_and_log_in_user/1` (which also accepts a
+`:token_authenticated_at` context key for sudo-mode tests), and — the accountless twin (D-058) —
+`setup :create_anonymous_organizer` (stores `:conn`, `:anonymous_organizer`, the raw
+`:organizer_token` and the anonymous `:scope`) plus `put_organizer_token(conn, raw_token)`, which
+puts the token on the conn as the **signed request cookie** a browser would send, so both the dead
+render and the connected mount see it. Fixtures in `Consensus.AccountsFixtures`:
 `user_fixture/1`, `unconfirmed_user_fixture/1`, **`admin_fixture/1`**, `user_scope_fixture/0,1`,
 **`admin_scope_fixture/1`**, **`stale_scope/1`**, `set_password/1`,
 `override_token_authenticated_at/2`, `generate_user_magic_link_token/1`, `offset_user_token/3`.
@@ -763,7 +845,9 @@ tests rather than hand-rolling the role. Note it writes `is_admin` via `User.adm
 directly, *not* through `Accounts.set_admin/3` — that function requires an admin actor, which is a
 chicken-and-egg problem for the first admin. The fixture carries a comment saying so.
 `Consensus.ActivitiesFixtures` (`test/support/fixtures/activities_fixtures.ex`) is the wizard
-screens' equivalent: `group_fixture/2` takes a `%Scope{}`, `activity_fixture/2` takes a `%Group{}`.
+screens' equivalent: `group_fixture/2` takes a `%Scope{}`, `activity_fixture/2` takes a `%Group{}`,
+and `anonymous_organizer_fixture/1` (→ `{raw_token, row}`), `anonymous_scope_fixture/1` and
+`anonymous_group_fixture/1` (→ `{scope, group}`) cover an owner with no account.
 
 **`test/consensus_web/journey_test.exs` is the end-to-end acceptance test for the creation side,
 and it is deliberately one test, not a suite of small ones.** It drives a single organizer
@@ -775,7 +859,11 @@ shows up *between* screens — a wizard step that `push_navigate`s somewhere tha
 a value that renders but was never actually written, a draft that cannot be resumed after the
 websocket is thrown away and rebuilt from scratch. Run it whenever a change touches more than one
 screen in the wizard; a change confined to one screen's own file is usually covered by that
-screen's own test.
+screen's own test. **Its accountless sibling is `test/consensus_web/claim_journey_test.exs`**
+(D-058, `async: false`): a cold browser → `/groups/new` → create with a name → options → publish →
+share → register → `/` lists the session as the account's, plus a second test that a wizard tab
+left open with the anonymous scope stops writing once the claim lands. The organizer identity's
+own plugs and hooks are covered in `test/consensus_web/organizer_auth_test.exs`.
 
 Three web tests are not LiveView tests and are easy to miss.
 `test/consensus_web/router_test.exs` walks `ConsensusWeb.Router.__routes__/0` and the router source to
@@ -792,7 +880,7 @@ reaches outside the app for two config assertions: **`config/prod.exs` is evalua
 contain `[[http_service.checks]]` and `path = '/health'`. Editing either file can therefore fail a
 *web* test; that is deliberate, since the two must agree or the machine never reports healthy.
 `test/consensus_web/user_auth_test.exs` has `describe`
-blocks for `log_in_user/3`, `logout_user/1`, `fetch_current_scope_for_user/2`, `disconnect_sessions/1`,
+blocks for `log_in_user` (including "claiming the browser's accountless sessions"), `logout_user/1`, `fetch_current_scope_for_user/2`, `disconnect_sessions/1`,
 `require_authenticated_user/2`, `require_admin_user/2`, and the `:mount_current_scope`,
 `:require_authenticated`, `:require_sudo_mode` and `:require_admin` `on_mount` hooks. Anything you add
 to `user_auth.ex` belongs there, not in a page's own test file.
@@ -816,7 +904,7 @@ Notes that bite:
 
 **`KeyError: key :current_scope not found`** (raised at render, from `Layouts.app` or the template).
 The route is not inside a `live_session` that runs a `UserAuth` `on_mount` hook. Fix by moving the
-`live` line into `:current_user`, `:require_authenticated_user`, or `:require_admin` — **not** by
+`live` line into `:current_user`, `:organizer`, `:participant`, `:require_authenticated_user`, or `:require_admin` — **not** by
 assigning `current_scope` yourself in `mount/3`.
 
 **`warning: no route path for ConsensusWeb.Router matches "/foo"`.** Typo in a `~p`, or the route lives

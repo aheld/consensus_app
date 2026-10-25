@@ -5,8 +5,14 @@ defmodule ConsensusWeb.PrivacyLive do
   **No design frame** (plan ruling 7: short, honest, real). Every sentence below is
   checkable against this repo, and was checked when it was written:
 
-    * organizers — `Consensus.Accounts.User` stores `email`, `username` and a bcrypt
-      hash, nothing else;
+    * organizers — no account is required (D-058). `Consensus.Activities.AnonymousOrganizer`
+      stores an optional `display_name` and the SHA-256 `token_hash` of a random token
+      (never the token itself), plus `last_seen_at` and the claim columns; the groups and
+      activities they create are the sessions. `Consensus.Accounts.User` — `email`,
+      `username` and a bcrypt hash, nothing else — exists only for an organizer who saves
+      their sessions to an account. `UserAuth.log_in_user/4` claims a browser's unsaved
+      sessions on a password or registration log-in and flashes the count; a magic-link
+      log-in claims only when `ConsensusWeb.UserLive.Confirmation`'s consent box is ticked;
     * voters — `Consensus.Voting.Participant` stores an optional `display_name` and a
       server-minted `token`, and no account is ever required (product invariant 1);
     * anonymity — and this one is narrower than the page used to claim, in **two**
@@ -34,11 +40,15 @@ defmodule ConsensusWeb.PrivacyLive do
       was on **only** when the box on `/feedback` was left ticked (D-042);
     * no analytics — there is no analytics, tracking or error-reporting dependency in
       `mix.exs` and no tracker in `assets/`; verified by grep before this page shipped;
-    * two cookies, and the count is the point — `ConsensusWeb.Endpoint`'s session cookie
-      `_consensus_key`, plus `@remember_me_cookie` (`_consensus_web_user_remember_me`,
+    * three cookies, and the count is the point — `ConsensusWeb.Endpoint`'s session cookie
+      `_consensus_key`; `@remember_me_cookie` (`_consensus_web_user_remember_me`,
       `max_age` 14 days) in `ConsensusWeb.UserAuth`, which is written only when the
-      log-in form's "Log in and stay logged in" submits `remember_me: "true"`. This page
-      said "one cookie" until a copy review counted; if a third ever appears, say three;
+      log-in form's "Log in and stay logged in" submits `remember_me: "true"`; and
+      `ConsensusWeb.OrganizerAuth.cookie_name/0` (D-058), minted on `/groups/new` for a
+      visitor with no account, re-issued with a fresh 90-day `max_age` on every request
+      that carries it (so 90 days since last use, not since the first visit), and deleted
+      on a definitive claim. This page said "one cookie" until a copy review counted, then
+      "two" until D-058; if a fourth ever appears, say four;
     * one third-party request — `root.html.heex` loads Instrument Sans and DM Mono from
       Google Fonts, which is the only host a page here fetches from. Saying "no third
       parties" while the browser calls out for two typefaces would be exactly the kind
@@ -134,10 +144,20 @@ defmodule ConsensusWeb.PrivacyLive do
             that vote, and against your account if you were signed in when you joined.
           </.section>
 
+          <%!-- Same line-break discipline as the card below: "stored only as a hash",
+                "only if you choose to save them" and "saves them to your account" are the
+                phrases this section is pinned on, so none may be split across a line. --%>
           <.section title="If you organize">
-            The email address and username you signed up with, and your password stored as
-            a bcrypt hash — we can't read it back. Plus the sessions you create and the
-            options in them.
+            No account needed. A name is optional — leave it blank and guests see "the
+            organizer". Your browser is given a random token so it can find your
+            sessions again, and we keep it stored only as a hash.
+            Plus the sessions you create and the options in them.
+            An email address, a username and a password come into it
+            only if you choose to save them to an account: then we keep the email and
+            username, and the password as a bcrypt hash — we can't read it back.
+            Logging in or signing up on a browser that holds someone else's unsaved
+            sessions saves them to your account, and we tell you how many it saved; a
+            log-in by emailed link asks you first.
           </.section>
 
           <%!-- The title changed with the copy (D-049). "Votes are anonymous" over a
@@ -170,9 +190,11 @@ defmodule ConsensusWeb.PrivacyLive do
           </.section>
 
           <.section title="Cookies and other sites">
-            Two cookies. One keeps you signed in and remembers which vote you are in. The
-            other is written only if you choose "Log in and stay logged in", and it keeps
-            you signed in on this device for 14 days.
+            Three cookies. One keeps you signed in and remembers which vote you are in.
+            One is written only if you choose "Log in and stay logged in", and it keeps
+            you signed in on this device for 14 days. One holds the token for sessions you
+            start without an account; it lasts 90 days since you last used it, and is
+            removed once those sessions are saved to an account.
             There is no analytics, no advertising and no tracker of any kind in this app.
             Pages do fetch two typefaces from Google Fonts, so Google sees that request.
             The <span class="whitespace-nowrap">marketfinder.us</span>
@@ -221,11 +243,13 @@ defmodule ConsensusWeb.PrivacyLive do
               because the footer's link is built in `chrome.ex` and carries whatever
               `return_to` this page was *handed*, not this page's own path.
 
-              So the page gets a forward action the footer does not already offer. It
-              knows who is reading it, the way `/how-it-works`' CTA does: creating a
-              session needs an account and voting in one never does, and sending a
-              signed-out reader into a login wall unannounced is the "unpredictable
-              outcome" failure. (`/about` keeps its **See how it works** — its CTA is
+              So the page gets a forward action the footer does not already offer:
+              `/groups/new`, for everyone, like `/how-it-works`' CTA. It used to branch on
+              who was reading — a signed-out reader went to `/users/register`, with a line
+              beneath saying what that would ask for — because creating a session needed an
+              account. Since D-058 it does not, so the branch and the line are gone rather
+              than reworded: a warning about a wall that no longer exists is its own
+              "unpredictable outcome". (`/about` keeps its **See how it works** — its CTA is
               246px clear of the footer and About → How it works is a real reading order,
               not a duplicate.)
 
@@ -242,14 +266,10 @@ defmodule ConsensusWeb.PrivacyLive do
             variant="primary"
             class="w-full"
             id="privacy-cta"
-            navigate={if @current_scope, do: ~p"/groups/new", else: ~p"/users/register"}
+            navigate={~p"/groups/new"}
           >
             Start something
           </.button>
-          <p :if={!@current_scope} class="text-center text-[11.5px] leading-[1.4] text-muted">
-            Starting one asks for an email, a username and a password. Voting in someone
-            else's never does.
-          </p>
         </div>
       </div>
     </Layouts.app>

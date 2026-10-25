@@ -144,15 +144,32 @@ Order is load-bearing:
 2. Consensus.Repo
 3. {Ecto.Migrator, repos: …, skip: skip_migrations?()}
 4. {Consensus.Seeds, skip: skip_seeds?()}
-5. {DNSCluster, query: …}
-6. {Phoenix.PubSub, name: Consensus.PubSub}
-7. ConsensusWeb.Endpoint
+5. {Consensus.Housekeeping, skip: skip_seeds?()}      # D-058
+6. {DNSCluster, query: …}
+7. {Phoenix.PubSub, name: Consensus.PubSub}
+8. Consensus.LinkPreview.Cache
+9. Consensus.Discovery.Cache
+10. ConsensusWeb.Endpoint
 ```
 
-Children 3 and 4 are **synchronous, run-once, return `:ignore`** — they do their work
+Children 3, 4 and 5 are **synchronous, run-once, return `:ignore`** — they do their work
 during supervisor init and leave nothing in the tree. `Consensus.Seeds` implements this
 by hand (`child_spec/1` with `restart: :transient`, `start_link/1` calling `run!/0` then
-returning `:ignore`); copy that shape if you ever need another boot-time step.
+returning `:ignore`); copy that shape if you ever need another boot-time step —
+`Consensus.Housekeeping` (`lib/consensus/housekeeping.ex`) is the second instance of it.
+
+**`Consensus.Housekeeping` sits directly *after* Seeds, never between the migrator and
+Seeds** (invariant 2 pins those two as adjacent), and before the caches and the endpoint. It
+shares Seeds' `skip_seeds?()` gate, so it runs in a release only — never under `mix test` or
+`mix phx.server`. Today it does one thing: `Activities.sweep_anonymous_organizers/1`, one
+`DELETE` of accountless organizer rows that are unclaimed, idle more than 30 days and own no
+group. It is housekeeping, not correctness — there is no scheduler (D-029) and the machine never
+auto-stops, so it may go months between runs — which is why **every** failure is rescued and
+logged (`[housekeeping] sweep failed, boot continues: …`) rather than raised: a child that raises
+during init takes the node down before the endpoint binds. `activity_groups.anonymous_organizer_id`
+is `ON DELETE RESTRICT`, so a wrong sweep predicate raises (and is logged) instead of cascading
+through groups and votes. `application_test.exs` asserts its position and its `skip:` in both
+`RELEASE_NAME` states.
 
 Three of these are public API, and deliberately so. **`Consensus.Application.children/0` returns
 the list without starting it**, so `test/consensus/application_test.exs` can assert its shape;
@@ -239,11 +256,15 @@ so an admin-only endpoint cannot smuggle an email or password change through.
 `Consensus.Activities.Group.status_changeset/2` is the same idea for a lifecycle field: it
 casts only `[:status, :completed_at, :cancelled_at]`, kept apart from the organizer-facing
 `changeset/2` so a public edit form can never smuggle a status transition through `attrs`.
-Fields set programmatically — `organizer_id` on a `%Group{}`, `group_id`/`added_by_id`/
-`position` on an `%Activity{}` — are **never** in `cast/3`; `Consensus.Activities.create_group/2`
-and `add_activity/3` set them directly on the struct (`%Group{organizer_id: user_id}`,
-`%Activity{group_id: group.id, added_by_id: user_id}`) before handing it to the schema's
-changeset.
+Fields set programmatically — `organizer_id` and `anonymous_organizer_id` on a `%Group{}`,
+`group_id`/`added_by_id`/`position` on an `%Activity{}` — are **never** in `cast/3`;
+`Consensus.Activities.new_group/1`, `create_group/2` and `add_activity/3` set them directly on the
+struct (`%Group{organizer_id: user_id}` or `%Group{anonymous_organizer_id: id}`,
+`%Activity{group_id: group.id, added_by_id: user_id}` — `added_by_id` is `nil` for an accountless
+organizer, since it references `users`) before handing it to the schema's changeset.
+`Group.changeset/2` declares `check_constraint(:organizer_id, name:
+:organizer_xor_anonymous_organizer)` so the "exactly one owner" CHECK (D-058) surfaces as a
+changeset error rather than an `Ecto.ConstraintError`.
 
 **Options keyword instead of a second changeset**, via `Keyword.get(opts, :flag, default)`
 inside a private validator. `registration_changeset/3` threads `opts` into
@@ -314,19 +335,55 @@ the write lands. `delete_user/2` uses the identical `with` chain, substituting
 `refuse_self_deletion/2` and `refuse_admin_deletion/1` for the last-admin guard.
 
 **Authorization is a function clause, not an `if`.** `Consensus.Activities` is the model now
-that `Consensus.Content` is deleted (D-027): its function heads bind the scope's `user_id` and
-the resource's owner id to the *same variable name* —
-`update_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group, attrs)`
-— so a call on someone else's group fails to match any clause and raises `FunctionClauseError`
-rather than taking a runtime branch. `create_group/2`, `publish_group/2`, `cancel_group/2`,
-`complete_group/2`, `add_activity/3` and `reorder_activities/3` all follow this shape. Contexts
-take `current_scope` as the first argument (see `AGENTS.md`).
+that `Consensus.Content` is deleted (D-027): its function heads bind the scope's owner id and
+the resource's owner column to the *same variable name*. **Since D-058 ownership is two-valued**
+— a group belongs to a `User` *or* an accountless `AnonymousOrganizer`, never both (a named
+CHECK) — so every owning function has **two heads**, one per kind of owner, delegating to a
+shared private `do_*` body:
+
+```elixir
+def update_group(%Scope{user: %User{id: id}, anonymous_organizer: nil},
+                 %Group{organizer_id: id} = group, attrs) when is_integer(id), ...
+def update_group(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+                 %Group{anonymous_organizer_id: id} = group, attrs) when is_integer(id), ...
+```
+
+Two details are load-bearing. **The other identity is pinned to `nil`** in every head, so a
+`%Scope{}` with both fields set (a `defstruct` cannot forbid it) matches *neither* head and
+raises instead of the first head winning. **`when is_integer(id)`** on every head: with both owner
+columns nullable, an unsaved struct (`id: nil`) would otherwise match every group owned by the
+*other* kind — a cross-tenant write no "different owner" test catches. A call on someone else's
+group, a both-set scope or an unsaved id therefore raises `FunctionClauseError` rather than taking
+a runtime branch — including `get_group!/2`, whose guards fire before its owner-filtered query
+(a *foreign* id there raises `Ecto.NoResultsError`). **Do not collapse a pair into a computed owner
+key compared in the body** (D-058 rejects it: one inverted comparison is a cross-tenant write the
+suite cannot see). `set_search_area/3`, `add_activity/3` and `reorder_activities/3` each have one
+public pair with the `:draft` check in the private body. The anonymous `create_group/2` and
+`create_group_with_organizer_name/3` heads also re-read the identity inside their transaction and
+return `{:error, :claimed}` once a log-in has claimed it. Contexts take `current_scope` as the
+first argument (see `AGENTS.md`).
+
+**The one write authorized by a secret rather than a head is the claim.**
+`Activities.claim_anonymous_groups(%User{}, raw_token)` — called only from
+`UserAuth.log_in_user/4` with the token read from the organizer cookie, never a client parameter
+— is a compare-and-swap on `claimed_at IS NULL`, then one `UPDATE` moving the identity's groups to
+the user, in one transaction; it returns `{:ok, n}`, `{:error, :already_claimed}`,
+`{:error, :not_found}` or `{:error, {:database_busy, msg}}` (`Exqlite.Error` and
+`DBConnection.ConnectionError` rescued, invariant 17's shape). A re-claim by the same user re-runs
+the move. Related D-058 surface: `mint_anonymous_organizer/0` (→ `{raw_token, row}`, the token
+stored SHA-256-hashed), `get_anonymous_organizer_by_token/1` (the one resolver: `nil` for unknown,
+claimed or 90-day-idle; touches `last_seen_at` at most once a day), `organizer_custom_name/1`,
+`count_groups/1`, `owns_any_group?/1`, `change_organizer_display_name/2`,
+`update_organizer_display_name/2`, and `create_group_with_organizer_name/3` /
+`update_group_with_organizer_name/4`, which save the group and the display name in one transaction
+and broadcast after commit.
 
 **The one deliberate exception is a DB re-read, not a pattern match, and it is documented as
 such in the module.** `update_activity/3` and `delete_activity/2` take an `%Activity{}`, which
 carries only `group_id` — not the organizer id — so there is no owner field to bind against the
-scope's `user_id` in the function head. Both instead call a private `authorize_activity/2` that
-re-fetches the `%Group{}` by `group_id` and matches its `organizer_id`, returning
+scope's owner id in the function head. Both instead call a private `authorize_activity/2` (two
+clauses since D-058, one per kind of owner) that re-fetches the `%Group{}` by `group_id` and
+matches its `organizer_id` or `anonymous_organizer_id`, returning
 `{:error, :unauthorized}` for someone else's group or `{:error, :not_found}` for a group that no
 longer exists — the same "don't trust the struct in hand, re-read from storage" idiom
 `Accounts.set_admin/3` uses for its actor (D-016).
@@ -502,7 +559,13 @@ Two case templates, both in `test/support/` (compiled only in `:test` via
   `Ecto.Query`, aliases `Repo`, provides `errors_on/1`.
 - **`ConsensusWeb.ConnCase`** — controller and LiveView tests. Brings `Plug.Conn`,
   `Phoenix.ConnTest`, `use ConsensusWeb, :verified_routes` (so `~p"/users/log-in"`
-  works), `@endpoint`, plus `register_and_log_in_user/1` and `log_in_user/3`.
+  works), `@endpoint`, plus `register_and_log_in_user/1` and `log_in_user/4` — and, for an
+  organizer with no account (D-058), `setup :create_anonymous_organizer` (mints an identity
+  through the real write path; stores `:conn`, `:anonymous_organizer`, the raw
+  `:organizer_token` and the anonymous `:scope`) and `put_organizer_token(conn, raw_token)`,
+  which puts the token on the conn as the signed **request cookie** a browser sends, so
+  `OrganizerAuth.fetch_organizer_token/2` mirrors it into the session for both halves of
+  `live/2`.
 
 Both call `Consensus.DataCase.setup_sandbox/1`, which does
 `Ecto.Adapters.SQL.Sandbox.start_owner!(Consensus.Repo, shared: not tags[:async])` and
@@ -532,7 +595,8 @@ tests still cannot see each other's rows. It just no longer buys concurrent wall
 because `max_cases: 1` removes that regardless of the tag.
 
 Verified 2026-08-12: `MIX_TEST_PARTITION=p11 mix precommit` → **1256 tests, 0 failures**,
-"Finished in 6.0 seconds (1.9s async, 4.1s sync)". Re-run for a current count rather than
+"Finished in 6.0 seconds (1.9s async, 4.1s sync)"; after D-058 (2026-10-24, partitioned
+`mix test`) **1555 tests, 0 failures**. Re-run for a current count rather than
 quoting that number — the count grows as the app is written.
 
 **Always pass `MIX_TEST_PARTITION` when anything else might be running the suite.** Two
@@ -591,7 +655,10 @@ Fixtures: `test/support/fixtures/accounts_fixtures.ex` (`Consensus.AccountsFixtu
 `test/support/fixtures/activities_fixtures.ex` (`Consensus.ActivitiesFixtures`) is the newer,
 smaller sibling — `unique_group_title/0`, `unique_activity_name/0`, `future_deadline/0`,
 `past_deadline/0`, `group_fixture/2` (takes a `%Scope{}` plus attrs), `activity_fixture/2`
-(takes a `%Group{}` plus attrs). Both `*_deadline/0` helpers are `DateTime.add(..., :second)`
+(takes a `%Group{}` plus attrs), and the D-058 trio for an owner with no account:
+`anonymous_organizer_fixture/1` (→ `{raw_token, row}`; attrs are applied *after* the mint, which
+is how a test gets a claimed or 90-day-idle identity), `anonymous_scope_fixture/1` and
+`anonymous_group_fixture/1` (→ `{scope, group}`). Both `*_deadline/0` helpers are `DateTime.add(..., :second)`
 one day either side of now — use `past_deadline/0` for a group that should have already
 auto-completed under `maybe_complete_group/1`, not a hand-built timestamp.
 
@@ -962,7 +1029,7 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect the count of the day: 1256 tests, 0 failures as of 2026-08-12. Re-run rather than
+Expect the count of the day: 1555 tests, 0 failures as of 2026-10-24 (1256 on 2026-08-12, before D-058). Re-run rather than
 trusting that number — the count grows as the app is written — but a failure is a real
 signal, not background noise, provided you partitioned the database.
 
