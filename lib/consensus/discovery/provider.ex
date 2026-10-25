@@ -7,7 +7,7 @@ defmodule Consensus.Discovery.Provider do
   `config :consensus, Consensus.Discovery, providers: %{type => {module, opts}}` —
   and `Consensus.Discovery` resolves the activity type with `Map.get/3`. The type
   never reaches an adapter and no adapter ever branches on it: per-type knowledge
-  (Overpass tags, an API key) travels in the registered `opts`, which
+  (a category allowlist, an API key) travels in the registered `opts`, which
   `Consensus.Discovery.search/3` passes through to `c:search/3` unchanged. That is
   how four types can share one module with different data, and it is what keeps
   CLAUDE.md product invariant 2 checkable.

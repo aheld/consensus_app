@@ -8,17 +8,24 @@ defmodule Consensus.Discovery.Geocoder do
   and from `start_async/3`, never inline in a `handle_event` (CLAUDE.md
   invariant 13 — this is a network request with multi-second budgets).
 
-  Two more Nominatim policy requirements are load-bearing here, not niceties:
+  The request itself goes through `Consensus.Discovery.Nominatim`, the one
+  client both Nominatim callers share: it owns the endpoint, the identifying
+  User-Agent, the timeouts and the app-wide one-request-per-second gate.
+  What stays here is the policy's other requirement, **caching**: successful
+  geocodes are cached effectively indefinitely (`@success_ttl_ms`, one year) in
+  `Consensus.Discovery.Cache` — a neighbourhood's bounding box is immutable at
+  the resolution we use, and re-asking a volunteer service the same question is
+  exactly what its policy exists to stop. Failures are cached briefly
+  (`@error_ttl_ms`) so a transient outage heals without hammering the endpoint
+  either. A gate refusal (`:busy`) is the one failure never cached: nothing was
+  asked, so there is no answer to remember, and the organizer's next submit
+  should really try.
 
-    * **An identifying User-Agent.** Every request carries `@user_agent`, which
-      names the app and where to find it. Nominatim blocks anonymous or
-      browser-imitating agents.
-    * **Caching.** Successful geocodes are cached effectively indefinitely
-      (`@success_ttl_ms`, one year) in `Consensus.Discovery.Cache` — a
-      neighbourhood's bounding box is immutable at the resolution we use, and
-      re-asking a volunteer service the same question is exactly what its policy
-      exists to stop. Failures are cached briefly (`@error_ttl_ms`) so a
-      transient outage heals without hammering the endpoint either.
+  Every request carries `countrycodes` from
+  `config :consensus, Consensus.Discovery.Geocoder, countrycodes:` (`"us"` by
+  default; `nil` means no restriction). Without it a bare ZIP is a global
+  question: `"19125"`, a Philadelphia ZIP, resolves to La Spezia, Italy, and
+  that bbox would be stored on the group.
 
   `geocode/1` never raises: every failure is a tagged tuple, per
   `Consensus.LinkPreview.fetch/1`'s contract.
@@ -26,13 +33,10 @@ defmodule Consensus.Discovery.Geocoder do
 
   alias Consensus.Discovery.Area
   alias Consensus.Discovery.Cache
+  alias Consensus.Discovery.Nominatim
 
   require Logger
 
-  @endpoint "https://nominatim.openstreetmap.org/search"
-  @user_agent "Consensus/0.2 (group activity planning app; https://dinner.isourthing.com)"
-  @connect_timeout_ms 5_000
-  @receive_timeout_ms 10_000
   @success_ttl_ms :timer.hours(24 * 365)
   @error_ttl_ms :timer.minutes(5)
 
@@ -69,8 +73,12 @@ defmodule Consensus.Discovery.Geocoder do
               {result, geocode_stop_metadata(query, result, :hit)}
 
             :miss ->
-              result = safe_lookup(query)
-              Cache.put(cache_key, result, ttl_ms: @success_ttl_ms, error_ttl_ms: @error_ttl_ms)
+              {result, cacheable?} = safe_lookup(query)
+
+              if cacheable? do
+                Cache.put(cache_key, result, ttl_ms: @success_ttl_ms, error_ttl_ms: @error_ttl_ms)
+              end
+
               {result, geocode_stop_metadata(query, result, :miss)}
           end
         end)
@@ -114,7 +122,7 @@ defmodule Consensus.Discovery.Geocoder do
           Exception.format(:error, exception, __STACKTRACE__)
       )
 
-      {:error, :geocode_failed}
+      {{:error, :geocode_failed}, true}
   catch
     kind, reason ->
       Logger.error(
@@ -122,38 +130,32 @@ defmodule Consensus.Discovery.Geocoder do
           inspect({kind, reason})
       )
 
-      {:error, :geocode_failed}
+      {{:error, :geocode_failed}, true}
   end
 
   @doc false
   # Public so the telemetry handler can log a pasteable URL, and so a test can
-  # pin the query string. Building it here — rather than in the handler — is
-  # what stops the logged URL and the sent URL drifting apart: there is one
-  # expression, and observability reads it rather than reimplementing it.
-  def request_url(query),
-    do: @endpoint <> "?" <> URI.encode_query(q: query, format: "jsonv2", limit: 1)
+  # pin the query string. Built by the client from the same params the request
+  # uses, so the logged URL and the sent URL cannot drift apart.
+  def request_url(query), do: Nominatim.request_url(request_params(query))
 
-  defp perform_lookup(query) do
-    url = request_url(query)
+  defp request_params(query) do
+    case Application.get_env(:consensus, __MODULE__, [])[:countrycodes] do
+      codes when is_binary(codes) and codes != "" ->
+        [q: query, format: "jsonv2", limit: 1, countrycodes: codes]
 
-    request_opts = [
-      headers: [{"user-agent", @user_agent}],
-      connect_timeout_ms: @connect_timeout_ms,
-      receive_timeout_ms: @receive_timeout_ms
-    ]
-
-    case http_module().get(url, request_opts) do
-      {:ok, %{status: 200, body: body}} -> parse_body(query, body)
-      {:ok, %{status: _status}} -> {:error, :geocode_failed}
-      {:error, _reason} -> {:error, :geocode_failed}
+      _none ->
+        [q: query, format: "jsonv2", limit: 1]
     end
   end
 
-  defp parse_body(query, body) do
-    case Jason.decode(body) do
-      {:ok, [place | _rest]} -> build_area(query, place)
-      {:ok, []} -> {:error, :not_found}
-      _other -> {:error, :geocode_failed}
+  # Returns {result, cacheable?}. Only a gate refusal is not cacheable.
+  defp perform_lookup(query) do
+    case Nominatim.search(request_params(query)) do
+      {:ok, [place | _rest]} -> {build_area(query, place), true}
+      {:ok, []} -> {{:error, :not_found}, true}
+      {:error, :busy} -> {{:error, :geocode_failed}, false}
+      {:error, _reason} -> {{:error, :geocode_failed}, true}
     end
   end
 
@@ -193,9 +195,4 @@ defmodule Consensus.Discovery.Geocoder do
   end
 
   defp presence(_value), do: nil
-
-  defp http_module do
-    Application.get_env(:consensus, __MODULE__, [])[:http] ||
-      Consensus.Discovery.Geocoder.HTTP.Req
-  end
 end

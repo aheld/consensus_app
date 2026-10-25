@@ -7,10 +7,11 @@ defmodule Consensus.DiscoveryTest do
 
   alias Consensus.Discovery
   alias Consensus.Discovery.Area
-  alias Consensus.Discovery.Provider.Overpass
+  alias Consensus.Discovery.Nominatim.Gate
+  alias Consensus.Discovery.Provider.Nominatim
   alias Consensus.Discovery.Result
   alias Consensus.DiscoveryStub
-  alias Consensus.OverpassHTTPStub
+  alias Consensus.NominatimHTTPStub
 
   # do_search logs a provider's raise/exit at :error before degrading it to a tuple.
   @moduletag :capture_log
@@ -53,12 +54,23 @@ defmodule Consensus.DiscoveryTest do
     on_exit(fn -> Application.put_env(:consensus, Consensus.Discovery, original) end)
   end
 
-  # For the integration describe below: the real Overpass adapter registered the
-  # way config/config.exs registers it — module + per-type tag opts.
+  # For the integration describe below: the real Nominatim adapter registered the
+  # way config/config.exs registers it — module + per-type category opts.
   @philly_area %Area{name: "Philadelphia", bbox: {39.867, -75.2803, 40.1379, -74.9558}}
 
-  defp register_overpass_for_bowling do
-    put_providers(%{"bowling" => {Overpass, tags: [{"leisure", "bowling_alley"}]}})
+  defp lanes(id) do
+    %{
+      "osm_type" => "node",
+      "osm_id" => id,
+      "category" => "leisure",
+      "type" => "bowling_alley",
+      "name" => "Lanes #{id}",
+      "extratags" => %{"website" => "https://lanes#{id}.test/"}
+    }
+  end
+
+  defp register_nominatim_for_bowling do
+    put_providers(%{"bowling" => {Nominatim, categories: [{"leisure", "bowling_alley"}]}})
   end
 
   describe "search/3 — registry fallthrough" do
@@ -124,9 +136,9 @@ defmodule Consensus.DiscoveryTest do
     end
 
     test "a provider's tagged error passes through" do
-      DiscoveryStub.stub_search(fn _query, _area, _opts -> {:error, :overpass_down} end)
+      DiscoveryStub.stub_search(fn _query, _area, _opts -> {:error, :upstream_down} end)
 
-      assert Discovery.search("restaurant", "vernick", nil) == {:error, :overpass_down}
+      assert Discovery.search("restaurant", "vernick", nil) == {:error, :upstream_down}
     end
   end
 
@@ -229,18 +241,18 @@ defmodule Consensus.DiscoveryTest do
 
     test "errors are cached on the separate error TTL and heal after it" do
       DiscoveryStub.stub_cache_policy(caching_policy(%{error_ttl_ms: 100}))
-      install_counting_stub({:error, :overpass_down})
+      install_counting_stub({:error, :upstream_down})
 
-      assert Discovery.search("restaurant", "vernick", nil) == {:error, :overpass_down}
+      assert Discovery.search("restaurant", "vernick", nil) == {:error, :upstream_down}
       assert_receive {:searched, _query}
 
       # Within the (tiny) error TTL: cached, no second provider call.
-      assert Discovery.search("restaurant", "vernick", nil) == {:error, :overpass_down}
+      assert Discovery.search("restaurant", "vernick", nil) == {:error, :upstream_down}
       refute_receive {:searched, _query}
 
       Process.sleep(150)
 
-      assert Discovery.search("restaurant", "vernick", nil) == {:error, :overpass_down}
+      assert Discovery.search("restaurant", "vernick", nil) == {:error, :upstream_down}
       assert_receive {:searched, _query}
     end
 
@@ -292,35 +304,33 @@ defmodule Consensus.DiscoveryTest do
     end
   end
 
-  describe "search/3 — through the real Overpass adapter (integration, no network)" do
-    # overpass_test.exs drives the adapter directly, and every other case in this
+  describe "search/3 — through the real Nominatim adapter (integration, no network)" do
+    # nominatim_test.exs drives the adapter directly, and every other case in this
     # file drives Discovery through DiscoveryStub — this describe is the one
     # place the two layers run *together*: the registry lookup, the cache_policy
-    # read, the results cap and the error boundary, all against the real
-    # adapter's return contract, with canned Overpass JSON at the HTTP seam
-    # (config/test.exs already points the adapter's HTTP module at the stub, so
+    # read, the results cap, the error boundary and the rate gate, all against
+    # the real adapter's return contract, with canned Nominatim JSON at the HTTP
+    # seam (config/test.exs points the client's HTTP module at the stub, so
     # nothing here can reach the network).
 
-    test "registered opts reach the adapter's QL, Results come back capped, and its ttl_ms caches them" do
-      register_overpass_for_bowling()
+    test "registered opts reach the adapter, Results come back capped, and its ttl_ms caches them" do
+      register_nominatim_for_bowling()
 
       test_pid = self()
 
-      elements =
-        for id <- 1..5 do
-          %{
-            "type" => "node",
-            "id" => id,
-            "tags" => %{"name" => "Lanes #{id}", "website" => "https://lanes#{id}.test/"}
-          }
-        end
+      # Five matching elements plus one the bowling allowlist must drop.
+      places =
+        Enum.map(1..5, &lanes/1) ++
+          [%{lanes(6) | "category" => "amenity", "type" => "restaurant"}]
 
-      body = Jason.encode!(%{"elements" => elements})
+      body = Jason.encode!(places)
 
-      OverpassHTTPStub.stub(fn url, ql, _opts ->
-        send(test_pid, {:posted, url, ql})
+      NominatimHTTPStub.stub(fn url, _opts ->
+        send(test_pid, {:requested, url})
         {:ok, %{status: 200, body: body}}
       end)
+
+      granted_before = Gate.granted()
 
       assert {:ok, results} = Discovery.search("bowling", "Lanes", @philly_area)
 
@@ -331,33 +341,80 @@ defmodule Consensus.DiscoveryTest do
       assert [%Result{name: "Lanes 1", website_url: "https://lanes1.test/", source: :osm} | _] =
                results
 
-      # The per-type opts registered alongside the module travelled through
-      # Discovery into the generated QL — the registry is data, not a branch.
-      assert_receive {:posted, "https://overpass-api.de/api/interpreter", ql}
-      assert ql =~ ~s(["leisure"="bowling_alley"])
-      assert ql =~ "Lanes"
+      assert_receive {:requested, "https://nominatim.openstreetmap.org/search?" <> query}
+      assert URI.decode_query(query)["q"] == "Lanes"
+      assert Gate.granted() == granted_before + 1
 
       # A second identical search is served from the cache per the adapter's own
-      # cache_policy (15-minute ttl_ms) — the adapter is not called again.
+      # cache_policy — neither the adapter nor the rate gate is reached again.
       assert {:ok, ^results} = Discovery.search("bowling", "Lanes", @philly_area)
-      refute_receive {:posted, _url, _ql}
+      refute_receive {:requested, _url}
+      assert Gate.granted() == granted_before + 1
+    end
+
+    test "the registered categories decide what survives — the registry is data, not a branch" do
+      put_providers(%{
+        "bowling" => {Nominatim, categories: [{"leisure", "bowling_alley"}]},
+        "restaurant" => {Nominatim, categories: [{"amenity", "restaurant"}]}
+      })
+
+      NominatimHTTPStub.stub_places([lanes(1)])
+
+      assert {:ok, [%Result{name: "Lanes 1"}]} =
+               Discovery.search("bowling", "Lanes", @philly_area)
+
+      assert {:ok, []} = Discovery.search("restaurant", "Lanes", @philly_area)
     end
 
     test "an adapter atom error crosses the boundary intact" do
-      register_overpass_for_bowling()
-      OverpassHTTPStub.stub(fn _url, _ql, _opts -> {:ok, %{status: 429, body: "busy"}} end)
+      register_nominatim_for_bowling()
+      NominatimHTTPStub.stub(fn _url, _opts -> {:ok, %{status: 429, body: "busy"}} end)
 
       assert Discovery.search("bowling", "Lanes", @philly_area) == {:error, :rate_limited}
     end
 
     test "the adapter's non-atom {:http, status} tag degrades to :search_failed at the boundary" do
-      # Pins the degradation Overpass's moduledoc promises: the adapter keeps
-      # the status for direct callers and logging, Discovery's contract is
-      # `{:error, atom}` — so the tuple tag flattens here, and nowhere else.
-      register_overpass_for_bowling()
-      OverpassHTTPStub.stub(fn _url, _ql, _opts -> {:ok, %{status: 400, body: "parse error"}} end)
+      # The adapter keeps the status for direct callers and logging, Discovery's
+      # contract is `{:error, atom}` — so the tuple tag flattens here, and
+      # nowhere else. A 403 is how a Nominatim policy block arrives.
+      register_nominatim_for_bowling()
+      NominatimHTTPStub.stub(fn _url, _opts -> {:ok, %{status: 403, body: "blocked"}} end)
 
       assert Discovery.search("bowling", "Lanes", @philly_area) == {:error, :search_failed}
+    end
+
+    test "a full rate gate is :busy, sends nothing, and is not cached" do
+      register_nominatim_for_bowling()
+      test_pid = self()
+
+      NominatimHTTPStub.stub(fn url, _opts ->
+        send(test_pid, {:requested, url})
+        {:ok, %{status: 200, body: Jason.encode!([lanes(1)])}}
+      end)
+
+      # Swap the app-wide gate for one whose next slot is ten minutes out.
+      :ok = Supervisor.terminate_child(Consensus.Supervisor, Gate)
+
+      on_exit(fn ->
+        _ = Supervisor.terminate_child(Consensus.Supervisor, Gate)
+        {:ok, _} = Supervisor.restart_child(Consensus.Supervisor, Gate)
+      end)
+
+      {:ok, _pid} = Gate.start_link(interval_ms: :timer.minutes(10))
+      assert {:ok, 0} = Gate.reserve(0)
+
+      assert Discovery.search("bowling", "Lanes", @philly_area) == {:error, :busy}
+      refute_receive {:requested, _url}
+
+      # Free the gate: the same search now reaches Nominatim, which it could not
+      # if the refusal had been cached for the error TTL.
+      GenServer.stop(Gate)
+      {:ok, _} = Supervisor.restart_child(Consensus.Supervisor, Gate)
+
+      assert {:ok, [%Result{name: "Lanes 1"}]} =
+               Discovery.search("bowling", "Lanes", @philly_area)
+
+      assert_receive {:requested, _url}
     end
   end
 

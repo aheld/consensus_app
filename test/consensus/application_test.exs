@@ -132,6 +132,28 @@ defmodule Consensus.ApplicationTest do
              "Consensus.Discovery.Cache must start before ConsensusWeb.Endpoint accepts traffic"
     end
 
+    # docs/plans/nominatim-lookup.md §1.4: the one-request-per-second slot both
+    # Nominatim callers share. Without it in the tree every lookup degrades to
+    # silence (a missing gate is a refusal, not a crash), which no request-level
+    # test would notice.
+    test "starts the Nominatim gate directly after the discovery cache, before the endpoint" do
+      children = App.children()
+
+      cache = index_of(children, &(&1 == Consensus.Discovery.Cache))
+      gate = index_of(children, &(&1 == Consensus.Discovery.Nominatim.Gate))
+      endpoint = index_of(children, &(&1 == ConsensusWeb.Endpoint))
+
+      assert gate,
+             "Consensus.Discovery.Nominatim.Gate is not in the supervision tree — " <>
+               "every geocode and every lookup would be refused"
+
+      assert gate == cache + 1,
+             "Consensus.Discovery.Nominatim.Gate must start directly after Consensus.Discovery.Cache"
+
+      assert gate < endpoint,
+             "Consensus.Discovery.Nominatim.Gate must start before ConsensusWeb.Endpoint accepts traffic"
+    end
+
     test "passes the configured repos and the current skip decisions through" do
       System.delete_env("RELEASE_NAME")
       Application.put_env(:consensus, :seed_on_boot, false)

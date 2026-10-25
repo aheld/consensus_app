@@ -99,7 +99,7 @@ defmodule ConsensusWeb.Telemetry do
       summary("consensus.discovery.provider_request.stop.duration",
         tags: [:outcome],
         unit: {:native, :millisecond},
-        description: "Overpass round trip alone, excluding our own work"
+        description: "Provider (Nominatim) round trip alone, excluding our own work"
       ),
       summary("consensus.link_preview.fetch.stop.duration",
         tags: [:outcome, :cache],

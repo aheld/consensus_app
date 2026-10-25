@@ -35,34 +35,36 @@ defmodule Consensus.Discovery.Telemetry do
   ## The chain
 
       [lookup 7Kd2] geocode  q="philadelphia" cache=miss -> ok name="Philadelphia" bbox=39.867,-75.28,40.137,-74.955 (1340ms)
-      [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=philadelphia&format=jsonv2&limit=1
-      [lookup 7Kd2] search   type=<type> q="vernick" area="Philadelphia" provider=Overpass cache=miss
-      [lookup 7Kd2] overpass ql=[out:json][timeout:25]; ( node["amenity"="<tag>"]["name"~"vernick",i](39.867,...); ) out tags 10;
-      [lookup 7Kd2] repro    https://overpass-api.de/api/interpreter?data=%5Bout%3Ajson%5D%5Btimeout%3A25%5D%3B...
-      [lookup 7Kd2] overpass -> 200 (690ms)
-      [lookup 7Kd2] search   -> ok 1 result (695ms)
+      [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=philadelphia&format=jsonv2&limit=1&countrycodes=us
+      [lookup 7Kd2] search   type=<type> q="vernick" area="Philadelphia" provider=Nominatim
+      [lookup 7Kd2] provider Nominatim categories=amenity=<value>,amenity=cafe,...
+      [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=vernick&format=jsonv2&layer=poi&viewbox=...
+      [lookup 7Kd2] provider -> 200 2 results filtered=0 (690ms)
+      [lookup 7Kd2] search   cache=miss -> ok 2 results (695ms)
       [lookup 7Kd2] enrich   url="https://vernickphilly.com/" cache=miss -> ok title="Vernick Food & Drink" image=yes (500ms)
 
-  (`<type>` and `<tag>` stand in for real values above on purpose:
+  (`<type>` and `<value>` stand in for real values above on purpose:
   `test/consensus/activity_type_invariant_test.exs` reserves the literal to the
   one schema that declares it as a column default, and that pin is worth more
   than a more concrete example. The real lines carry the actual strings.)
 
-  Every `repro` line is a **GET you can paste into a browser or curl** — including
-  the Overpass one, which is the GET equivalent of the POST the adapter actually
-  sends (Overpass accepts the program as a `data` parameter). `grep repro` over
-  the log is a list of reproducible requests and nothing else. Both URLs are built
-  by the module that issues the request, so a `repro` line that works is evidence
-  about the real call rather than a second, driftable reconstruction of it.
+  Every `repro` line is a **GET you can paste into a browser or curl**: it is the
+  exact request that went out. `grep repro` over the log is a list of
+  reproducible requests and nothing else. Both URLs are built by
+  `Consensus.Discovery.Nominatim.request_url/1`, the client that issues the
+  request, so a `repro` line that works is evidence about the real call rather
+  than a second, driftable reconstruction of it. (Paste one by hand at most once
+  a second; Nominatim's policy applies to you too.)
 
   A `repro` line appears on a cache **hit** too, for the geocode: the URL is a pure
   function of the query, and a cached answer is exactly when you want to check what
   the upstream would say now.
 
-  The `overpass ql=` line is the one that cannot be reconstructed from anything
-  else: it is where the bbox, the registered tag list and the two escaping layers
-  actually combine, and it is logged on `:start` — before the result — because
-  that is the order the question gets asked in.
+  The `provider` lines bracket the one upstream request. The `:start` line names
+  the adapter and the registered category allowlist, and is logged before the
+  result because that is the order the question gets asked in. The `:stop` line
+  carries the HTTP status and `filtered=`: how many answers the allowlist dropped.
+  That is the field that answers "Nominatim found it, so why didn't I see it?"
 
   ## The correlation id crosses a process boundary, and that is not free
 
@@ -110,10 +112,9 @@ defmodule Consensus.Discovery.Telemetry do
 
   @handler_id "consensus-discovery-log"
 
-  # A QL program is ~300 characters; the cap is a guard against a pathological
-  # tag list rather than an expected truncation.
-  @max_ql_chars 800
   @max_query_chars 120
+  # A guard against a pathological registry entry, not an expected truncation.
+  @max_categories_chars 400
 
   @doc """
   Attaches the log handler. Idempotent — a second call is `:ok`, not an error,
@@ -200,12 +201,23 @@ defmodule Consensus.Discovery.Telemetry do
   end
 
   def handle_event([:consensus, :discovery, :provider_request, :start], _measurements, meta, _) do
-    log(["overpass ql=", flatten_ql(meta[:ql])])
+    log([
+      "provider ",
+      provider_name(meta[:provider]),
+      " categories=",
+      categories(meta[:categories])
+    ])
+
     repro(meta[:url])
   end
 
   def handle_event([:consensus, :discovery, :provider_request, :stop], measurements, meta, _) do
-    log(["overpass -> ", to_string(meta[:status] || meta[:outcome]), duration(measurements)])
+    log([
+      "provider -> ",
+      to_string(meta[:status] || meta[:outcome]),
+      provider_detail(meta),
+      duration(measurements)
+    ])
   end
 
   def handle_event([:consensus, :link_preview, :fetch, :stop], measurements, meta, _config) do
@@ -286,6 +298,21 @@ defmodule Consensus.Discovery.Telemetry do
 
   defp results_detail(_meta), do: []
 
+  defp provider_detail(%{outcome: :ok} = meta) do
+    count = meta[:count] || 0
+
+    [
+      " ",
+      to_string(count),
+      " ",
+      pluralize(count, "result"),
+      " filtered=",
+      to_string(meta[:filtered] || 0)
+    ]
+  end
+
+  defp provider_detail(meta), do: reason_detail(meta)
+
   defp preview_detail(%{outcome: :ok} = meta) do
     [" title=", quoted(meta[:title]), " image=", if(meta[:image?], do: "yes", else: "no")]
   end
@@ -307,16 +334,16 @@ defmodule Consensus.Discovery.Telemetry do
 
   defp provider_name(_other), do: "none"
 
-  # The QL program is a multi-line heredoc; a log line that wraps is a log line
-  # nobody greps. Collapsed to one line, with runs of whitespace squeezed.
-  defp flatten_ql(ql) when is_binary(ql) do
-    ql
-    |> String.replace(~r/\s+/, " ")
-    |> String.trim()
-    |> truncate(@max_ql_chars)
+  defp categories(categories) when is_list(categories) and categories != [] do
+    categories
+    |> Enum.map_join(",", fn
+      {key, value} -> "#{key}=#{value}"
+      other -> inspect(other)
+    end)
+    |> truncate(@max_categories_chars)
   end
 
-  defp flatten_ql(_other), do: "-"
+  defp categories(_other), do: "-"
 
   defp quoted(nil), do: "-"
 

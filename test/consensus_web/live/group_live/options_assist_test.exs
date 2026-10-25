@@ -7,7 +7,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
   reaches Discovery, and with no registered provider the feature is invisible.
 
   Same stub idiom as `options_test.exs`: `Consensus.DiscoveryStub` /
-  `Consensus.GeocoderHTTPStub` / `Consensus.LinkPreviewStub` are installed in
+  `Consensus.NominatimHTTPStub` / `Consensus.LinkPreviewStub` are installed in
   the test process and found from inside `start_async` Tasks by walking
   `$callers`. Blocking stubs (reply only when the test says so) are what make
   the two-phase assertions — card first, suggestion later — deterministic.
@@ -22,7 +22,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
   alias Consensus.Discovery.Area
   alias Consensus.Discovery.Result
   alias Consensus.DiscoveryStub
-  alias Consensus.GeocoderHTTPStub
+  alias Consensus.NominatimHTTPStub
   alias Consensus.LinkPreviewStub
 
   # TEST-NET-1 (RFC 5737), same reasoning as options_test.exs: the SSRF guard skips
@@ -215,7 +215,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
          %{conn: conn, scope: scope} do
       test_pid = self()
 
-      GeocoderHTTPStub.stub(fn _url, _opts ->
+      NominatimHTTPStub.stub(fn _url, _opts ->
         send(test_pid, :geocode_called)
         {:error, :nope}
       end)
@@ -625,7 +625,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
       test_pid = self()
       typed_area = "Fishtown-#{System.unique_integer([:positive])}"
 
-      GeocoderHTTPStub.stub_places([
+      NominatimHTTPStub.stub_places([
         %{"name" => "Fishtown", "boundingbox" => ["39.96", "39.99", "-75.15", "-75.12"]}
       ])
 
@@ -679,7 +679,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
          %{conn: conn, scope: scope} do
       test_pid = self()
 
-      GeocoderHTTPStub.stub_places([
+      NominatimHTTPStub.stub_places([
         %{"name" => "Fishtown", "boundingbox" => ["39.96", "39.99", "-75.15", "-75.12"]}
       ])
 
@@ -761,7 +761,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
 
     test "a failed geocode collapses the prompt silently, stores nothing, and may ask again later",
          %{conn: conn, scope: scope} do
-      GeocoderHTTPStub.stub(fn _url, _opts -> {:ok, %{status: 500, body: ""}} end)
+      NominatimHTTPStub.stub(fn _url, _opts -> {:ok, %{status: 500, body: ""}} end)
 
       group = group_fixture(scope)
       {:ok, view, _html} = live(conn, ~p"/groups/#{group}/options")
@@ -794,7 +794,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
          %{conn: conn, scope: scope} do
       test_pid = self()
 
-      GeocoderHTTPStub.stub(fn _url, _opts ->
+      NominatimHTTPStub.stub(fn _url, _opts ->
         send(test_pid, :geocode_called)
         {:error, :nope}
       end)

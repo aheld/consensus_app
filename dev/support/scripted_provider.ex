@@ -2,7 +2,7 @@ defmodule Consensus.Dev.ScriptedProvider do
   @moduledoc """
   A dev-only `Consensus.Discovery.Provider` that answers from canned,
   **query-keyed** data, for driving the Assisted Add UI in a browser without
-  hitting (and without the latency/flakiness of) the public Overpass instance.
+  hitting (and without the latency or rate limit of) the public Nominatim instance.
 
   It is the registered `"restaurant"` provider in `config/dev.exs`. Start the
   app (`mix phx.server`), create a group, and on `02 add options` type one of
@@ -44,9 +44,9 @@ defmodule Consensus.Dev.ScriptedProvider do
   The area prompt (02f) still geocodes against the real Nominatim in dev — one
   submit-only request, within its usage policy.
 
-  To drive the **real** Overpass adapter instead, start dev with `ASSIST_LIVE=1`
+  To drive the **real** Nominatim adapter instead, start dev with `ASSIST_LIVE=1`
   (`config/runtime.exs` swaps the registry back to
-  `Consensus.Discovery.Provider.Overpass`).
+  `Consensus.Discovery.Provider.Nominatim`).
 
   Compiled in `:dev` only (`elixirc_paths` in `mix.exs`) — this module does not
   exist in prod or test.

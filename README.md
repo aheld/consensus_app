@@ -187,7 +187,7 @@ tests). `mix ecto.reset` drops and rebuilds it.
 
 **Place discovery** — a browse screen for options the organizer hasn't thought of. Options
 are typed or pasted as a link; a typed name gets one background *lookup* (Assisted Add,
-D-052 — OpenStreetMap via Overpass, a dismissible "Is this it?" suggestion), but nothing is
+D-052, D-059 — OpenStreetMap via Nominatim, a dismissible "Is this it?" suggestion), but nothing is
 ever *searched for* on a dedicated screen. It will not be Yelp/Places when it comes: every
 commercial place API is rejected on its terms (D-052, `docs/research/activity-discovery.md` §3).
 **Friends adding options to someone else's pool** — the pool freezes when the vote opens
@@ -631,7 +631,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1555 tests, 0 failures (verified 2026-10-24) — the one count in this file
+mix test                        # 1572 tests, 0 failures (verified 2026-10-25) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```

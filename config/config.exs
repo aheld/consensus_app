@@ -67,21 +67,49 @@ config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreview.Fetcher
 # The Consensus.Discovery provider registry: activity type => {adapter, opts}, read
 # with Map.get/3 and never branched on (CLAUDE.md product invariant 2; the shape is
 # docs/research/activity-discovery.md §4.4). Four types resolve to the SAME module
-# with different tag data — the invariant-12 proof: there is no per-type code for a
-# branch to live in. An unregistered type falls through to {:ok, []} and the
+# with different category data — the invariant-12 proof: there is no per-type code
+# for a branch to live in. `categories:` is an allowlist over Nominatim's answer
+# (its `category`/`type` pair), not a query filter: free-text search cannot be
+# filtered by tag, so ten results come back and the ones outside the list are
+# dropped (D-059). An unregistered type falls through to {:ok, []} and the
 # typed/paste path. config/test.exs replaces this map with a stub registry, so the
-# live adapter is never reached from the suite.
+# live adapter is never reached from the suite; config/runtime.exs repeats it for
+# ASSIST_LIVE=1, and test/consensus/discovery/provider/nominatim_test.exs asserts the
+# two copies agree.
 config :consensus, Consensus.Discovery,
   providers: %{
-    "restaurant" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "restaurant"}]},
-    "bar" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "bar"}]},
-    "bowling" => {Consensus.Discovery.Provider.Overpass, tags: [{"leisure", "bowling_alley"}]},
-    "cinema" => {Consensus.Discovery.Provider.Overpass, tags: [{"amenity", "cinema"}]}
+    "restaurant" =>
+      {Consensus.Discovery.Provider.Nominatim,
+       categories: [
+         {"amenity", "restaurant"},
+         {"amenity", "fast_food"},
+         {"amenity", "cafe"},
+         {"amenity", "pub"},
+         {"amenity", "food_court"},
+         {"amenity", "biergarten"}
+       ]},
+    "bar" =>
+      {Consensus.Discovery.Provider.Nominatim,
+       categories: [
+         {"amenity", "bar"},
+         {"amenity", "pub"},
+         {"amenity", "biergarten"},
+         {"amenity", "nightclub"}
+       ]},
+    "bowling" =>
+      {Consensus.Discovery.Provider.Nominatim, categories: [{"leisure", "bowling_alley"}]},
+    "cinema" => {Consensus.Discovery.Provider.Nominatim, categories: [{"amenity", "cinema"}]}
   }
 
-# The Overpass adapter's HTTP seam (config/test.exs points it at a stub instead).
-config :consensus, Consensus.Discovery.Provider.Overpass,
-  http: Consensus.Discovery.Provider.Overpass.HTTP.Req
+# The one Nominatim client's HTTP seam, shared by the geocoder and the POI provider
+# (config/test.exs points it at a stub instead).
+config :consensus, Consensus.Discovery.Nominatim, http: Consensus.Discovery.Nominatim.HTTP.Req
+
+# The area geocode is restricted to these countries (a comma-separated ISO 3166-1
+# list, or nil for none). Without it a bare ZIP is a global question: "19125", a
+# Philadelphia ZIP, resolves to La Spezia, Italy. One deployment for one circle of
+# friends; widening it ("us,ca") is a config change. docs/plans/nominatim-lookup.md §1.8.
+config :consensus, Consensus.Discovery.Geocoder, countrycodes: "us"
 
 # The IANA time zone database behind `DateTime.new/4` and `DateTime.shift_zone/2`, which
 # `Consensus.Deadlines` needs to turn an organizer's wall-clock deadline into a real
