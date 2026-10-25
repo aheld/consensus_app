@@ -141,15 +141,27 @@ These are product constraints on how people reach and use the product. They bind
 1. An organizer can create and run a session with no more setup than a participant needs.
 2. An organizer may **optionally** create a persistent account to save friend groups, historical voting preferences, and blacklisted venues [12, 13]. This is Post-MVP and must never become a precondition for running a session.
 
-> **Deviation as built — requirement 1 is not met, and the reversal was deliberate.** Organizing
+> **Resolved — requirement 1 is met ([D-058](decisions.md)).** Anyone can open "Start something",
+> name a session, set a deadline, add options, publish and leave with a working share link, with no
+> account and no more setup than a participant faces. The only optional ask is a name to show guests
+> as who invited them; left blank, guests see "the organizer". Requirement 2 now reads the right way
+> round: an account is what *saves* sessions so they outlive one browser — a cleared browser, a
+> second device — not what permits them. Without one, a session can be managed only from the
+> browser that started it, and the share screen says so at the moment the link is handed over,
+> with a way to save it; voting and results at the link work for everyone either way. Saving is
+> never a gate: logging in or registering from that browser moves its sessions into the account and
+> says how many it moved. (One deliberate exception: a log-in by emailed link asks first, because
+> such a link can be forwarded by someone else.) The shipped behaviour and its accepted costs — a
+> shared browser's sessions are inherited by whoever logs in there, and a tie or all-vetoed session
+> whose accountless organizer lost their browser cannot be settled — are recorded in D-058 and
+> [docs/plans/accountless-organizer.md](plans/accountless-organizer.md).
+>
+> ~~**Deviation as built — requirement 1 is not met, and the reversal was deliberate.** Organizing
 > requires an account today: sign-up by password or by magic link, then the session is created and
 > owned by that account. Requirement 2's "optional" therefore reads backwards against the build —
-> what is optional for the *participant* is mandatory for the *organizer*. Two reasons it went that
-> way and one reason it should not spread: a session that outlives a closed tab needs an owner to
-> come back to, and an account is what makes "my sessions" a screen at all; but participant access
-> is the non-negotiable half of this section and it is met exactly as written. Whether an organizer
-> should be able to run one anonymous session with no account is a real open product question and
-> has never been decided — record it before building it.
+> what is optional for the *participant* is mandatory for the *organizer*.~~ *(History: true from the
+> creation flow's launch until D-058 shipped. The question it left open — whether an organizer could
+> run a session with no account — was decided for the organizer by D-058.)*
 
 ### The Link-Share Model
 Instead of trying to replace WhatsApp or iMessage, **Consensus** rides on top of them. Sharing a session link into a group chat must render a rich, self-explanatory preview card — enough that a recipient understands what they're being asked and by whom before tapping:
@@ -460,7 +472,8 @@ Release 1 is the only committed scope. Everything after it is directional and su
 Release 1 teaches us about real Time-to-Consensus and guest drop-off.
 
 **Where Release 1 actually stands (2026-08-11).** The whole loop is live in production and has been
-driven end to end in real browser sessions: an organizer signs up, builds a pool by typing names and
+driven end to end in real browser sessions: an organizer signs up *(since D-058 no sign-up is
+needed — an organizer can do all of this with no account, and an account only saves the sessions)*, builds a pool by typing names and
 pasting links, publishes, and a guest opens the link cold, gives a name and votes — with the tally
 appearing in the organizer's already-open tab and the guest's ballot locked afterwards. **Three
 things stand between this and "Release 1 complete", in the order they matter:**

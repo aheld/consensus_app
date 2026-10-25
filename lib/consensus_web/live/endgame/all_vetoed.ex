@@ -20,6 +20,15 @@ defmodule ConsensusWeb.Endgame.AllVetoed do
   organizer's buttons, which are writes on the organizer's group. The poke toy is
   everyone's: it is client-visible socket state and writes nothing.
 
+  `organizer_username` is nil-or-name (`Consensus.Activities.organizer_custom_name/1`):
+  an accountless organizer may have given none, and the waiting line names them
+  mid-sentence, so the fallback goes through `ConsensusWeb.OrganizerLabel` at `:mid`
+  (D-058, plan §5.2). For that same anonymous-owned group the waiting line also stops
+  promising the page "flips on its own the moment they do": the organizer's only key is
+  a cookie in one browser, which may be gone, so the line says they have to come back
+  to settle it (plan §7.5). The check reads `anonymous_organizer_id`, the ownership
+  column.
+
   ## The carnage list shows counts, never names — a deliberate design deviation
 
   The design's sample rows attribute each veto to a person (`MAYA`, `DEV`). D-035 makes
@@ -46,6 +55,7 @@ defmodule ConsensusWeb.Endgame.AllVetoed do
   use ConsensusWeb, :live_component
 
   alias Consensus.Activities
+  alias ConsensusWeb.OrganizerLabel
 
   import ConsensusWeb.EndgameComponents
 
@@ -231,8 +241,13 @@ defmodule ConsensusWeb.Endgame.AllVetoed do
           id="endgame-waiting"
           class="rounded-2xl border-2 border-ink-30 bg-white/65 p-3.5 text-[12.5px] leading-[1.45] text-ink-soft"
         >
-          Only {@organizer_username} can fix this — they can add new options, or let the
-          app pick one at random. This page flips on its own the moment they do.
+          <%= if @group.anonymous_organizer_id do %>
+            Only {OrganizerLabel.label(@organizer_username, :mid)} can fix this, from the browser they set it up
+            in. If they come back, this page updates on its own.
+          <% else %>
+            Only {OrganizerLabel.label(@organizer_username, :mid)} can fix this — they can add new options, or let the
+            app pick one at random. This page flips on its own the moment they do.
+          <% end %>
         </p>
         <.button navigate={~p"/"} id="results-start-your-own" variant="primary" class="w-full">
           Create your own <span aria-hidden="true">→</span>

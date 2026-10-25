@@ -297,6 +297,44 @@ jobs:
              Application.ensure_loaded(:consensus)
              {:ok, _, _} = Ecto.Migrator.with_repo(Consensus.Repo, &Ecto.Migrator.run(&1, :down, step: 1))'
 
+          # D-058's migration deliberately wipes every group, and the rehearsal below
+          # proves it — but only while D-058 is the migration `step: 1` just rolled back.
+          # Once a later migration lands, that one is rolled back instead, D-058 stays
+          # applied, and a hard-coded "zero groups" would fail every deploy. So the
+          # D-058-specific half is keyed on the rolled-back version, the way the local
+          # script keys on `$last`; the foreign-key half below holds after any migration.
+          d058="20261024012242"
+          newest="$(ls priv/repo/migrations/*.exs | sort | tail -1 | xargs basename | cut -d_ -f1)"
+
+          # Put a group and an option on the rolled-back schema, so the next boot's
+          # migration meets real rows in `activity_groups` and `activities`, not just in
+          # `users`. This is what proves the wipe runs on the boot path, on the boot-time
+          # repo connection, and leaves nothing orphaned. Parameters rather than SQL
+          # string literals, because the eval argument is single-quoted.
+          if [ "$newest" = "$d058" ]; then
+            docker run --rm \
+              -v consensus-upgrade:/data \
+              -e DATABASE_PATH=/data/consensus.db \
+              -e SECRET_KEY_BASE="$secret" \
+              -e PHX_HOST="$phx_host" \
+              -e PORT=4000 \
+              consensus:ci /app/bin/consensus eval \
+              'Application.ensure_all_started(:ssl)
+               Application.ensure_loaded(:consensus)
+               now = "2026-10-23T12:00:00"
+               {:ok, _, _} = Ecto.Migrator.with_repo(Consensus.Repo, fn repo ->
+                 %{num_rows: 1} = repo.query!(
+                   "INSERT INTO activity_groups (title, slug, status, organizer_id, inserted_at, updated_at)
+                    SELECT ?, ?, ?, id, ?, ? FROM users WHERE is_admin = 1 LIMIT 1",
+                   ["Before the upgrade", "preupgrade", "draft", now, now])
+                 %{num_rows: 1} = repo.query!(
+                   "INSERT INTO activities (group_id, position, name, inserted_at, updated_at)
+                    SELECT id, 0, ?, ?, ? FROM activity_groups WHERE slug = ?",
+                   ["An option from before the upgrade", now, now, "preupgrade"])
+               end)'
+            echo "inserted a group and an option on the pre-upgrade schema"
+          fi
+
           boot consensus-upgrade-2 4002
           echo "second boot healthy against the populated volume"
 
@@ -330,6 +368,35 @@ jobs:
             exit 1
           fi
           echo "existing admin survived the upgrade untouched: 1 admin, still named '${marker}'"
+
+          # Whatever migration just ran: nothing orphaned, and enforcement still on in the
+          # running app — a `PRAGMA foreign_keys = OFF` rebuild would fail these two. When
+          # that migration is D-058's, which wipes every group by cascade inside the DDL
+          # transaction, the pre-upgrade group and option must also be gone.
+          wipe_out="$(docker exec consensus-upgrade-2 /app/bin/consensus rpc \
+            'rows = fn sql -> Consensus.Repo.query!(sql).rows end
+             [[groups]] = rows.("SELECT count(*) FROM activity_groups")
+             [[activities]] = rows.("SELECT count(*) FROM activities")
+             orphans = length(rows.("PRAGMA foreign_key_check"))
+             [[fk]] = rows.("PRAGMA foreign_keys")
+             IO.puts("WIPE=#{groups},#{activities},#{orphans},#{fk}")' 2>&1 || true)"
+          wipe="$(printf '%s\n' "$wipe_out" | tr -d '\r' | grep -o 'WIPE=[0-9,]*' | cut -d= -f2 || true)"
+
+          if [ "${wipe#*,*,}" != "0,1" ]; then
+            echo "::error::after the upgrade groups,activities,foreign_key_check rows,foreign_keys = '${wipe}', expected ?,?,0,1 — the migration orphaned children or switched foreign keys off"
+            printf '%s\n' "$wipe_out"
+            exit 1
+          fi
+          echo "nothing orphaned, foreign keys on"
+
+          if [ "$newest" = "$d058" ]; then
+            if [ "$wipe" != "0,0,0,1" ]; then
+              echo "::error::after the upgrade groups,activities,foreign_key_check rows,foreign_keys = '${wipe}', expected 0,0,0,1 — the D-058 wipe left rows behind"
+              printf '%s\n' "$wipe_out"
+              exit 1
+            fi
+            echo "the pre-upgrade group and option are gone"
+          fi
 
       - name: Release logs
         if: always()

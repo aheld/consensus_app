@@ -440,6 +440,8 @@ defmodule ConsensusWeb.Endgame.AllVetoedTest do
       assert has_element?(lv, "#endgame-waiting", user.username)
       assert has_element?(lv, "#endgame-waiting", "can fix this")
       assert html =~ "This page flips on its own the moment they do."
+      # A user-owned group keeps the promise: its organizer can sign in anywhere.
+      refute html =~ "from the browser they set it up in"
 
       # The standing exit survives the takeover; the organizer's exits never render.
       assert has_element?(lv, "#results-start-your-own", "Create your own")
@@ -514,6 +516,46 @@ defmodule ConsensusWeb.Endgame.AllVetoedTest do
 
       refute html =~ "THE CARNAGE"
       assert html =~ "Votes came in, but nothing survived them"
+    end
+  end
+
+  # D-058, plan §5.2: the guest's waiting line names the organizer mid-sentence, for a
+  # group whose organizer has no account — with a self-chosen name and without one. Plan
+  # §7.5: the line also stops promising the page "flips on its own" — the organizer's only
+  # key is a cookie in one browser — and says plainly they have to come back.
+  for {label, attrs, name} <- [
+        {"named", %{display_name: "Priya"}, "Priya"},
+        {"unnamed", %{}, "the organizer"}
+      ] do
+    describe "the guest's takeover on an anonymous-owned group (#{label})" do
+      @attrs attrs
+      @name name
+
+      test "#{label}: the waiting line says who can fix it" do
+        scope = anonymous_scope_fixture(@attrs)
+        {group, _activities, [guest | _rest]} = all_vetoed_group(scope, ["Ember & Rye", "Saigon"])
+
+        {:ok, lv, _html} = live(guest_conn(group, guest), ~p"/join/#{group.slug}/results")
+
+        assert has_element?(lv, "#endgame-waiting", "Only #{@name} can fix this")
+      end
+
+      test "#{label}: the waiting line says the organizer has to come back, and promises nothing" do
+        scope = anonymous_scope_fixture(@attrs)
+        {group, _activities, [guest | _rest]} = all_vetoed_group(scope, ["Ember & Rye", "Saigon"])
+
+        {:ok, lv, html} = live(guest_conn(group, guest), ~p"/join/#{group.slug}/results")
+
+        assert has_element?(lv, "#endgame-waiting", "from the browser they set it up in.")
+
+        assert has_element?(
+                 lv,
+                 "#endgame-waiting",
+                 "If they come back, this page updates on its own."
+               )
+
+        refute html =~ "flips on its own"
+      end
     end
   end
 end

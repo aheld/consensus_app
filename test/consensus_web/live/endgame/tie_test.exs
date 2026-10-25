@@ -439,6 +439,8 @@ defmodule ConsensusWeb.Endgame.TieTest do
       assert has_element?(lv, "#endgame-waiting", user.username)
       assert has_element?(lv, "#endgame-waiting", "can break this tie")
       assert html =~ "This page flips on its own the moment they do."
+      # A user-owned group keeps the promise: its organizer can sign in anywhere.
+      refute html =~ "from the browser they set it up in"
       assert has_element?(lv, "#results-start-your-own", "Create your own")
 
       # The header context names the state in violet here too.
@@ -536,6 +538,58 @@ defmodule ConsensusWeb.Endgame.TieTest do
       refute html =~ "TIED FOR FIRST"
       assert html =~ "We have a winner"
       assert html =~ "to break the tie"
+    end
+  end
+
+  # D-058, plan §5.2: the guest's two sentences about the organizer, for a group whose
+  # organizer has no account — with a self-chosen name and without one. Both fall
+  # mid-sentence ("Only the organizer can…"), and a pre-defaulted "The organizer" is
+  # exactly how "Only The organizer can break it." gets printed. Plan §7.5: the waiting
+  # line also stops promising the page "flips on its own" — the organizer's only key is a
+  # cookie in one browser — and says plainly they have to come back.
+  for {label, attrs, name} <- [
+        {"named", %{display_name: "Priya"}, "Priya"},
+        {"unnamed", %{}, "the organizer"}
+      ] do
+    describe "the guest's takeover on an anonymous-owned group (#{label})" do
+      @attrs attrs
+      @name name
+
+      setup do
+        scope = anonymous_scope_fixture(@attrs)
+        {group, _tied, _activities, guest} = tied_group(scope)
+        %{group: group, guest: guest, name: @name}
+      end
+
+      test "#{label}: the subline says who can break it", ctx do
+        {:ok, _lv, html} =
+          live(guest_conn(ctx.group, ctx.guest), ~p"/join/#{ctx.group.slug}/results")
+
+        assert html =~ "Only #{ctx.name} can break it."
+      end
+
+      test "#{label}: the waiting line says who can break it", ctx do
+        {:ok, lv, _html} =
+          live(guest_conn(ctx.group, ctx.guest), ~p"/join/#{ctx.group.slug}/results")
+
+        assert has_element?(lv, "#endgame-waiting", "Only #{ctx.name} can break this tie")
+      end
+
+      test "#{label}: the waiting line says the organizer has to come back, and promises nothing",
+           ctx do
+        {:ok, lv, html} =
+          live(guest_conn(ctx.group, ctx.guest), ~p"/join/#{ctx.group.slug}/results")
+
+        assert has_element?(lv, "#endgame-waiting", "from the browser they set it up in.")
+
+        assert has_element?(
+                 lv,
+                 "#endgame-waiting",
+                 "If they come back, this page updates on its own."
+               )
+
+        refute html =~ "flips on its own"
+      end
     end
   end
 end

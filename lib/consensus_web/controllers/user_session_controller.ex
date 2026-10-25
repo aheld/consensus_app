@@ -2,6 +2,7 @@ defmodule ConsensusWeb.UserSessionController do
   use ConsensusWeb, :controller
 
   alias Consensus.Accounts
+  alias Consensus.Activities
   alias ConsensusWeb.UserAuth
 
   def create(conn, %{"_action" => "registered"} = params) do
@@ -23,6 +24,14 @@ defmodule ConsensusWeb.UserSessionController do
   end
 
   # magic link login
+  #
+  # The one log-in path that does not claim this browser's accountless sessions by
+  # default (D-058). The account behind a magic link is whoever *requested* the link, not
+  # whoever opens it, so claiming here would let an attacker forward a link for their own
+  # account and collect the victim's sessions. It claims only when the person ticked
+  # `UserLive.Confirmation`'s "save these sessions" box — consent, not a capability: the
+  # token still comes from the cookie. Unticked, the cookie stays and the next password
+  # log-in from this browser claims as usual.
   defp create(conn, %{"user" => %{"token" => token} = user_params}, info) do
     # Decided from the state *before* the login consumes the token. Asking afterwards
     # whether `hashed_password` is nil cannot tell "a password was just discarded" from
@@ -39,7 +48,7 @@ defmodule ConsensusWeb.UserSessionController do
         conn
         |> put_flash(:info, magic_link_info(clears_password?, info))
         |> UserAuth.store_return_to(user_params["return_to"])
-        |> UserAuth.log_in_user(user, user_params)
+        |> UserAuth.log_in_user(user, user_params, claim: user_params["claim"] == "true")
 
       _ ->
         conn
@@ -57,7 +66,7 @@ defmodule ConsensusWeb.UserSessionController do
 
     if user = Accounts.get_user_by_login_and_password(login, password) do
       # `store_return_to/2` validates and drops anything that is not an internal path —
-      # see its docs. `log_in_user/3` reads the session *before* `create_or_extend_session`
+      # see its docs. `log_in_user/4` reads the session *before* `create_or_extend_session`
       # renews it, so writing here is in time.
       conn
       |> put_flash(:info, info)
@@ -120,7 +129,22 @@ defmodule ConsensusWeb.UserSessionController do
 
   def delete(conn, _params) do
     conn
-    |> put_flash(:info, "Logged out successfully.")
+    |> put_flash(:info, log_out_info(conn.assigns[:current_scope]))
     |> UserAuth.log_out_user()
   end
+
+  # A log-in claims this browser's accountless sessions for the account (D-058), so after
+  # logging out they are no longer reachable from here without signing back in. The `⋯`
+  # item that logs out is stateless and already spends its one `data-confirm` on the draft
+  # prompt, so the consequence is said here instead (plan §6.4) — one query, at log-out
+  # only, never per render. Said to everyone who owns a session, not only to accounts that
+  # claimed one: a session an account started itself is out of reach in exactly the same
+  # way.
+  defp log_out_info(%Accounts.Scope{user: %Accounts.User{} = user}) do
+    if Activities.owns_any_group?(user),
+      do: "Logged out. Your sessions stay with your account — log back in to reach them.",
+      else: "Logged out successfully."
+  end
+
+  defp log_out_info(_no_user), do: "Logged out successfully."
 end

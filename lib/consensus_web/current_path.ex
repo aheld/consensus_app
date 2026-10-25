@@ -62,7 +62,7 @@ defmodule ConsensusWeb.CurrentPath do
 
   **A prefix check is not enough, and leaving it at one failed open into a 500.** Since
   D-045 this same function decides what `ConsensusWeb.UserAuth.store_return_to/2` writes
-  into `:user_return_to`, which `log_in_user/3` then hands to
+  into `:user_return_to`, which `log_in_user/4` then hands to
   `Phoenix.Controller.redirect/2` — and `redirect/2` refuses three shapes this filter used
   to pass (`@invalid_local_url_chars` in `Phoenix.Controller`: a `\\` anywhere, `/%09`, and
   a literal tab) by *raising* `ArgumentError`. So `?return_to=/%09//evil.example` was

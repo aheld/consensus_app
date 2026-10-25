@@ -24,6 +24,12 @@ config :consensus,
   ecto_repos: [Consensus.Repo],
   generators: [timestamp_type: :utc_datetime]
 
+# The name of the signed cookie that carries an accountless organizer's token
+# (`ConsensusWeb.OrganizerAuth`, D-058). Its own cookie rather than a key in the
+# Phoenix session, because the session cookie has no max_age and dies when the
+# browser quits. Production overrides it with a `__Host-` name in config/prod.exs.
+config :consensus, :organizer_cookie, "_consensus_organizer"
+
 # Configure the endpoint
 config :consensus, ConsensusWeb.Endpoint,
   url: [host: "localhost"],

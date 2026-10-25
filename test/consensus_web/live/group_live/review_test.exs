@@ -324,4 +324,61 @@ defmodule ConsensusWeb.GroupLive.ReviewTest do
       refute html =~ "Drag to reorder."
     end
   end
+
+  # D-058: a session owned by an organizer with no account.
+  describe "an organizer with no account" do
+    setup do
+      create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+    end
+
+    test "sees their pool in stored order", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      activity_fixture(group, %{name: "Alpha"})
+      activity_fixture(group, %{name: "Bravo"})
+
+      {:ok, _lv, html} = live(conn, ~p"/groups/#{group}/review")
+
+      assert html =~ "Your pool"
+      assert index_of(html, "Alpha") < index_of(html, "Bravo")
+    end
+
+    test "reorders their pool", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      a = activity_fixture(group, %{name: "Alpha"})
+      b = activity_fixture(group, %{name: "Bravo"})
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/review")
+
+      render_hook(lv, "reorder", %{"ids" => [to_string(b.id), to_string(a.id)]})
+
+      assert positions(scope, group.id) == [b.id, a.id]
+    end
+
+    test "publishes and moves on to share", %{conn: conn, scope: scope} do
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+      activity_fixture(group)
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/review")
+
+      lv |> element(~s|button[phx-click="publish"]|) |> render_click()
+
+      assert_redirect(lv, ~p"/groups/#{group}/share")
+      assert Activities.get_group!(scope, group.id).status == :voting
+    end
+
+    test "raises for another anonymous organizer's group", %{conn: conn} do
+      {_owner_scope, group} = anonymous_group_fixture()
+
+      assert_raise Ecto.NoResultsError, fn ->
+        live(conn, ~p"/groups/#{group}/review")
+      end
+    end
+
+    test "raises for a signed-in organizer's group", %{conn: conn} do
+      group = group_fixture(user_scope_fixture())
+
+      assert_raise Ecto.NoResultsError, fn ->
+        live(conn, ~p"/groups/#{group}/review")
+      end
+    end
+  end
 end

@@ -2,17 +2,32 @@ defmodule ConsensusWeb.HomeLive do
   @moduledoc """
   `/` — one route with two faces (see `docs/plans/creation-flow.md` decision 1).
 
-  Signed out renders design frame `00a`, the public splash. Signed in renders frame `00`,
+  `:splash` renders design frame `00a`, the public splash. `:list` renders frame `00`,
   the organizer's home list, and reflows to the desktop organizer console
   (`1b-4-made-with-in-philadelphia.html` — the filename is the extractor's caption, not a
   description; see `docs/design/IMPORT-NOTES.md` §2.2's "`1b-4` filename trap") at `md:` and
   up. It was `1b-2` until the 2026-08-08 re-import renumbered the section, and `1b-2` now
   names an entirely different frame: the phone home.
   `@current_scope` may be `nil` (see `ConsensusWeb.UserAuth`'s `:mount_current_scope` hook,
-  wired for this route in the router's `:current_user` `live_session`), so every branch below
-  keys off it rather than assuming a signed-in user.
+  wired for this route in the router's `:current_user` `live_session`).
 
-  Real-time (CLAUDE.md product invariant 4): once connected, the signed-in branch
+  ## Which face, for whom (D-058)
+
+  Organizing needs no account, so "signed in" is no longer the question. The list is for
+  anyone who organizes: a signed-in user always, and an organizer with no account once
+  they own at least one session — their identity arrives as `@organizer_scope` from
+  `ConsensusWeb.OrganizerAuth`'s read-only `:mount_organizer_scope` hook, never as
+  `@current_scope`, which stays user-or-nil so the chrome and every other template keep
+  reading it as "signed in". `mount/3` turns that into one `@home_mode` (`:splash` or
+  `:list`) and the template asks nothing else. The one thing the list itself says
+  differently for an organizer with no account is the quiet "Only in this browser — save
+  these" line under its heading (plan §7.1), since nothing but this browser's cookie holds
+  their sessions until an account claims them.
+
+  The splash's **Start something** goes to `/groups/new` for everyone: it used to go to
+  `/users/register`, while organizing still cost an account.
+
+  Real-time (CLAUDE.md product invariant 4): once connected, the list
   subscribes to every active group's `Consensus.Activities` topic and refreshes the list on
   any broadcast, and a single page-level timer relabels the countdowns every minute. Both
   the group list and the countdown are plain assigns rather than streams — the list is at
@@ -21,6 +36,7 @@ defmodule ConsensusWeb.HomeLive do
   """
   use ConsensusWeb, :live_view
 
+  alias Consensus.Accounts.Scope
   alias Consensus.Activities
   alias Consensus.Activities.Group
 
@@ -28,27 +44,47 @@ defmodule ConsensusWeb.HomeLive do
 
   @impl true
   def mount(_params, _session, socket) do
-    current_scope = socket.assigns.current_scope
+    # Whichever identity is present: a signed-in user, else the organizer with no account
+    # that `OrganizerAuth`'s `:mount_organizer_scope` resolved from this browser's cookie
+    # (D-058). Never both — that hook leaves `@organizer_scope` nil for a signed-in user.
+    owner_scope = socket.assigns.current_scope || socket.assigns.organizer_scope
+    groups = if owner_scope, do: Activities.list_groups(owner_scope), else: []
+    home_mode = home_mode(socket.assigns.current_scope, groups)
 
     socket =
       socket
+      |> assign(:owner_scope, owner_scope)
+      |> assign(:home_mode, home_mode)
       # Without this, `root.html.heex`'s `<.live_title default="Consensus" suffix=" ·
       # Consensus">` collided with itself and the app's front door named itself
       # "Consensus · Consensus" in the tab, the history entry and every bookmark of it.
       # `HomeLive` was the only user-facing LiveView assigning no `:page_title`.
-      |> assign(:page_title, if(current_scope, do: "Your sessions", else: "Decide together"))
+      |> assign(:page_title, page_title(home_mode))
       |> assign(:active_groups, [])
       |> assign(:past_groups, [])
       |> assign(:now, DateTime.utc_now())
 
-    socket = if current_scope, do: mount_signed_in(socket, current_scope), else: socket
+    socket = if home_mode == :list, do: mount_list(socket, groups), else: socket
 
     {:ok, socket}
   end
 
-  defp mount_signed_in(socket, scope) do
-    active_groups = Activities.list_active_groups(scope)
-    past_groups = Activities.list_past_groups(scope)
+  # One decision drives the whole page — title, column width, background, chrome variant
+  # and splash-vs-list — where there used to be eight separate `if @current_scope` tests.
+  # A signed-in organizer always gets the list (an empty one says "Nothing yet"); an
+  # organizer with no account gets it only once they own something. That second half is
+  # the point: a drive-by visit to `/groups/new` mints an identity, and pressing `‹` from
+  # there must still land on the `00a` splash with `:marketing` chrome rather than an
+  # empty "Your sessions" for someone who has made nothing.
+  defp home_mode(current_scope, groups) do
+    if Scope.authenticated?(current_scope) or groups != [], do: :list, else: :splash
+  end
+
+  defp page_title(:list), do: "Your sessions"
+  defp page_title(:splash), do: "Decide together"
+
+  defp mount_list(socket, groups) do
+    {active_groups, past_groups} = split_groups(groups)
 
     if connected?(socket) do
       Enum.each(active_groups, &Activities.subscribe_group(&1.id))
@@ -59,6 +95,11 @@ defmodule ConsensusWeb.HomeLive do
     |> assign(:active_groups, active_groups)
     |> assign(:past_groups, past_groups)
   end
+
+  # `list_active_groups/1` and `list_past_groups/1` are each `list_groups/1` plus a status
+  # filter, so splitting the one list `mount/3` already loaded saves a second query.
+  defp split_groups(groups),
+    do: Enum.split_with(groups, &(&1.status in [:draft, :voting]))
 
   @impl true
   def handle_info(:tick, socket) do
@@ -89,46 +130,49 @@ defmodule ConsensusWeb.HomeLive do
   # topic can move that group between the active and past lists (a deadline-triggered
   # completion), so both lists are reloaded together from the same scope.
   defp refresh_groups(socket) do
-    scope = socket.assigns.current_scope
+    {active_groups, past_groups} =
+      socket.assigns.owner_scope |> Activities.list_groups() |> split_groups()
 
     socket
-    |> assign(:active_groups, Activities.list_active_groups(scope))
-    |> assign(:past_groups, Activities.list_past_groups(scope))
+    |> assign(:active_groups, active_groups)
+    |> assign(:past_groups, past_groups)
   end
 
   @impl true
   def render(assigns) do
     ~H"""
-    <%!-- `/` is the top of the app, so there is no `back`. Signed out it takes the
+    <%!-- `/` is the top of the app, so there is no `back`. The splash takes the
           `:marketing` header (plan ruling 3) — a plain Log in link, because the
           tangerine "Start something" below already is the forward action and a second
-          header pill would only compete with it. Signed in it is an ordinary `:app`
-          screen and needs the `⋯` menu that replaced `Layouts.account_menu/1`. --%>
+          header pill would only compete with it. The list is an ordinary `:app` screen
+          and needs the `⋯` menu that replaced `Layouts.account_menu/1`. `@current_scope`
+          is user-or-nil here even for an organizer with no account (their identity is
+          `@organizer_scope`), so the menu they get is the signed-out one. --%>
     <Layouts.app
       flash={@flash}
       current_path={@current_path}
       current_scope={@current_scope}
-      width={if @current_scope, do: :wide, else: :phone}
-      background={if @current_scope, do: "bg-surface", else: "bg-canvas"}
-      variant={if @current_scope, do: :app, else: :marketing}
+      width={if @home_mode == :list, do: :wide, else: :phone}
+      background={if @home_mode == :list, do: "bg-surface", else: "bg-canvas"}
+      variant={if @home_mode == :list, do: :app, else: :marketing}
     >
-      <.splash :if={!@current_scope} />
+      <.splash :if={@home_mode == :splash} />
       <.home
-        :if={@current_scope}
-        current_scope={@current_scope}
+        :if={@home_mode == :list}
         active_groups={@active_groups}
         past_groups={@past_groups}
         now={@now}
+        saved={Scope.authenticated?(@current_scope)}
       />
     </Layouts.app>
     """
   end
 
-  ## Design frame 00a — signed-out splash
+  ## Design frame 00a — the splash
 
   defp splash(assigns) do
     ~H"""
-    <div class="flex flex-1 flex-col gap-[26px] px-[26px] py-10">
+    <div id="home-hero" class="flex flex-1 flex-col gap-[26px] px-[26px] py-10">
       <div class="flex flex-col gap-3">
         <%!-- The eyebrow wordmark that used to sit here is gone: the global header
               carries the wordmark on every screen now (D-041), and repeating it 20px
@@ -169,13 +213,15 @@ defmodule ConsensusWeb.HomeLive do
            of forcing extra space that isn't there. --%>
       <div class="mt-auto flex flex-col gap-3">
         <.link
-          navigate={~p"/users/register"}
+          navigate={~p"/groups/new"}
+          id="home-start"
           class="block rounded-2xl border-2 border-ink bg-tangerine p-4 text-center text-base font-bold text-white shadow-sticker-4 press-4"
         >
-          <%!-- "Start something", the label `/how-it-works` and `/privacy` already give
-                this exact destination. Three pages one tap apart offered the same
-                `~p"/users/register"` under two names; the front door is where most readers
-                meet the action first, so it is the one that had to move. --%>
+          <%!-- Straight into the wizard, for everyone (D-058). This went to
+                `~p"/users/register"` while organizing cost an account; now the account is
+                only what *saves* a session, so the front door's forward action is the
+                session itself. Same label and same destination as `/how-it-works`,
+                `/privacy` and the ⋯ menu. --%>
           Start something
         </.link>
         <%!-- The one line on this splash addressed to a *voter* used to link to
@@ -216,16 +262,19 @@ defmodule ConsensusWeb.HomeLive do
     ]
   end
 
-  ## Design frame 00 — signed-in home (phone) / 1b-4 — desktop console reflow
+  ## Design frame 00 — the organizer's home (phone) / 1b-4 — desktop console reflow
 
-  attr :current_scope, :map, required: true
   attr :active_groups, :list, required: true
   attr :past_groups, :list, required: true
   attr :now, :any, required: true
+  attr :saved, :boolean, required: true, doc: "false for an organizer with no account (D-058)"
 
   defp home(assigns) do
     ~H"""
-    <div class="mx-auto flex w-full max-w-[440px] flex-1 flex-col md:max-w-none md:flex-row">
+    <div
+      id="home-sessions"
+      class="mx-auto flex w-full max-w-[440px] flex-1 flex-col md:max-w-none md:flex-row"
+    >
       <aside class="hidden shrink-0 flex-col gap-6 border-r-2 border-ink bg-canvas p-5 md:flex md:w-[210px]">
         <%!-- The console's own wordmark block is gone for the same reason the splash's
               eyebrow is: the global header sits directly above this sidebar and already
@@ -246,6 +295,25 @@ defmodule ConsensusWeb.HomeLive do
         <header class="flex items-center px-5 pb-4 pt-3.5 md:px-6 md:pt-6">
           <h1 class="text-[27px] font-bold leading-none tracking-[-.025em]">Your sessions</h1>
         </header>
+
+        <%!-- The quiet `00` version of `04 share`'s warning (plan §7.1): this list lives in
+              this browser's organizer cookie and nowhere else until an account claims it.
+              One muted line, never a gate and never a second tangerine — "Start something"
+              owns the screen's forward action. Registering is the door, because a log-in
+              from this browser claims these sessions just the same and the register form
+              links to it. --%>
+        <p
+          :if={!@saved}
+          id="home-unsaved"
+          class="px-5 pb-3 text-[12.5px] font-medium text-muted md:px-6"
+        >
+          Only in this browser —
+          <.link
+            navigate={~p"/users/register"}
+            id="home-unsaved-register"
+            class="-my-3 inline-flex min-h-[44px] items-center font-semibold text-ink underline decoration-2 underline-offset-2"
+          >save these</.link>
+        </p>
 
         <div class="px-5 pb-4 md:hidden">
           <.link

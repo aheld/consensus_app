@@ -2,11 +2,13 @@
 
 A Phoenix 1.8 / LiveView application: SQLite-backed, deployable to a single Fly.io machine,
 with username-or-email authentication, an admin area, and the beginning of the actual
-product — an organizer can sign up, build a titled activity group with a hard deadline, fill
-it with options (typed by hand or pasted as a URL that gets its title/description/image
-pulled from the page automatically), review and reorder the pool, and publish it to a share
-link — and the people he shares it with can open it with no account, vote, and watch the tally
-move live. A typed option name also gets an assisted lookup — the app offers the venue's
+product — an organizer, **with no account** (D-058), can build a titled activity group with a
+hard deadline, fill it with options (typed by hand or pasted as a URL that gets its
+title/description/image pulled from the page automatically), review and reorder the pool, and
+publish it to a share link — and the people he shares it with can open it with no account,
+vote, and watch the tally move live. An account is optional on both sides: for an organizer
+it is what *saves* their sessions (so they survive a cleared cookie or a second device), and
+logging in or signing up on the browser that started them claims them. A typed option name also gets an assisted lookup — the app offers the venue's
 link, found in OpenStreetMap data, as a dismissible suggestion (D-052). Place *discovery* —
 browsing for options you haven't thought of — is still missing, and it will never be
 Yelp/Places (rejected on their terms, not their price; D-052); see *What is not built yet*
@@ -17,7 +19,10 @@ Docker release image, a CI/CD pipeline) is production-ready and was committed at
 ("Add the Consensus application: auth, admin area, editable home page, Fly release") — this
 is a normal git repository; `git clone` gets you everything below. On top of it, the
 organizer's creation flow (D-027 through D-033 in [docs/decisions.md](docs/decisions.md))
-replaced the placeholder home page with the real product landing at `/`. Run `git status
+replaced the placeholder home page with the real product landing at `/`; the voting loop, the
+endgame takeovers, the assisted add and the rest followed, through D-057, all committed. The
+newest layer — organizing with no account (D-058) — was uncommitted in the working tree at
+the time of writing (2026-10-24). Run `git status
 --short` if you want to know exactly what is committed versus staged in your working copy at
 any given moment — the two layers above were built at different times and may not both be
 committed yet.
@@ -154,21 +159,28 @@ tests). `mix ecto.reset` drops and rebuilds it.
 
 ### What you can do in the app right now
 
-1. Open `/` signed out — the splash screen, with **Start something** going to `/users/register`.
-2. Register (username + email + password). You are signed in immediately; no email round trip
-   is required.
-3. `/` now shows your (empty) list of groups and a **Start something** button.
-4. **Build a session:** `/groups/new` — a title and one of three computed deadline chips
-   ("Tonight 5pm" / "Tomorrow 5pm" / "Thu noon", in your browser's own time zone offset).
+1. Open `/` with no account — the splash screen, with **Start something** going straight to
+   `/groups/new`. No sign-up: that first visit gives this browser its own long-lived
+   organizer cookie (D-058).
+2. **Build a session:** `/groups/new` — a title, a deadline (computed chips like "Tonight
+   5pm", or **Custom…**, in your browser's own time zone), and, because you have no account,
+   an optional **Your name** that guests will see (blank reads as "the organizer").
    Submitting creates the group as a `:draft` immediately and takes you to the options
    screen — nothing is lost if you close the tab here and come back later.
-5. **Add options** at `/groups/:id/options` — type a name, or paste a URL and watch its
+3. **Add options** at `/groups/:id/options` — type a name, or paste a URL and watch its
    title, description and photo fill in from the page's OpenGraph tags a moment later. Every
    pulled field stays editable; open a row's **Edit** to change it or replace the image URL.
-6. **Review** at `/groups/:id/review` — drag (or use the ↑/↓ buttons) to reorder, toggle
-   anonymous voting, see the one-veto rule, and hit **Get the share link** — this is the
-   moment the group leaves `:draft` and becomes `:voting`.
-7. **Share** at `/groups/:id/share` shows the join link and a copy button.
+4. **Review** at `/groups/:id/review` — drag (or use the ↑/↓ buttons) to reorder, read the
+   anonymity and one-veto rules, and hit **Get the share link** — this is the moment the
+   group leaves `:draft` and becomes `:voting`.
+5. **Share** at `/groups/:id/share` shows the join link and a copy button — and, because the
+   session belongs to this browser only, a yellow warning that clearing it loses the
+   organizer controls, with doors to sign up or log in.
+6. Back at `/`, your sessions are listed with a quiet "Only in this browser — save these".
+7. Register (username + email + password) in the same browser. You are signed in
+   immediately, and a flash says how many sessions were saved to your account: the claim
+   moved them. A password log-in claims the same way; a magic-link log-in asks first, with
+   an unticked box on the confirmation page.
 8. Log out and back in: everything you built is still there, under your account.
 
 ### What is not built yet
@@ -195,24 +207,25 @@ or let the app pick one at random) instead of a bare report, but Q-8 in
 
 | Route | What it is |
 |---|---|
-| `/` | One route, two faces ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)). Signed out: the public splash, with **Start something** → registration. Signed in: the organizer's list of activity groups — `ACTIVE` (drafts and groups still voting, with a live countdown) and `PAST` (completed/cancelled). Real-time: subscribes to every active group's PubSub topic, so an edit from another tab (or, once voting exists, another participant) updates the list without a refresh. |
-| `/users/register` | Sign-up: **username + email + password**. Creates the account and signs it in immediately. |
-| `/users/log-in` | Two forms on one page: password log-in (the identifier field accepts **either** the username or the email), and magic-link log-in by email. |
-| `/users/log-in/:token` | Magic link landing page. Always usable. When an unconfirmed account already holds a password, the page warns **before** the button is pressed that confirming here will remove that password, then confirms and signs you in (see the recovery section below). |
+| `/` | One route, two faces ([`ConsensusWeb.HomeLive`](lib/consensus_web/live/home_live.ex)), chosen by one `@home_mode`. **Splash** (frame `00a`) for a visitor who organizes nothing, with **Start something** → `/groups/new` for everyone (it went to registration until D-058, while organizing cost an account). **List** — `ACTIVE` (drafts and groups still voting, with a live countdown) and `PAST` (completed/cancelled) — for a signed-in user always, and for an organizer with no account once this browser owns at least one session; theirs carries a quiet "Only in this browser — save these" line linking to sign-up. The accountless identity reaches this page as a separate `@organizer_scope`, never as `@current_scope`. Real-time: subscribes to every active group's PubSub topic, so an edit from another tab or a ballot landing updates the list without a refresh. |
+| `/users/register` | Sign-up: **username + email + password**. Creates the account and signs it in immediately — and claims any sessions this browser started without an account (D-058), with a flash naming how many. |
+| `/users/log-in` | Two forms on one page: password log-in (the identifier field accepts **either** the username or the email), and magic-link log-in by email. A password log-in claims this browser's accountless sessions automatically (D-058); when the browser holds some, the magic-link "check your email" screen adds *Open the link in this same browser to bring your sessions with you — you'll be asked before they're saved.* |
+| `/users/log-in/:token` | Magic link landing page. Always usable. When an unconfirmed account already holds a password, the page warns **before** the button is pressed that confirming here will remove that password, then confirms and signs you in (see the recovery section below). When this browser's accountless identity owns at least one session, it also shows an **unticked** box — *Also save the N sessions started in this browser to \<email\>* — and claims them only if it comes back ticked: a magic link can be forwarded, so an automatic claim here would let someone collect a victim's sessions into their own account (D-058). |
 | `/users/settings` | Change username, email, or password. Gated by sudo mode (`:require_sudo_mode`) on top of authentication. Email changes go through a confirmation link; username changes do not — a username is an in-app identifier, not proof of controlling an inbox. |
-| `/users/log-out` | `DELETE`. Deletes the session token and broadcasts a disconnect to that session's LiveViews. |
-| `/groups/new`, `/groups/:id/edit` | Wizard step 1 — title and a hard deadline. Creates (or edits) a `:draft` group. See [`GroupLive.New`](lib/consensus_web/live/group_live/new.ex). |
-| `/groups/:id/options`, `/groups/:id/options/:activity_id` | Wizard step 2 — the option pool, and the full-screen editor for one option. A pasted link is fetched server-side, asynchronously; a typed name is not. See [`GroupLive.Options`](lib/consensus_web/live/group_live/options.ex). |
-| `/groups/:id/review` | Wizard step 3 — reorder, toggle anonymous voting, publish (`:draft` → `:voting`) or cancel. See [`GroupLive.Review`](lib/consensus_web/live/group_live/review.ex). |
-| `/groups/:id/share` | The share link, shown after publishing. See [`GroupLive.Share`](lib/consensus_web/live/group_live/share.ex). |
+| `/users/log-out` | `DELETE`. Deletes the session token and broadcasts a disconnect to that session's LiveViews. When the account owns a session, the flash says they stay with the account — a claim *moved* them, so this browser keeps no anonymous copy. |
+| `/groups/*` (all seven) | **No account required** (D-058). The wizard and `05` live in `live_session :organizer`, not `:require_authenticated_user`; `test/consensus_web/organizing_needs_no_account_test.exs` pins that in the router source. `GET /groups/new` mints this browser's organizer identity (the `:ensure_organizer_identity` plug writes a signed cookie, 90 days *idle* — it is re-issued on every request — before the LiveView mounts); the six `/groups/:id/*` routes only resolve one, and a visitor with none is sent to `/users/log-in?return_to=…`. A busy database while minting redirects to `/` with "Consensus is busy — try again in a moment." See [`OrganizerAuth`](lib/consensus_web/organizer_auth.ex). |
+| `/groups/new`, `/groups/:id/edit` | Wizard step 1 — title and a hard deadline, plus, for an organizer with no account, an optional **Your name** saved with the group in one transaction. Creates (or edits) a `:draft` group. See [`GroupLive.New`](lib/consensus_web/live/group_live/new.ex). |
+| `/groups/:id/options`, `/groups/:id/options/:activity_id` | Wizard step 2 — the option pool, and the full-screen editor for one option. A pasted link is fetched server-side, asynchronously; a typed name gets one background lookup after **Add** (D-052). See [`GroupLive.Options`](lib/consensus_web/live/group_live/options.ex). |
+| `/groups/:id/review` | Wizard step 3 — reorder, read the anonymity and one-veto rules (stated, not toggled — D-035), publish (`:draft` → `:voting`) or cancel. See [`GroupLive.Review`](lib/consensus_web/live/group_live/review.ex). |
+| `/groups/:id/share` | The share link, shown after publishing. For a session owned by an organizer with no account, a yellow warning beside **Copy link** says it can only be managed from this browser (clear it and you can no longer close it early, call it off or break a tie; voting is unaffected), with **Create an account** and **Log in** doors. See [`GroupLive.Share`](lib/consensus_web/live/group_live/share.ex). |
 | `/groups/:id/results` | The organizer's live results (design frame `05`): a violet countdown, the voted/waiting avatar row, the running tally with veto elimination and a violet star on whoever is ahead — on all of them, captioned `TIED FOR THE LEAD`, when the top count is shared (D-047) — plus **Close now** and a **Nudge** that is not built and says so (`disabled`, captioned `Soon`, and rendered only while somebody has still to vote). Updates over PubSub as ballots land. A `:completed` group that could not settle itself — every option vetoed, or a dead heat at the top — replaces the tally panel with a designed takeover state carrying the organizer's exits: reopen the pool, let the app rescue one at random, or break the tie by tapping a row / letting the app shuffle (D-051). See [`GroupLive.Results`](lib/consensus_web/live/group_live/results.ex). |
 | `/join/:slug` | **The recipient's front door** (frame `06`), public and account-free. Name, `skip →` for anonymous, or — if you happen to be signed in — *Continue as \<username\>*. See [`JoinLive.Entry`](lib/consensus_web/live/join_live/entry.ex). |
 | `/join/:slug/enter` | `POST`. The one path that mints a participant. A **controller**, not a LiveView, because a LiveView cannot write a session cookie — and the guest's identity is a signed token in that cookie, keyed by group. See [`JoinController`](lib/consensus_web/controllers/join_controller.ex). |
 | `/join/:slug/vote` | The ballot: approval voting ("tap all you'd be happy with") plus at most one veto. Once cast, **the ballot is locked** (D-036) — returning here redirects to results, because the lock is a route-level fact rather than a disabled button. Two views of the same ballot — the sticker grid (default) and a swipe deck, switched from either, sharing one `Voting.cast_ballot/3` write (D-044). See [`JoinLive.Ballot`](lib/consensus_web/live/join_live/ballot.ex). |
 | `/join/:slug/results` | The participant's view of the same live tally (frame `05b`), with the "Your votes are in." confirmation (it said "Your ranking is in" until D-045 — nothing in this app ranks anything). Deliberately has no "Change my ranking" button — see D-036. Its footer covers every {status} × {participation} cell — ten of them, since D-046 split `{:completed, :stranger}` on whether this mount watched the deadline pass — so a latecomer who opens the link after voting closed still gets an exit, and someone who was already reading the tally when it closed is not told they arrived too late. The D-051 endgame takeovers render here too, minus the exits — a guest gets the scene, the list and a waiting line naming the organizer. See [`JoinLive.Results`](lib/consensus_web/live/join_live/results.ex). |
 | `/about` | What Consensus is and who built it ([`ConsensusWeb.AboutLive`](lib/consensus_web/live/about_live.ex)). One of the three standing pages the global footer links to (D-041), so it is reachable from the footer of every screen **except the `/join` tree**, where the footer is stripped to its two credit lines so nothing there can discard a guest's unsent ballot. Its `‹` follows the `?return_to=` the footer handed it and falls back to `/`. |
-| `/how-it-works` | The five-step walkthrough of a session, from design frame `00b` ([`ConsensusWeb.HowItWorksLive`](lib/consensus_web/live/how_it_works_live.ex)), ending in a **Start something** call to action that goes to `/groups/new` signed in and `/users/register` signed out. Deliberately does **not** say friends can add options once voting opens — the pool freezes then (D-037), and plan ruling 5 makes writing true copy here a requirement rather than a preference. |
-| `/privacy` | What this app stores and what it does not ([`ConsensusWeb.PrivacyLive`](lib/consensus_web/live/privacy_live.ex)): an email and username for organizers, a display name for participants (optional — a guest may vote anonymously), and **no screen, export or admin page that can report who picked what** — `Voting.tally/1` returns totals only and the context exposes no attribution function (D-035). Note the precise claim, because the page makes it precisely: this is a property of the code, not of the schema. `Consensus.Voting.Vote` does `belongs_to :participant` and a participant may carry a `display_name`, so one hand-written join in `iex` would answer the question; what does not exist is any code path, any screen or any operator tool that asks it. |
+| `/how-it-works` | The five-step walkthrough of a session, from design frame `00b` ([`ConsensusWeb.HowItWorksLive`](lib/consensus_web/live/how_it_works_live.ex)), ending in a **Start something** call to action that goes to `/groups/new` for everyone — organizing needs no account (D-058); it used to send a signed-out reader to `/users/register`, with a line saying what that would ask for, and both the branch and the line went with the wall. Deliberately does **not** say friends can add options once voting opens — the pool freezes then (D-037), and plan ruling 5 makes writing true copy here a requirement rather than a preference. |
+| `/privacy` | What this app stores and what it does not ([`ConsensusWeb.PrivacyLive`](lib/consensus_web/live/privacy_live.ex)): for an organizer, no account needed — an optional name, a random browser token stored only as a hash, and the sessions themselves, with an email, username and bcrypt-hashed password only for one who chooses to save their sessions to an account (and the page says that logging in on a browser holding someone else's unsaved sessions saves them to your account, with a count, and that a log-in by emailed link asks first); three cookies, the third being the organizer's (90 days since last use, removed once its sessions are saved — D-058); a display name for participants (optional — a guest may vote anonymously); and **no screen, export or admin page that can report who picked what** — `Voting.tally/1` returns totals only and the context exposes no attribution function (D-035). Note the precise claim, because the page makes it precisely: this is a property of the code, not of the schema. `Consensus.Voting.Vote` does `belongs_to :participant` and a participant may carry a `display_name`, so one hand-written join in `iex` would answer the question; what does not exist is any code path, any screen or any operator tool that asks it. |
 | `/feedback` | The form the two faces in the global footer open ([`ConsensusWeb.FeedbackLive`](lib/consensus_web/live/feedback_live.ex)), design frame `00c`, pre-set by `?mood=happy` or `?mood=sad` and changeable on the page. Public — no account, from any screen that carries the footer, which is everything except the `/join` tree — and it writes: `Consensus.Feedback.submit/2` stores the message, the mood, an optional name and email, `user_id` whenever the sender is signed in (the form says so, because a signed-in sender cannot decline it), and the screen you were on **only** while the default-on box stays ticked (D-042). Sending replaces the form with a full-page thank-you rather than flashing over it, and `push_patch`es to `?sent=1` so a reload or a Back does not silently drop the sender onto an empty form, and it carries the same `?return_to=` as the standing pages, so sending from step 2 of the wizard returns you to step 2. |
 | `/admin`, `/admin/users` | Admin → Users ([`AdminLive.Users`](lib/consensus_web/live/admin_live/users.ex)). Lists every account; **Promote**, **Demote** and **Delete**. Refuses to demote the last admin (`{:error, :last_admin}`); both demotion and deletion disconnect that user's live sessions, and **deleting a non-admin now cascades to every activity group they organize** (see *Architecture* below). All three actions need **sudo mode** (a log-in within the last 20 minutes): out of it, the page shows a `#sudo-notice` banner and greys the buttons, and `Consensus.Accounts` refuses regardless of what the client sends. Renders the default-password banner. |
 | `/admin/feedback` | Admin → Feedback ([`AdminLive.Feedback`](lib/consensus_web/live/admin_live/feedback.ex)). The triage queue for everything `/feedback` collects, newest first, unread rows on yellow. **Mark read** is reversible from the same button, and each row carries a private admin note. Neither write is sudo-gated and neither notifies anyone — the screen says so (D-043). An unsaved admin note is never destroyed by another action on the page: only the row an event actually wrote is reseeded from the database. There is no delete on the queue; clearing a spam run is `sqlite3` by hand (D-042). In the same `scope "/admin"` and the same `live_session :require_admin` as Users, so it carries both guards. |
@@ -253,8 +266,11 @@ or let the app pick one at random) instead of a bare report, but Q-8 in
     disconnected. **Deleting a non-admin also cascades to `activity_groups`**
     (`organizer_id` references `users` with `on_delete: :delete_all`), which in turn cascades to
     that group's `activities` — so deleting an organizer destroys every group they built, not
-    just their account. An activity someone else *added* to a group they don't organize
-    survives with `added_by_id` nulled (`on_delete: :nilify_all`).
+    just their account — including every session they *claimed* from an accountless browser,
+    since a claim makes it an ordinary account-owned group. An activity someone else *added*
+    to a group they don't organize survives with `added_by_id` nulled
+    (`on_delete: :nilify_all`). A group still owned by an organizer with no account traces to
+    no user at all, so no admin lever reaches it (D-058 accepts that; see `open-questions.md`).
 
   Both also write an audit line: `[audit] grant_admin|revoke_admin|delete_user actor_id=… actor=…
   target_id=… target=…` at `:info` on success, and `[audit] … REFUSED <reason> …` at `:warning` on
@@ -266,12 +282,29 @@ or let the app pick one at random) instead of a bare report, but Q-8 in
 - [`Consensus.Activities`](lib/consensus/activities.ex) — activity groups (a titled, deadlined
   pool of options) and the activities (options) inside them. Scope-first, like `Accounts`:
   functions that take an already-loaded `%Group{}` or (indirectly) `%Activity{}` check ownership
-  as a **precondition in the function head** — the scope's `user_id` and the group's
-  `organizer_id` are bound to the same variable, so a call on someone else's group raises
-  `FunctionClauseError` rather than taking a runtime branch. `update_activity/3` and
+  as a **precondition in the function head** — the scope's id and the group's owner column are
+  bound to the same variable, so a call on someone else's group raises `FunctionClauseError`
+  rather than taking a runtime branch.
+
+  **Since D-058 a group has one of two kinds of owner** — a user (`organizer_id`) or an
+  organizer with no account (`anonymous_organizer_id`, an `anonymous_organizers` row) — exactly
+  one, enforced by a CHECK, and `%Scope{}` carries `user` or `anonymous_organizer`. So every
+  owning function has **two heads**, one per kind, delegating to one shared private body. Each
+  head pins the *other* identity to `nil` (a scope with both set matches nothing) and carries
+  `when is_integer(id)` (an unsaved struct with `id: nil` would otherwise match every group of
+  the other kind); the owner is never compared at runtime in the body. `update_activity/3` and
   `delete_activity/2` are the exception: an `%Activity{}` carries only `group_id`, not the
-  organizer, so those two re-read the owning group from the database instead and return
-  `{:error, :unauthorized}`.
+  organizer, so those two re-read the owning group from the database instead — through a
+  private `authorize_activity/2` that is itself two clauses — and return
+  `{:error, :unauthorized}`. `claim_anonymous_groups/2` is the other exception: the one write
+  authorized by possession of a secret (the raw organizer token, read only from the signed
+  cookie at log-in) rather than a scope. It is a compare-and-swap on `claimed_at IS NULL` that
+  moves every group the identity owns to the account. The anonymous create heads re-read the
+  identity in their transaction and refuse a claimed one with `{:error, :claimed}`. Also new:
+  `create_group_with_organizer_name/3` / `update_group_with_organizer_name/4` (group and
+  display name in one transaction, broadcast after commit), `organizer_custom_name/1` (the
+  name guests see, or `nil`), `count_groups/1`, and `sweep_anonymous_organizers/1`, which
+  `Consensus.Housekeeping` runs once at boot.
 
   A group's `status` moves `:draft → :voting → :completed | :cancelled`. Step 1 of the wizard
   creates the row as a `:draft` immediately, so nothing is lost to a closed tab.
@@ -343,6 +376,20 @@ Non-admins who are already signed in are redirected to `/` (not to the log-in fo
 be a dead end); anonymous visitors are sent to `/users/log-in` with a stored return path. See
 [`router.ex`](lib/consensus_web/router.ex).
 
+**The organizer wizard is deliberately *not* behind authentication** (D-058).
+[`ConsensusWeb.OrganizerAuth`](lib/consensus_web/organizer_auth.ex) is the organizer-side
+sibling of `JoinAuth`: `fetch_organizer_token/2` (in the `:browser` pipeline) verifies the
+signed organizer cookie, mirrors it into the session for LiveViews and re-issues it, and a
+session copy is ignored unless the cookie is present; `ensure_organizer_identity/2` mints on
+`GET /groups/new` only; the `:require_organizer` `on_mount` hook gives the wizard an anonymous
+`%Scope{}` when there is no signed-in user, and subscribes each connected anonymous tab to the
+identity's topic so a claim elsewhere redirects it rather than leaving it writing. Ownership
+itself is still enforced in `Consensus.Activities`' function heads, as above. When anyone logs
+in, `UserAuth.log_in_user/4` runs the claim — automatically for a password log-in or a
+registration, only with the confirmation page's consent box for a magic link — and on any
+settled outcome deletes the organizer cookie and broadcasts the disconnect; a busy database
+keeps the cookie so the next log-in retries.
+
 **Live updates** use `Phoenix.PubSub`. `Consensus.Activities.subscribe_group/1` subscribes the
 calling process to `"activity_group:<id>"`; a successful write broadcasts `{:group_updated,
 group}`, `{:activity_added, activity}`, `{:activity_updated, activity}` or
@@ -388,6 +435,7 @@ ConsensusWeb.Telemetry
 Consensus.Repo
 {Ecto.Migrator, repos: ..., skip: skip_migrations?()}
 {Consensus.Seeds,             skip: skip_seeds?()}   # must stay directly after Ecto.Migrator
+{Consensus.Housekeeping,      skip: skip_seeds?()}   # D-058: sweeps abandoned accountless organizers
 {DNSCluster, ...}
 {Phoenix.PubSub, name: Consensus.PubSub}
 Consensus.LinkPreview.Cache                          # the ETS table Consensus.LinkPreview.fetch/1 caches into
@@ -396,7 +444,9 @@ ConsensusWeb.Endpoint
 
 Both `Ecto.Migrator` and `Consensus.Seeds` run synchronously during supervisor init and return
 `:ignore`, so by the time the endpoint accepts traffic the schema is current and the deployment
-has an administrator. `skip_migrations?/0` is `System.get_env("RELEASE_NAME") == nil` — which is
+has an administrator. `Consensus.Housekeeping` has the same run-once shape and gate; it
+deletes unclaimed organizer identities idle over 30 days that own no group, and rescues every
+failure, because a cleanup must never cost a boot. `skip_migrations?/0` is `System.get_env("RELEASE_NAME") == nil` — which is
 why `mix phx.server` does *not* auto-migrate but a release does. `skip_seeds?/0` follows it unless
 `:seed_on_boot` is configured; `config/test.exs` pins that to `false` so seeded data never leaks
 into an assertion.
@@ -581,7 +631,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1256 tests, 0 failures (~28s warm) — the one count in this file
+mix test                        # 1555 tests, 0 failures (verified 2026-10-24) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```
@@ -626,14 +676,25 @@ neither of which `Swoosh.Adapters.Test` can reproduce), the router (asserting th
 `/admin` route carries *both* the plug and the `on_mount` guard, since dropping either is a silent
 hole), `Consensus.DeployConfig` (`fly.toml` read as text, no database: `app` vs `PHX_HOST`,
 `PORT` vs `internal_port`, `DATABASE_PATH` inside the mount, and the single-quoted shape `ci.yml`'s
-`sed` expects), registration, log-in and confirmation.
+`sed` expects), registration, log-in and confirmation. D-058 added the accountless organizer's
+own: `test/consensus/activities_anonymous_test.exs` (every anonymous head, cross-owner refusals
+both ways, the claim, the boot sweep), `activities_claim_concurrency_test.exs` (two accounts
+claiming one identity at the same instant, on a second Repo with a real pool — the sandbox would
+serialise the compare-and-swap away), `housekeeping_test.exs`, `ConsensusWeb.OrganizerAuth` and
+`OrganizerLabel`, and `test/consensus_web/organizing_needs_no_account_test.exs` — a source pin
+that fails if any of the seven wizard routes moves back under `:require_authenticated_user`,
+which no runtime test would notice because a signed-in fixture passes the plug either way.
 
 **[`test/consensus_web/journey_test.exs`](test/consensus_web/journey_test.exs) is the one
 end-to-end acceptance test**, deliberately singular: sign up → create a group → add one typed
 option and one pasted-URL option → edit an option → review and publish → get the share link →
 log out → log back in with a brand-new connection → confirm everything survived and nothing
 leaked into another organizer's account. Per-screen tests cover their own branches; this one
-exists to catch failures that only appear *between* screens.
+exists to catch failures that only appear *between* screens. Since D-058 it has one sibling,
+[`test/consensus_web/claim_journey_test.exs`](test/consensus_web/claim_journey_test.exs): a cold
+browser with no account → `/groups/new` → create (with a name) → options → publish → share →
+register → `/` lists the session as the account's — plus the stale-tab half, a wizard tab left
+open with the anonymous scope that must stop writing once a log-in has claimed its session.
 
 Note that `mix precommit` and CI are **not** the same checks. `precommit` *rewrites* files
 (`mix format`, `mix deps.unlock --unused`); [CI](.github/workflows/ci.yml) *asserts*
@@ -665,7 +726,11 @@ and boots again on the same volume. The second boot must report `/health` 200, l
 and still hold exactly one admin *under its new name*. Nothing else in the repo has ever migrated a
 database that already had rows in it — which is what every deploy after the first one does — and
 the rename re-proves that `Consensus.Seeds` gates on "are there zero admins?" rather than on the
-bootstrap username.
+bootstrap username. Since D-058 it also reads `PRAGMA foreign_key_check` and `PRAGMA
+foreign_keys` over `rpc` after the second boot and requires no orphaned rows with foreign keys
+still on, whatever migration ran; while D-058's migration is the newest, it first plants a group
+and an option on the rolled-back schema and requires both gone afterwards — that migration
+deliberately wipes every session.
 
 Together these are the only thing anywhere in this repo that exercises the boot-time migrator,
 `Consensus.Seeds`, `Consensus.BootCheck` and the `:prod` half of `config/runtime.exs` — `mix test`
@@ -766,7 +831,7 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 ├── config/                      # config, dev, test, prod, runtime
 ├── docs/
 │   ├── PRD.md                   # product north star (voting, ranking, results are not built)
-│   ├── decisions.md             # ADR-lite technical log, D-001 through D-050
+│   ├── decisions.md             # ADR-lite technical log, D-001 through D-058
 │   ├── open-questions.md
 │   ├── design/                  # DESIGN-SPEC.md (visual source of truth) + per-screen extracts
 │   ├── plans/                   # per-feature implementation plans, incl. creation-flow.md
@@ -774,9 +839,11 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │   └── technical-roadmap-v1-draft.md # unratified draft
 ├── lib/
 │   ├── consensus/               # Accounts, Activities, LinkPreview, Deadlines, Seeds,
-│   │   │                        #   Release, Repo, Application, BootCheck
-│   │   ├── accounts/            # user.ex, scope.ex, user_token.ex, user_notifier.ex
-│   │   ├── activities/          # group.ex, activity.ex
+│   │   │                        #   Release, Repo, Application, BootCheck, Housekeeping
+│   │   │                        #   (the boot sweep of abandoned accountless organizers)
+│   │   ├── accounts/            # user.ex, scope.ex (user OR anonymous_organizer), user_token.ex,
+│   │   │                        #   user_notifier.ex
+│   │   ├── activities/          # group.ex, activity.ex, anonymous_organizer.ex (D-058)
 │   │   ├── link_preview/        # cache.ex, fetcher.ex
 │   │   └── boot_check.ex        # DATABASE_PATH/volume preflight, run before Consensus.Repo
 │   └── consensus_web/
@@ -792,11 +859,19 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │       │                        #   about_live.ex / how_it_works_live.ex / privacy_live.ex /
 │       │                        #   feedback_live.ex (the footer's standing pages)
 │       ├── router.ex
-│       └── user_auth.ex         # plugs + on_mount hooks; all authorization lives here
+│       ├── join_auth.ex         # the /join tree's on_mount (resolves @group/@participant)
+│       ├── organizer_auth.ex    # the accountless organizer's cookie, mint plug and on_mount
+│       │                        #   hooks (D-058)
+│       ├── organizer_label.ex   # "The organizer"/"the organizer" for an unnamed organizer
+│       └── user_auth.ex         # account plugs + on_mount hooks, and the claim at log-in
 ├── priv/repo/
 │   ├── migrations/              # users+tokens (with username/is_admin); home_page (created,
 │   │                            #   then dropped by a later migration — the home page was
-│   │                            #   deleted, see decisions.md D-027); activity_groups + activities
+│   │                            #   deleted, see decisions.md D-027); activity_groups + activities;
+│   │                            #   participants + votes; feedback; and, newest,
+│   │                            #   accountless_organizers (D-058) — the anonymous_organizers
+│   │                            #   table and an activity_groups rebuild that WIPES every
+│   │                            #   existing group, in production too
 │   └── seeds.exs                # delegates to Consensus.Seeds.run!/0
 ├── rel/overlays/bin/            # server (release entrypoint; sets PHX_SERVER=true) and
 │                                #   migrate, plus their .bat pairs. migrate is generator
@@ -804,6 +879,8 @@ it calls `ci.yml` as a gate, then runs `flyctl deploy --remote-only --ha=false` 
 │                                #   from the supervision tree; see Deployment.
 └── test/                        # mirrors lib/, plus support/ (ConnCase, DataCase,
                                  #   fixtures, link_preview_stub.ex), journey_test.exs (the one
-                                 #   end-to-end acceptance test), and deploy_config_test.exs,
+                                 #   end-to-end acceptance test) and claim_journey_test.exs (its
+                                 #   accountless sibling, D-058), organizing_needs_no_account_
+                                 #   test.exs (the router source pin), and deploy_config_test.exs,
                                  #   which reads fly.toml as text
 ```

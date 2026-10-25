@@ -22,6 +22,13 @@ config :consensus, ConsensusWeb.Endpoint,
     ]
   ]
 
+# The accountless organizer's cookie (D-058). The `__Host-` prefix makes the browser
+# refuse the cookie unless it is `Secure`, has `Path=/` and carries no `Domain` — so a
+# sibling subdomain of the serving host cannot plant an organizer token here.
+# `ConsensusWeb.OrganizerAuth` sets `secure: true` whenever the name carries the prefix;
+# dev and test keep the plain name from config.exs because they have no TLS.
+config :consensus, :organizer_cookie, "__Host-consensus_organizer"
+
 # Configure Swoosh API Client
 config :swoosh, api_client: Swoosh.ApiClient.Req
 

@@ -33,7 +33,7 @@ guess — and re-check the line numbers, config files drift.
 |---|---|---|---|
 | dev | `config/dev.exs` | `<repo root>/consensus_dev.db` | `Path.expand("../consensus_dev.db", __DIR__)` from `config/` |
 | test | `config/test.exs` | `<repo root>/consensus_test<PARTITION>.db` | `Path.expand("../consensus_test#{System.get_env("MIX_TEST_PARTITION")}.db", __DIR__)`; `pool: Ecto.Adapters.SQL.Sandbox`, `pool_size: 5` |
-| prod | `config/runtime.exs` | `System.get_env("DATABASE_PATH")` | **raises at boot if unset**; `POOL_SIZE` env, default `5` |
+| prod | `config/runtime.exs` | `System.get_env("DATABASE_PATH")` | **raises at boot if unset**; `POOL_SIZE` env, default **`1`** (D-038) |
 
 **`MIX_TEST_PARTITION` is interpolated straight into the test filename**, so
 `MIX_TEST_PARTITION=7 mix test` works against `consensus_test7.db` and unset gives plain
@@ -60,7 +60,7 @@ adapter. Read the real lines before changing anything:
 |---|---|
 | `config/dev.exs:4-18` | `journal_mode: :wal`, `busy_timeout: 5_000`, **`default_transaction_mode: :immediate`**, plus `stacktrace: true`, `show_sensitive_data_on_connection_error: true` |
 | `config/test.exs:11-25` | `busy_timeout: 5_000`, `journal_mode: :wal`, `pool: Ecto.Adapters.SQL.Sandbox`, `pool_size: 5` — **no** `default_transaction_mode` (the sandbox opens the transaction, not us; see D-033) |
-| `config/runtime.exs:51-67` (`:prod` only) | `journal_mode: :wal`, `busy_timeout: 5_000`, **`default_transaction_mode: :immediate`**, `pool_size:` from `POOL_SIZE` (default 5); the `DATABASE_PATH` raise is at `:44-48` |
+| `config/runtime.exs:51-67` (`:prod` only) | `journal_mode: :wal`, `busy_timeout: 5_000`, **`default_transaction_mode: :immediate`**, `pool_size:` from `POOL_SIZE` (default **1** since D-038 — `config/dev.exs` pins `pool_size: 1` too); the `DATABASE_PATH` raise is a few lines above |
 
 **`default_transaction_mode: :immediate` in dev and prod is D-033, not the original D-013 pair.** ecto_sqlite3's default is `:deferred` — a transaction takes no write lock at `BEGIN` and only asks for one on its first write. If another writer already holds the lock by then, SQLite cannot make this connection wait (it already holds a read snapshot, and blocking could deadlock the pair), so it returns `SQLITE_BUSY` **immediately** and the `busy_timeout` handler never runs. `:immediate` takes the write lock up front, at `BEGIN`, which is the state the busy handler *can* wait in — so two organizers writing at once queue for up to 5s instead of one 500ing. `config/test.exs` deliberately does not set it: every test transaction is opened by `Ecto.Adapters.SQL.Sandbox`, not by application code, so this repo's own setting has nothing to attach to there — see "The test suite runs one case at a time" below for why that distinction matters more than it sounds like it should.
 
@@ -123,7 +123,9 @@ and lets the referential actions do the rest:
 | Reference | Declared as | On delete |
 |---|---|---|
 | `users_tokens.user_id` | `references(:users, on_delete: :delete_all)` in `20260808033720_create_users_auth_tables.exs` | rows cascade away |
-| `activity_groups.organizer_id` | `references(:users, on_delete: :delete_all)` in `20260808183423_create_activity_groups.exs` | **every group that user organizes is deleted with them** — and `activities.group_id` is itself `on_delete: :delete_all` against `activity_groups`, so deleting an organizer cascades two levels deep to that organizer's whole pool of options. `Consensus.Accounts.delete_user/2` refuses to delete an administrator, but an ordinary organizer has no such guard — deleting one is destructive to their groups by design, not an oversight. |
+| `activity_groups.organizer_id` | created as `references(:users, on_delete: :delete_all)` in `20260808183423_create_activity_groups.exs`; since D-058 a column-level `REFERENCES "users"("id") ON DELETE CASCADE` in the literal-SQL rebuild of `20261024012242_accountless_organizers.exs`, now **nullable** | **every group that user organizes is deleted with them** — and `activities.group_id` and `participants.group_id` are `on_delete: :delete_all` against `activity_groups`, `votes.participant_id` against `participants`, so deleting an organizer cascades down to that organizer's options, voters and votes. `Consensus.Accounts.delete_user/2` refuses to delete an administrator, but an ordinary organizer has no such guard — deleting one is destructive to their groups by design, not an oversight. The CASCADE is also what keeps the D-058 CHECK from making that delete fail. |
+| `activity_groups.anonymous_organizer_id` (D-058) | column-level `REFERENCES "anonymous_organizers"("id") ON DELETE RESTRICT` | **refused** while the identity owns a group. Only the boot sweep (`Consensus.Housekeeping`) deletes `anonymous_organizers` rows, and only ones owning nothing — RESTRICT makes a wrong sweep predicate raise instead of cascading through groups and votes. Exactly one of the two owner columns is set: the named CHECK `organizer_xor_anonymous_organizer`. |
+| `anonymous_organizers.claimed_by_user_id` (D-058) | `references(:users, on_delete: :nilify_all)` | nulled; the row stays claimed because "claimed" is keyed on `claimed_at`, never on this column |
 | `activities.added_by_id` | `references(:users, on_delete: :nilify_all)` in the same migration | nulled, the activity survives — whoever pasted a link is not load-bearing the way the group's owner is |
 
 The `home_page.updated_by_id` `ON DELETE SET NULL` reference this table used to describe is
@@ -180,17 +182,20 @@ Repo: Consensus.Repo
   up        20260808040000  create_home_page
   up        20260808183423  create_activity_groups
   up        20260808183755  drop_home_page
+  up        20260808210450  create_voting_tables
+  up        20260809053104  create_feedback
+  up        20260810164221  add_group_resolution
+  up        20260811172739  add_search_area_to_activity_groups
+  up        20261024012242  accountless_organizers
 ```
 
-Four migrations, that is the whole schema — `home_page` is created in the second and dropped
-in the fourth (D-027; the admin-editable home page is gone, see "The home-page singleton" note
-below for what that migration's `down/0` teaches). The tables that actually exist today are
-`users`, `users_tokens`, `activity_groups`, `activities`, `schema_migrations`; the indexes are
-`users_email_index`, `users_username_index`, `users_tokens_user_id_index`,
-`users_tokens_context_token_index`, `activity_groups_slug_index` (unique),
-`activity_groups_organizer_id_index`, `activities_group_id_index` and
-`activities_added_by_id_index`. `home_page` and its `home_page_updated_by_id_index` are gone;
-if you see either named in an older note, it is stale.
+Nine migrations (`ls priv/repo/migrations` is the authority). `home_page` is created in the
+second and dropped in the fourth (D-027; see "The home-page singleton" note below for what that
+migration's `down/0` teaches). The newest, D-058's, adds `anonymous_organizers` and **rebuilds
+`activity_groups`** — the worked example for a table rebuild in this repo, below. Get the
+current tables and indexes from `.schema` on a migrated copy rather than from a list here;
+`home_page` and its `home_page_updated_by_id_index` are gone, and if you see either named in an
+older note, it is stale.
 
 Plain `mix ecto.migrations` reports the **dev** database, and it will print
 `** (Exqlite.Error) database is locked` and then `down` for everything if another process
@@ -375,40 +380,65 @@ drop the dependent object in the same migration first.
 
 ### The table-rebuild recipe (for `modify`, dropping a constraint, changing a FK)
 
-There is no Ecto sugar for this. Write raw SQL in the migration:
+There is no Ecto sugar for this, and **the textbook recipe — `PRAGMA foreign_keys = OFF`, copy
+into `t_new`, `DROP`, `RENAME`, `PRAGMA foreign_keys = ON` — is wrong in this app.** Do not use
+it. Three reasons, each sufficient:
 
-```elixir
-def up do
-  execute "PRAGMA foreign_keys = OFF"
+- **Inside a transaction SQLite silently ignores `PRAGMA foreign_keys`.** Every Ecto migration
+  runs in a DDL transaction unless it sets `@disable_ddl_transaction true`, so the `OFF` does
+  nothing and the copy runs with enforcement *on* anyway.
+- **Outside a transaction it is worse, on the boot path.** Migrations run at boot through the
+  `{Ecto.Migrator, …}` child, on the already-started `Consensus.Repo` — whose pool is **one
+  connection** in prod and dev (D-038). A PRAGMA is per-connection, so an `OFF` that a failure
+  leaves behind stays off on *the* connection that then serves every request for the life of
+  the process, silently disabling every cascade invariant 5 relies on. And with
+  `@disable_ddl_transaction` a machine killed mid-migration leaves a half-built schema.
+- **With enforcement off, `DROP TABLE` cascades nothing and `AUTOINCREMENT` restarts.** Child
+  rows survive pointing at parent ids that no longer exist, and the next parent row #1 silently
+  adopts the old #1's children. That was reproduced against `activity_groups` (whose children are
+  `activities` and `participants`, and their `votes`) during the D-058 review.
 
-  execute """
-  CREATE TABLE sessions_new (
-    id INTEGER PRIMARY KEY AUTOINCREMENT,
-    slug TEXT NOT NULL,
-    closes_at TEXT NOT NULL,
-    inserted_at TEXT NOT NULL,
-    updated_at TEXT NOT NULL
-  )
-  """
+**The precedent is `priv/repo/migrations/20261024012242_accountless_organizers.exs` (D-058)**,
+which had to make `activity_groups.organizer_id` nullable and add a CHECK. Read its moduledoc;
+its shape, inside the ordinary DDL transaction, **foreign keys on**, no PRAGMA, no
+`@disable_ddl_transaction`:
 
-  execute "INSERT INTO sessions_new SELECT id, slug, closes_at, inserted_at, updated_at FROM sessions"
-  execute "DROP TABLE sessions"
-  execute "ALTER TABLE sessions_new RENAME TO sessions"
-  execute "CREATE UNIQUE INDEX sessions_slug_index ON sessions (slug)"
+1. `DELETE FROM "activity_groups"` — enforcement on, so the children cascade away through their
+   own `ON DELETE CASCADE`s and the `DROP` finds nothing to object to. **This is a wipe:** the
+   owner accepted losing every group, option, participant and vote, in production too, rather
+   than a copy-and-swap that needs foreign keys off. A rebuild that must *keep* rows would need a
+   different, separately reviewed design — do not bolt a copy onto this one.
+2. Save the `AUTOINCREMENT` high-water mark — `CREATE TEMP TABLE d058_activity_groups_seq AS
+   SELECT seq FROM sqlite_sequence WHERE name = 'activity_groups'` — because `DROP TABLE`
+   deletes that row even with foreign keys on.
+3. `DROP TABLE "activity_groups"`.
+4. `CREATE TABLE "activity_groups"` as **literal SQL**, copied column for column from `.schema`
+   on a freshly migrated database (never from memory — the first draft invented a column and
+   dropped six), with only the intended changes. The named CHECK goes inside it (see "CHECK
+   constraints" above). Foreign keys are **column-level `REFERENCES`, never a table-level
+   `FOREIGN KEY (...)`**: the older `down`s that `release_test.exs` replays drop
+   `resolved_activity_id`, `search_area` and `search_bbox` with `DROP COLUMN`, which SQLite
+   refuses for a column named in a table-level `FOREIGN KEY` or in a CHECK. Keep each existing
+   constraint name (`activity_groups_organizer_id_fkey`, …) and each existing `ON DELETE` action.
+5. Put the saved `seq` back into `sqlite_sequence` and drop the temp table, so ids are never
+   reused — surviving `feedback.page_path` rows still name `/groups/:id/…`.
+6. Recreate **every** index the old table had, by its existing name (`DROP TABLE` takes them
+   with it), plus any new one.
 
-  execute "PRAGMA foreign_key_check"
-  execute "PRAGMA foreign_keys = ON"
-end
-```
-
-Rules: recreate **every** index and trigger the old table had (`DROP TABLE` takes them with
-it); run `PRAGMA foreign_key_check` before re-enabling; and pair it with a real `down/0` or
-`def down, do: :ok` — `change/0` cannot infer the inverse.
+`down/0` is the same wipe in reverse with the previous DDL, and it is **maintained**:
+`test/consensus/release_test.exs` rolls the whole chain back, and CI's "Boot twice on one
+volume" step (and `scripts/release-upgrade-test.sh`) rolls the newest migration down and up on a
+populated volume and asserts `PRAGMA foreign_key_check` is empty and `PRAGMA foreign_keys` is 1
+afterwards. A populated-database release test is the gate for any future rebuild. Because the
+whole thing is one transaction, a machine killed mid-boot rolls back to the old schema with its
+rows intact and the next boot retries from the top.
 
 **Before the app ships, prefer editing the original migration and resetting.** That is what
 `create_users_auth_tables.exs` already does: `username` and `is_admin` are folded into the
 initial migration with a comment explaining why, rather than added later. Pre-deploy, `mix
-ecto.reset` is cheaper and cleaner than a rebuild migration.
+ecto.reset` is cheaper and cleaner than a rebuild migration. **The app has shipped** (D-040), so
+that option is gone for any table production holds: an edited migration never re-runs on the
+volume. Use the rebuild precedent above.
 
 ### Datetimes are TEXT
 
@@ -432,7 +462,7 @@ cp consensus_dev.db      /tmp/inspect.db
 cp consensus_dev.db-wal  /tmp/inspect.db-wal   # may not exist; that's fine
 cp consensus_dev.db-shm  /tmp/inspect.db-shm
 
-sqlite3 /tmp/inspect.db ".tables"    # activities  activity_groups  schema_migrations  users  users_tokens
+sqlite3 /tmp/inspect.db ".tables"    # activities  activity_groups  anonymous_organizers  feedback  participants  schema_migrations  users  users_tokens  votes
 sqlite3 /tmp/inspect.db ".schema users"
 sqlite3 -header -box /tmp/inspect.db "select * from schema_migrations;"
 sqlite3 /tmp/inspect.db "select name, tbl_name from sqlite_master where type='index';"
@@ -673,12 +703,15 @@ recover from it.
 tables, fails in production. Add a `default:`, or add it nullable and backfill. See above.
 
 **`** (ArgumentError) ALTER COLUMN not supported by SQLite3`**
-A `modify` inside `alter table`. Rebuild the table, or — pre-deploy — edit the original
-migration and `mix ecto.reset`.
+A `modify` inside `alter table`. Rebuild the table the way D-058's
+`20261024012242_accountless_organizers.exs` does (foreign keys on, inside the DDL transaction —
+never `PRAGMA foreign_keys = OFF`; see "The table-rebuild recipe"). Editing the original migration
+and `mix ecto.reset` is only an option for a table production has never held.
 
 **`** (ArgumentError) SQLite3 does not support ALTER TABLE ADD CONSTRAINT.`**
 `create constraint(...)`. Move the CHECK inline onto the column with
-`check: %{name: ..., expr: ...}` in the `create table` block.
+`check: %{name: ..., expr: ...}` in the `create table` block — or, for a table that already
+exists, rebuild it with the CHECK in literal-SQL `CREATE TABLE` (the D-058 precedent above).
 
 **`** (RuntimeError) environment variable DATABASE_PATH is missing.`**
 `config/runtime.exs:44-48` raising at boot. The release has no `DATABASE_PATH`, or it is set to

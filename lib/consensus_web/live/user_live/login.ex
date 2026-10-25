@@ -47,12 +47,16 @@ defmodule ConsensusWeb.UserLive.Login do
   unregistered address produce byte-identical output in all three: same heading, same
   hedged sentence, same controls, same timing, same exhaustion count. Do not add a "we
   couldn't find that address" state, a different heading for a known address, or a
-  delivery receipt.
+  delivery receipt. The one conditional line on the sent screen — "bring your sessions
+  with you" (D-058) — is a function of *browser* state (an organizer cookie owning a
+  session), so for a given browser it is present for both addresses or for neither.
   """
 
   use ConsensusWeb, :live_view
 
   alias Consensus.Accounts
+  alias Consensus.Accounts.Scope
+  alias Consensus.Activities
 
   # How many magic links this screen will send **per mount, across every control on it**.
   # See the `deliver_magic_link/2` clauses for why a cap and the enumeration property are
@@ -110,6 +114,16 @@ defmodule ConsensusWeb.UserLive.Login do
           <%= if sent?(@send_state) do %>
             If that address is in our system, a sign-in link is on its way to it. Open the
             email and tap the link — it signs you in on whichever device you open it on.
+            <%!-- D-058, plan §7.4. Conditioned on **this browser** holding an organizer
+                  identity that owns a session (`@brings_sessions?`, read once at mount),
+                  never on the address — so the byte-identical known/unknown pin above
+                  still holds for any given browser: both addresses get this line, or
+                  neither does. Do not "fix" it into an address-dependent branch. The
+                  "asked before" clause is load-bearing: a magic link claims only when the
+                  confirmation screen's consent box is ticked. --%>
+            <span :if={@brings_sessions?} id="magic-link-bring-sessions" class="mt-2 block">
+              {bring_sessions_line()}
+            </span>
           <% else %>
             No link was sent. This page has already sent as many as it will, and reloading
             it is the only thing that gets you another. Anything it sent earlier still
@@ -213,7 +227,13 @@ defmodule ConsensusWeb.UserLive.Login do
         <div class="flex flex-col gap-2">
           <h1 class="text-[29px] font-bold leading-[1.08] tracking-[-0.025em]">Log in</h1>
           <p class="text-[14.5px] leading-[1.45] text-ink-soft">
-            <%= if @current_scope do %>
+            <%!-- `Scope.authenticated?/1`, not the scope's truthiness, here and on both
+                  `readonly` fields below (D-058): an anonymous organizer's scope is a
+                  truthy `%Scope{user: nil}`, and reading it as "signed in" would lock the
+                  identity fields for exactly the person logging in to save their sessions.
+                  `@current_scope` is user-or-nil on this page today; this keeps it right
+                  if that ever widens. --%>
+            <%= if Scope.authenticated?(@current_scope) do %>
               You need to reauthenticate to perform sensitive actions on your account.
             <% else %>
               Don't have an account?
@@ -274,7 +294,7 @@ defmodule ConsensusWeb.UserLive.Login do
           class="flex flex-col gap-3"
         >
           <.input
-            readonly={!!@current_scope}
+            readonly={Scope.authenticated?(@current_scope)}
             field={f[:email]}
             type="email"
             label="Email"
@@ -337,7 +357,7 @@ defmodule ConsensusWeb.UserLive.Login do
             Logging in with your password brings you straight back to where you were.
           </p>
           <.input
-            readonly={!!@current_scope}
+            readonly={Scope.authenticated?(@current_scope)}
             field={f[:login]}
             type="text"
             label="Email or username"
@@ -406,8 +426,26 @@ defmodule ConsensusWeb.UserLive.Login do
        trigger_submit: false,
        send_state: nil,
        sends_left: @max_sends,
-       return_to: ConsensusWeb.CurrentPath.safe_return_to(params["return_to"])
+       return_to: ConsensusWeb.CurrentPath.safe_return_to(params["return_to"]),
+       brings_sessions?: brings_sessions?(socket.assigns[:organizer_scope])
      )}
+  end
+
+  # Whether this browser holds an accountless organizer identity with at least one session
+  # (D-058). `OrganizerAuth`'s `:mount_organizer_scope` assigns `@organizer_scope` only
+  # when no user is signed in, so a re-authenticating account never sees the line. One
+  # `COUNT` per mount, never per render.
+  defp brings_sessions?(%Scope{} = organizer_scope),
+    do: Activities.count_groups(organizer_scope) > 0
+
+  defp brings_sessions?(nil), do: false
+
+  @doc false
+  # Shared with `UserLive.Registration`, whose sent screen carries the same line.
+  def bring_sessions_line do
+    "Open the link in this same browser to bring your sessions with you — you'll be asked " <>
+      "before they're saved. If it opens somewhere else, nothing is lost: log in here " <>
+      "later and they can follow."
   end
 
   # The three states, read back. `@send_state` is the only assign that says which one this

@@ -744,4 +744,64 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       assert has_element?(lv, "button[disabled].border-ink\\/38", "Movies")
     end
   end
+
+  # D-058: a session owned by an organizer with no account. Step 02's "N yours" counter
+  # used to read `@current_scope.user.id` and crashed this screen for them.
+  describe "an organizer with no account" do
+    setup do
+      create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+    end
+
+    test "renders step 02 for their own draft", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      activity_fixture(group, %{name: "Osteria Mozza"})
+
+      {:ok, _view, html} = live(conn, ~p"/groups/#{group}/options")
+
+      assert html =~ "Osteria Mozza"
+      assert html =~ "1 in the pool"
+    end
+
+    test "adds a typed option, with no account to credit it to", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      {:ok, view, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      view
+      |> form("#add-option-form", add_option: %{query: "Osteria Mozza"})
+      |> render_submit()
+
+      assert render(view) =~ "Osteria Mozza"
+
+      assert [activity] = Activities.get_group!(scope, group.id).activities
+      assert activity.name == "Osteria Mozza"
+      assert activity.added_by_id == nil
+    end
+
+    # Only the organizer can add options until co-creation exists, so "yours" is the
+    # whole pool — for either kind of organizer.
+    test "counts every option in the pool as theirs", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      activity_fixture(group)
+      activity_fixture(group)
+
+      {:ok, view, html} = live(conn, ~p"/groups/#{group}/options")
+      assert html =~ "2 yours"
+
+      view
+      |> form("#add-option-form", add_option: %{query: "Third place"})
+      |> render_submit()
+
+      html = render(view)
+      assert html =~ "3 in the pool"
+      assert html =~ "3 yours"
+    end
+
+    test "another anonymous organizer's group is refused", %{conn: conn} do
+      {_owner_scope, group} = anonymous_group_fixture()
+
+      assert_raise Ecto.NoResultsError, fn ->
+        live(conn, ~p"/groups/#{group}/options")
+      end
+    end
+  end
 end

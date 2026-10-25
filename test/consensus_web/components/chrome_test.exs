@@ -16,7 +16,7 @@ defmodule ConsensusWeb.ChromeTest do
   regressions were invisible until this table existed:
 
     * deleting `variant={:public}` from `join_live/ballot.ex` grows a guest's ballot a `⋯`
-      account menu offering Log in / Start something, which product invariant 1 and plan ruling
+      account menu offering Log in / Sign up / Start something, which product invariant 1 and plan ruling
       2 exist to prevent, and a footer full of links that discard an unsent ballot;
     * deleting `back` from `admin_live/users.ex` or `user_live/settings.ex` returns those
       screens to having no way out, which is the whole premise of D-041;
@@ -47,6 +47,12 @@ defmodule ConsensusWeb.ChromeTest do
       |> struct(attrs)
 
     Scope.for_user(user)
+  end
+
+  # An organizer with no account (D-058) — the scope only `live_session :organizer` ever
+  # hands the chrome.
+  defp anonymous do
+    Scope.for_anonymous_organizer(%Consensus.Activities.AnonymousOrganizer{id: 9})
   end
 
   defp header(assigns), do: render_component(&ConsensusWeb.Chrome.header/1, assigns)
@@ -189,15 +195,19 @@ defmodule ConsensusWeb.ChromeTest do
   end
 
   describe "header/1 — the ⋯ menu's contents" do
-    test "signed out offers the two ways in and nothing else" do
+    test "signed out offers Log in, Sign up and Start something, and nothing else" do
       html = header(%{current_scope: signed_out()})
 
       assert html =~ ~s(href="/users/log-in")
       assert html =~ "Log in"
-      assert html =~ ~s(href="/users/register")
-      # `Start something`, the label D-047 §4 gave this destination on `/`,
-      # `/how-it-works` and `/privacy`. This entry was the one that did not move, so the
-      # front door and the menu one tap above it named the same screen two ways.
+      # D-058 split the one "Start something → /users/register" entry in two: organizing
+      # needs no account, so the account (Sign up) and the wizard (Start something) are
+      # different destinations again, each under its own name.
+      assert html =~ ~r{href="/users/register"[^>]*id="chrome-menu-sign-up"}
+      assert html =~ "Sign up"
+      # The id is what the route-by-route anonymous test refutes; without this assertion
+      # renaming it would turn that refute vacuous.
+      assert html =~ ~r{href="/groups/new"[^>]*id="chrome-menu-start"}
       assert html =~ "Start something"
       refute html =~ "Get started"
 
@@ -254,18 +264,46 @@ defmodule ConsensusWeb.ChromeTest do
       refute html =~ ~s(href="/users/settings")
     end
 
-    test "the whole menu is dropped when it would open on a single entry" do
-      # Signed out the menu holds only Log in and Start something, so on either auth screen
-      # exactly one survives — and that one duplicates the form's own "Already have
-      # one? Log in" 40px below it. A ⋯ that opens to reveal one redundant link reads
-      # as broken.
+    test "each signed-out entry is dropped on the page it points at" do
+      on_login = header(%{current_scope: signed_out(), current_path: "/users/log-in"})
+      refute on_login =~ ~s(href="/users/log-in")
+      assert on_login =~ ~s(id="chrome-menu-sign-up")
+      assert on_login =~ ~s(id="chrome-menu-start")
+
+      on_register = header(%{current_scope: signed_out(), current_path: "/users/register"})
+      assert on_register =~ ~s(href="/users/log-in")
+      refute on_register =~ ~s(id="chrome-menu-sign-up")
+      assert on_register =~ ~s(id="chrome-menu-start")
+
+      # Anywhere under `/groups/`, Start something would point at step 1 from step 1 or
+      # open a second draft mid-flow.
+      for path <- ["/groups/new", "/groups/12/options", "/groups/12/results?x=1"] do
+        html = header(%{current_scope: signed_out(), current_path: path})
+
+        refute html =~ ~s(id="chrome-menu-start"), "#{path} offers a second draft"
+        assert html =~ ~s(id="chrome-menu-sign-up")
+        assert html =~ ~s(href="/users/log-in")
+      end
+
+      # `/groups` as a prefix of a path segment, not of a string.
+      assert header(%{current_scope: signed_out(), current_path: "/groupsnew"}) =~
+               ~s(id="chrome-menu-start")
+    end
+
+    test "the whole menu is dropped only when it would open on a single entry" do
+      # A ⋯ that opens to reveal one redundant link reads as broken. While the signed-out
+      # menu was two entries, each auth screen left exactly one — duplicating the form's
+      # own cross-link — and the menu was dropped there. Since D-058 it is three, so two
+      # survive on either auth screen (the cross-link and a way to organize without the
+      # account the form asks for) and the menu stays. The rule is the count, not a list of
+      # paths.
       for path <- ["/users/log-in", "/users/register"] do
         html = header(%{current_scope: signed_out(), current_path: path})
 
-        refute html =~ ~s(id="chrome-menu"), "#{path} still renders a one-entry ⋯ menu"
+        assert html =~ ~s(id="chrome-menu"), "#{path} dropped a two-entry ⋯ menu"
       end
 
-      # Anywhere else signed out, both entries survive and the menu earns its place.
+      # Anywhere else signed out, at least two entries survive and the menu earns its place.
       both = header(%{current_scope: signed_out(), current_path: "/groups/12/options"})
       assert both =~ ~s(id="chrome-menu")
       assert both =~ ~s(href="/users/log-in")
@@ -294,9 +332,58 @@ defmodule ConsensusWeb.ChromeTest do
       refute html =~ ~s(href="/admin/users")
     end
 
-    test "a signed-out visitor on the log-in form is unaffected — that menu is dropped whole" do
-      refute header(%{current_scope: signed_out(), current_path: "/users/log-in"}) =~
-               ~s(id="chrome-menu")
+    test "a signed-out visitor on the log-in form is offered no re-auth trimming" do
+      # `reauth_screen?/2` is about a *signed-in* visitor; signed out, the log-in form keeps
+      # its two surviving doors.
+      html = header(%{current_scope: signed_out(), current_path: "/users/log-in"})
+
+      assert html =~ ~s(id="chrome-menu")
+      refute html =~ "Account menu for"
+      refute html =~ ~s(href="/users/log-out")
+    end
+
+    test "an organizer with no account gets Save your sessions and Log in — no Start something" do
+      # D-058's third state. They already have sessions, so registering *saves* them; and
+      # "Start something" would point at step 1 from step 1, or open a second draft from
+      # anywhere later in the wizard.
+      for path <- ["/groups/new", "/groups/12/options", "/groups/12/share"] do
+        html = header(%{current_scope: anonymous(), current_path: path})
+
+        assert html =~ ~s(id="chrome-menu"), "#{path} dropped the ⋯"
+        assert html =~ ~s(id="chrome-menu-save-sessions"), "#{path} lost Save your sessions"
+        assert html =~ "Save your sessions"
+        assert html =~ ~s(href="/users/register")
+        assert html =~ ~s(href="/users/log-in")
+        assert html =~ "Log in"
+
+        refute html =~ "Start something", "#{path} offers a second draft mid-wizard"
+        refute html =~ ~s(id="chrome-menu-start")
+        refute html =~ ~s(href="/users/settings")
+        refute html =~ ~s(href="/users/log-out")
+        refute html =~ ~s(href="/admin/users")
+      end
+    end
+
+    test "an organizer with no account is not read as signed in" do
+      # `signed_in?/1` treats a user-less scope as signed out, so the email line and the
+      # account label never render for a `%Scope{user: nil}` — there is no account to name.
+      html = header(%{current_scope: anonymous(), current_path: "/groups/new"})
+
+      refute html =~ "Account menu for"
+      assert html =~ ~s(<span class="sr-only">Menu</span>)
+    end
+
+    test "the anonymous menu takes the screen's back_confirm on both entries" do
+      # `/groups/new` holding a typed title passes `back_confirm`; both doors out of the
+      # wizard discard that draft exactly as the signed-out pair would.
+      html =
+        header(%{
+          current_scope: anonymous(),
+          current_path: "/groups/new",
+          back_confirm: "Discard this draft?"
+        })
+
+      assert length(Regex.scan(~r/data-confirm="Discard this draft\?"/, html)) == 2
     end
 
     test "closes when the page behind it is tapped" do
@@ -942,20 +1029,24 @@ defmodule ConsensusWeb.ChromeTest do
       refute html =~ ~s(id="chrome-back")
     end
 
-    test "the auth screens are :app and carry no ⋯ at all", %{conn: conn} do
+    test "the auth screens are :app, and their ⋯ drops only the self-link", %{conn: conn} do
       # `:app`, not `:marketing` — they are app screens a signed-out person is standing
-      # on. The signed-out menu holds only Log in and Start something, so on each of these
-      # exactly one entry survives the self-link filter and it duplicates the form's own
-      # cross-link 40px lower; the whole menu is dropped rather than opening on it.
+      # on. Since D-058 the signed-out menu is Log in, Sign up and Start something, so two
+      # entries survive the self-link filter on each and the menu renders (it was dropped
+      # here while the menu was two entries and one survived).
       login = conn |> get(~p"/users/log-in") |> html_response(200)
-      refute login =~ ~s(id="chrome-menu")
+      assert login =~ ~s(id="chrome-menu")
       refute login =~ ~s(id="chrome-sign-in")
       assert login =~ ~s(id="chrome-back")
+      assert login =~ ~s(id="chrome-menu-sign-up")
+      assert login =~ ~r{href="/groups/new"[^>]*id="chrome-menu-start"}
 
       register = conn |> get(~p"/users/register") |> html_response(200)
-      refute register =~ ~s(id="chrome-menu")
+      assert register =~ ~s(id="chrome-menu")
       refute register =~ ~s(id="chrome-sign-in")
       assert register =~ ~s(id="chrome-back")
+      refute register =~ ~s(id="chrome-menu-sign-up")
+      assert register =~ ~r{href="/groups/new"[^>]*id="chrome-menu-start"}
     end
 
     test "the signed-in ⋯ drops the entry for the screen it is rendered on", %{conn: conn} do
@@ -1080,6 +1171,53 @@ defmodule ConsensusWeb.ChromeTest do
         |> html_response(200)
 
       assert armed =~ ~s(id="feedback-happy")
+    end
+  end
+
+  describe "the chrome for an organizer with no account (D-058)" do
+    setup :create_anonymous_organizer
+
+    test "every wizard route shows the anonymous ⋯, with a back", %{conn: conn, scope: scope} do
+      group = group_fixture(scope)
+      activity = activity_fixture(group)
+      # Share and results only render once the pool is published.
+      {voting, _activities} = voting_group_fixture(scope)
+
+      for path <- [
+            ~p"/groups/new",
+            ~p"/groups/#{group}/edit",
+            ~p"/groups/#{group}/options",
+            ~p"/groups/#{group}/options/#{activity.id}",
+            ~p"/groups/#{group}/review",
+            ~p"/groups/#{voting}/share",
+            ~p"/groups/#{voting}/results"
+          ] do
+        html = conn |> get(path) |> html_response(200)
+
+        assert html =~ ~s(id="chrome-back"), "#{path} is a dead end"
+        assert html =~ ~s(id="chrome-menu"), "#{path} should be the :app variant"
+        assert html =~ ~s(id="chrome-menu-save-sessions"), "#{path} lost Save your sessions"
+        # By id, not by label: the label sits between a HEEx comment and the closing tag
+        # on lines of its own, so a literal "Start something</a>" never matches, and a
+        # page body may carry its own "Start something" CTA.
+        refute html =~ ~s(id="chrome-menu-start"), "#{path} offers Start something in the ⋯"
+        refute html =~ ~s(href="/users/log-out"), "#{path} offers an account it does not have"
+      end
+    end
+
+    test "the standing pages keep :marketing chrome with an organizer cookie present", %{
+      conn: conn
+    } do
+      # `@current_scope` stays user-or-nil outside the wizard, so an organizer cookie must
+      # change nothing here. Had the anonymous scope leaked app-wide, every one of these
+      # would read it as "signed in" and flip to `:app`.
+      for path <- [~p"/", ~p"/about", ~p"/privacy", ~p"/how-it-works", ~p"/feedback"] do
+        html = conn |> get(path) |> html_response(200)
+
+        assert html =~ ~s(id="chrome-sign-in"), "#{path} lost the :marketing Log in"
+        refute html =~ ~s(id="chrome-menu"), "#{path} flipped to :app for an organizer cookie"
+        refute html =~ ~s(id="chrome-menu-save-sessions")
+      end
     end
   end
 end

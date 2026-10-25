@@ -58,6 +58,8 @@ defmodule ConsensusWeb.ResultsComponents do
 
   import ConsensusWeb.Sticker
 
+  alias ConsensusWeb.OrganizerLabel
+
   @doc """
   `Consensus.Voting.tally/1`'s rows as a finished screen must render them.
 
@@ -132,10 +134,14 @@ defmodule ConsensusWeb.ResultsComponents do
     who the tie-break note and the paste-to-chat summary name on an `"organizer_pick"`
     resolution. The guest waiting copy already names the human ("Only <username> can
     break this tie"), so the exit artifact must be at least as specific — "aheld picked
-    X to break the tie", not "The organizer picked X". Both callers have it cheap:
-    `JoinLive.Results` assigns it at mount and `GroupLive.Results` reads its own scope
-    (the group is organizer-scoped, so the viewer is the organizer). `nil` falls back
-    to "The organizer" for any caller that cannot say.
+    X to break the tie", not "The organizer picked X". Both callers read it from
+    `Consensus.Activities.organizer_custom_name/1` on the group they already hold.
+
+    **Nil-or-name, never a pre-defaulted string** (D-058, plan §5.2). An accountless
+    organizer may have chosen no name, and `nil` is what says so; the fallback ("The
+    organizer") is applied here, by `ConsensusWeb.OrganizerLabel`, at the position in
+    the sentence where it lands. A caller that passes "The organizer" itself gets it
+    back verbatim wherever it falls — which is how "Only The organizer can…" happens.
     """
 
   slot :banner, doc: "e.g. the participant's mint \"Your votes are in.\" confirmation"
@@ -567,9 +573,9 @@ defmodule ConsensusWeb.ResultsComponents do
   # The guest's waiting copy on the tie takeover names the human ("Only <username> can
   # break this tie"), so the exit artifact — the winner card's note and the summary the
   # group actually reads in the chat — must be at least as specific once they have.
-  # "The organizer" survives only as the fallback for a caller with no name to give.
-  defp picker_name(nil), do: "The organizer"
-  defp picker_name(username), do: username
+  # "The organizer" survives only for an organizer with no name to give — an accountless
+  # one who left it blank (D-058) — and both sentences open with it, hence `:start`.
+  defp picker_name(organizer_name), do: OrganizerLabel.label(organizer_name, :start)
 
   defp level_sentence(rows, %{approvals: approvals}) do
     unit = if approvals == 1, do: "approval", else: "approvals"

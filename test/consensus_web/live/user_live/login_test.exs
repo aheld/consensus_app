@@ -14,6 +14,102 @@ defmodule ConsensusWeb.UserLive.LoginTest do
     end
   end
 
+  describe "with an organizer cookie present (D-058)" do
+    # The person most likely to land here holding one is an organizer with no account,
+    # logging in to save their sessions. Had the anonymous scope leaked onto these screens
+    # as a truthy `@current_scope`, the identity fields would go `readonly`, the sign-up
+    # link would turn into "You need to reauthenticate", and the remember-me choice would
+    # vanish — locking them out of the very log-in that saves their work.
+    setup :create_anonymous_organizer
+
+    test "the log-in screen keeps editable fields, the sign-up link and remember-me", %{
+      conn: conn
+    } do
+      {:ok, lv, html} = live(conn, ~p"/users/log-in")
+
+      refute html =~ "You need to reauthenticate"
+      assert has_element?(lv, "#login-register-link", "Sign up")
+
+      assert has_element?(lv, ~s|#login_form_magic input[name="user[email]"]|)
+      refute has_element?(lv, ~s|#login_form_magic input[name="user[email]"][readonly]|)
+      assert has_element?(lv, ~s|#login_form_password input[name="user[login]"]|)
+      refute has_element?(lv, ~s|#login_form_password input[name="user[login]"][readonly]|)
+
+      assert has_element?(lv, ~s|#login_form_password button[name="user[remember_me]"]|)
+      assert html =~ "Log in only this time"
+    end
+
+    test "the sign-up screen keeps its editable fields", %{conn: conn} do
+      # The other door the wizard's ⋯ offers ("Save your sessions"). `Registration`'s
+      # signed-in redirect matches a non-nil `user`, so an organizer cookie must not trip it.
+      {:ok, lv, _html} = live(conn, ~p"/users/register")
+
+      assert has_element?(lv, ~s|#registration_form input[name="user[username]"]|)
+      assert has_element?(lv, ~s|#registration_form input[name="user[email]"]|)
+      refute has_element?(lv, "#registration_form input[readonly]")
+    end
+
+    # Plan §7.4: an organizer identity with nothing to save gets no line about saving it.
+    test "the sent screen says nothing about sessions when the identity owns none", %{
+      conn: conn
+    } do
+      {:ok, lv, _html} = live(conn, ~p"/users/log-in")
+      form(lv, "#login_form_magic", user: %{email: user_fixture().email}) |> render_submit()
+
+      assert has_element?(lv, "#magic-link-sent")
+      refute has_element?(lv, "#magic-link-bring-sessions")
+    end
+  end
+
+  describe "with an organizer cookie that owns a session (D-058)" do
+    setup :create_anonymous_organizer
+
+    setup %{scope: scope} do
+      %{group: Consensus.ActivitiesFixtures.group_fixture(scope)}
+    end
+
+    test "the sent screen says to open the link in this same browser", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/users/log-in")
+      form(lv, "#login_form_magic", user: %{email: user_fixture().email}) |> render_submit()
+
+      assert has_element?(
+               lv,
+               "#magic-link-sent #magic-link-bring-sessions",
+               "Open the link in this same browser to bring your sessions with you"
+             )
+
+      # Consent, not a promise: a magic link claims only when the confirmation screen's
+      # box is ticked, so the line must not say they come along by themselves.
+      assert render(lv) =~ "you&#39;ll be asked before they&#39;re saved"
+    end
+
+    # The enumeration pin, re-run with the line present. It is conditioned on this
+    # browser's cookie, never on the address, so for one browser a registered and an
+    # unregistered address must still render identical bytes — line included in both.
+    test "the sent screen stays byte-identical for a known and an unknown address", %{
+      conn: conn
+    } do
+      user = user_fixture()
+      unknown = "nobody-at-all@example.com"
+
+      {:ok, known_lv, _} = live(conn, ~p"/users/log-in")
+
+      known_html =
+        form(known_lv, "#login_form_magic", user: %{email: user.email}) |> render_submit()
+
+      {:ok, unknown_lv, _} = live(conn, ~p"/users/log-in")
+
+      unknown_html =
+        form(unknown_lv, "#login_form_magic", user: %{email: unknown}) |> render_submit()
+
+      assert known_html =~ ~s|id="magic-link-bring-sessions"|
+      assert unknown_html =~ ~s|id="magic-link-bring-sessions"|
+
+      assert String.replace(known_html, user.email, "ADDRESS") ==
+               String.replace(unknown_html, unknown, "ADDRESS")
+    end
+  end
+
   describe "user login - magic link" do
     test "sends magic link email when user exists", %{conn: conn} do
       user = user_fixture()
@@ -30,6 +126,8 @@ defmodule ConsensusWeb.UserLive.LoginTest do
       assert html =~ "If that address is in our system"
       assert html =~ user.email
       refute has_element?(lv, "#login_form_magic")
+      # No organizer cookie in this browser, so no line about bringing sessions (D-058).
+      refute has_element?(lv, "#magic-link-bring-sessions")
 
       assert Consensus.Repo.get_by!(Consensus.Accounts.UserToken, user_id: user.id).context ==
                "login"

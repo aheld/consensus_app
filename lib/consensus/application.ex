@@ -30,7 +30,8 @@ defmodule Consensus.Application do
   that no request-level test can observe: this app has no `[deploy] release_command`
   (see docs/decisions.md D-009), so this list is the *only* thing that migrates a
   release, and the Seeds child is the only thing that gives a fresh deploy an
-  administrator (D-010). `test/consensus/application_test.exs` asserts the shape.
+  administrator (D-010). `Consensus.Housekeeping` follows Seeds and precedes the
+  endpoint. `test/consensus/application_test.exs` asserts the shape.
   """
   def children do
     [
@@ -44,6 +45,12 @@ defmodule Consensus.Application do
       # satisfies "migrations and seeding run automatically in the deploy flow" on
       # Fly.io, where a SQLite volume rules out a `release_command`. See docs/decisions.md.
       {Consensus.Seeds, skip: skip_seeds?()},
+      # After Seeds, never between it and the migrator (invariant 2 pins those two as
+      # adjacent). Same synchronous, run-once, :ignore shape and the same gate, so it
+      # never runs under `mix test` or `mix phx.server`. It sweeps abandoned anonymous
+      # organizers (D-058) and rescues every failure — housekeeping must never fail a
+      # boot. test/consensus/application_test.exs asserts the position.
+      {Consensus.Housekeeping, skip: skip_seeds?()},
       {DNSCluster, query: Application.get_env(:consensus, :dns_cluster_query) || :ignore},
       {Phoenix.PubSub, name: Consensus.PubSub},
       # Start a worker by calling: Consensus.Worker.start_link(arg)

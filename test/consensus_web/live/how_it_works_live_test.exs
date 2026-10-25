@@ -59,20 +59,24 @@ defmodule ConsensusWeb.HowItWorksLiveTest do
       assert html =~ "locked from the"
     end
 
-    test "the CTA sends a signed-out visitor to registration, and says what that costs",
+    # Organizing needs no account (D-058), so the CTA no longer branches on who is
+    # reading, and the signed-out sub-line that warned "Starting one asks for an email, a
+    # username and a password" is deleted rather than reworded — it described a wall that
+    # is gone. Both readers are asserted so a branch cannot come back for either one.
+    test "the CTA sends everyone straight to a new session, with no account warning",
          %{conn: conn} do
       {:ok, lv, html} = live(conn, ~p"/how-it-works")
 
-      assert has_element?(lv, "#how-it-works-cta[href='/users/register']")
-      assert html =~ "Voting in someone"
-    end
+      assert has_element?(lv, "#how-it-works-cta[href='/groups/new']")
+      refute has_element?(lv, "a[href='/users/register']", "Start something")
+      refute html =~ "Starting one asks for"
+      refute html =~ "Voting in someone"
 
-    test "the CTA sends a signed-in organizer straight to a new session", %{conn: conn} do
-      conn = log_in_user(conn, user_fixture())
-      {:ok, lv, html} = live(conn, ~p"/how-it-works")
+      signed_in = log_in_user(conn, user_fixture())
+      {:ok, lv, html} = live(signed_in, ~p"/how-it-works")
 
       assert has_element?(lv, "#how-it-works-cta[href='/groups/new']")
-      refute html =~ "Voting in someone"
+      refute html =~ "Starting one asks for"
     end
 
     test "the back circle returns to wherever the footer link was tapped", %{conn: conn} do
@@ -196,8 +200,60 @@ defmodule ConsensusWeb.HowItWorksLiveTest do
       # with different back behaviour, is the "ambiguous duplication" confusion — and
       # pointing both at the same place does not fix it, because the footer's link is
       # built in `chrome.ex` from whatever `return_to` this page was handed.
-      assert has_element?(lv, "#privacy-cta[href='/users/register']")
+      assert has_element?(lv, "#privacy-cta[href='/groups/new']")
       refute lv |> element("#privacy-cta") |> render() =~ "how-it-works"
+    end
+
+    test "its CTA no longer branches on who is reading, and warns of no account", %{
+      conn: conn
+    } do
+      # D-058: the signed-out branch to `/users/register` and its "Starting one asks for an
+      # email, a username and a password" sub-line are deleted, not reworded.
+      {:ok, lv, html} = live(conn, ~p"/privacy")
+
+      assert has_element?(lv, "#privacy-cta[href='/groups/new']")
+      refute html =~ "Starting one asks for"
+      refute html =~ "Voting in someone"
+
+      {:ok, lv, _html} = live(log_in_user(conn, user_fixture()), ~p"/privacy")
+      assert has_element?(lv, "#privacy-cta[href='/groups/new']")
+    end
+
+    test "says organizing needs no account, and what an organizer without one leaves behind",
+         %{conn: conn} do
+      {:ok, _lv, html} = live(conn, ~p"/privacy")
+
+      # `Consensus.Activities.AnonymousOrganizer`: an optional `display_name` and the
+      # SHA-256 of a random token, never the token itself. The account's email, username
+      # and bcrypt hash exist only for someone who saves their sessions.
+      assert html =~ "No account needed."
+      assert html =~ "A name is optional"
+      assert html =~ "stored only as a hash"
+      assert html =~ "only if you choose to save them to an account"
+      refute html =~ "The email address and username you signed up with"
+    end
+
+    test "says a log-in on a shared browser saves the sessions it finds there", %{conn: conn} do
+      # `UserAuth.log_in_user/3` claims a browser's unsaved sessions on a password or
+      # registration log-in (D-058 accepts the shared-browser inheritance, mitigated by a
+      # flash naming the count); a magic-link log-in claims only with the consent box ticked.
+      {:ok, _lv, html} = live(conn, ~p"/privacy")
+
+      assert html =~ "saves them to your account"
+      assert html =~ "log-in by emailed link asks you first"
+    end
+
+    test "counts three cookies, the organizer one lasting 90 days since last use", %{
+      conn: conn
+    } do
+      # The count is the point (see the moduledoc): the session cookie, remember-me, and
+      # `OrganizerAuth`'s cookie, which `:fetch_organizer_token` re-issues with a fresh
+      # `max_age` on every request — so 90 days since last use, not since the first visit.
+      {:ok, _lv, html} = live(conn, ~p"/privacy")
+
+      assert html =~ "Three cookies."
+      refute html =~ "Two cookies."
+      assert html =~ "90 days since you last used it"
     end
 
     test "the back circle refuses a path a browser would resolve off-site", %{conn: conn} do

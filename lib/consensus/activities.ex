@@ -3,17 +3,49 @@ defmodule Consensus.Activities do
   The Activities context: activity groups (a titled, deadlined pool of options that a
   group of people will vote on) and the activities (options) inside them.
 
-  Every function that reads or writes on a user's behalf takes `%Consensus.Accounts.Scope{}`
-  as its first argument, exactly like `Consensus.Accounts`.
-  Where the resource being acted on is passed in already (a `%Group{}` or an
-  `%Activity{}`), ownership is a **precondition in the function head**: the scope's
-  `user_id` and the group's `organizer_id` are bound to the same variable name, so a
-  call on someone else's group fails to match any clause and raises
-  `FunctionClauseError` rather than taking a runtime branch. `update_activity/3` and
-  `delete_activity/2`
-  are the one exception: an `%Activity{}` only carries `group_id`, not the organizer,
-  so ownership there is a DB re-read (`authorize_activity/2`) rather than a pure
-  pattern match — see the note on those two functions.
+  Every function that reads or writes on an organizer's behalf takes
+  `%Consensus.Accounts.Scope{}` as its first argument, exactly like `Consensus.Accounts`.
+
+  ## Ownership is a precondition in the function head — with two kinds of owner
+
+  A group is owned by a signed-in user (`organizer_id`) **or** by an organizer with no
+  account (`anonymous_organizer_id`, D-058) — exactly one of the two, which the
+  database enforces with a CHECK. Where the resource being acted on is passed in
+  already (a `%Group{}` or an `%Activity{}`), ownership is a **precondition in the
+  function head**: the scope's id and the group's owner column are bound to the same
+  variable name, so a call on someone else's group fails to match any clause and
+  raises `FunctionClauseError` rather than taking a runtime branch.
+
+  Every owning function therefore has **two heads**, one per kind of owner, and both
+  delegate to one shared private body that never looks at the owner again:
+
+      def publish_group(%Scope{user: %User{id: id}, anonymous_organizer: nil},
+                        %Group{organizer_id: id} = group) when is_integer(id)
+      def publish_group(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+                        %Group{anonymous_organizer_id: id} = group) when is_integer(id)
+
+  Three rules hold in every pair, and each one closes a hole the other two leave:
+
+    * **The other identity is pinned to `nil`.** A `%Scope{}` with both fields set
+      matches neither head and raises, instead of the first head silently winning.
+    * **`when is_integer(id)`.** Once both owner columns are nullable, every user-owned
+      group has `anonymous_organizer_id: nil` and every anonymous-owned one has
+      `organizer_id: nil`, so an unsaved struct with `id: nil` would otherwise match
+      every group owned by the *other* kind — a cross-tenant write no "different
+      owner" test notices.
+    * **No owner comparison in the body.** Collapsing a pair into a computed owner key
+      compared at runtime is one inverted comparison away from that same write, and it
+      turns a `FunctionClauseError` the suite can see into a branch it cannot (D-058).
+
+  `update_activity/3` and `delete_activity/2` are the one exception: an `%Activity{}`
+  only carries `group_id`, not the organizer, so ownership there is a DB re-read
+  (`authorize_activity/2`, itself two clauses) rather than a pure pattern match — see
+  the note on those two functions. `claim_anonymous_groups/2` is the other kind of
+  exception: the one write here authorized by possession of a secret rather than by a
+  scope.
+
+  *Anonymous* in `AnonymousOrganizer` means **has no account**; it is unrelated to a
+  group's `anonymous` field, which is voting secrecy (D-035).
 
   Changes are broadcast over `Phoenix.PubSub` on the `"activity_group:<id>"` topic
   (`subscribe_group/1`), so LiveViews showing a group update without a refresh (see
@@ -40,10 +72,12 @@ defmodule Consensus.Activities do
   """
 
   import Ecto.Query, warn: false
+  require Logger
 
   alias Consensus.Accounts.Scope
   alias Consensus.Accounts.User
   alias Consensus.Activities.Activity
+  alias Consensus.Activities.AnonymousOrganizer
   alias Consensus.Activities.Group
   alias Consensus.Repo
   alias Consensus.Voting
@@ -51,6 +85,15 @@ defmodule Consensus.Activities do
   alias Consensus.Voting.Vote
 
   @topic_prefix "activity_group:"
+
+  # An anonymous organizer's token stops resolving after this long without a visit,
+  # and the resolver records a visit at most once per `@touch_interval_seconds` — so an
+  # organizer clicking around the wizard costs one write a day, not one per page.
+  @organizer_idle_days 90
+  @touch_interval_seconds 24 * 60 * 60
+
+  # The boot sweep deletes an unclaimed identity that owns no group after this long.
+  @sweep_idle_days 30
 
   ## PubSub
 
@@ -90,17 +133,25 @@ defmodule Consensus.Activities do
   ## Groups — reads
 
   @doc """
-  Lists the signed-in user's groups, newest first, activities preloaded.
+  Lists the caller's groups — a signed-in user's, or an anonymous organizer's — newest
+  first, activities preloaded.
 
   Each group is passed through `maybe_complete_group/1` first, so a `:voting` group
   whose deadline has already passed is reported (and, on its first read since expiry,
   persisted) as `:completed` rather than stale.
   """
-  def list_groups(%Scope{user: %User{id: user_id}}) do
-    from(g in Group,
-      where: g.organizer_id == ^user_id,
-      order_by: [desc: g.inserted_at, desc: g.id]
-    )
+  def list_groups(%Scope{user: %User{id: user_id}, anonymous_organizer: nil})
+      when is_integer(user_id) do
+    do_list_groups(from(g in Group, where: g.organizer_id == ^user_id))
+  end
+
+  def list_groups(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}})
+      when is_integer(id) do
+    do_list_groups(from(g in Group, where: g.anonymous_organizer_id == ^id))
+  end
+
+  defp do_list_groups(owned) do
+    from(g in owned, order_by: [desc: g.inserted_at, desc: g.id])
     |> Repo.all()
     |> Repo.preload(:activities)
     |> Enum.map(&maybe_complete_group/1)
@@ -120,13 +171,25 @@ defmodule Consensus.Activities do
   Gets a single group, scoped to its organizer.
 
   Raises `Ecto.NoResultsError` both when the id does not exist and when it belongs to
-  someone else — the query itself is filtered by `organizer_id`, so the two cases are
-  indistinguishable from outside, which is the point.
+  someone else — the query itself is filtered by the caller's owner column, so the two
+  cases are indistinguishable from outside, which is the point.
+
+  Preloads the activities and the owner (see `organizer_custom_name/1`).
   """
-  def get_group!(%Scope{user: %User{id: user_id}}, id) do
+  def get_group!(%Scope{user: %User{id: user_id}, anonymous_organizer: nil}, id)
+      when is_integer(user_id) do
+    do_get_group!(id, organizer_id: user_id)
+  end
+
+  def get_group!(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: owner_id}}, id)
+      when is_integer(owner_id) do
+    do_get_group!(id, anonymous_organizer_id: owner_id)
+  end
+
+  defp do_get_group!(id, owned_by) do
     Group
-    |> Repo.get_by!(id: id, organizer_id: user_id)
-    |> Repo.preload(:activities)
+    |> Repo.get_by!([{:id, id} | owned_by])
+    |> Repo.preload([:activities | owner_preloads()])
     |> maybe_complete_group()
   end
 
@@ -135,43 +198,226 @@ defmodule Consensus.Activities do
 
   This is the `/join/<slug>` lookup a guest voter follows — there is no organizer to
   scope it to. Returns `nil` when the slug does not match anything.
+
+  Preloads the activities and the owner, so a guest screen can name the organizer
+  (`organizer_custom_name/1`) without another query. An anonymous owner is loaded
+  **narrowly** — `id` and `display_name` only — because this group lands in a guest's
+  socket assigns and the row's `token_hash` must never be among them.
   """
   def get_group_by_slug(slug) when is_binary(slug) do
     case Repo.get_by(Group, slug: slug) do
       nil -> nil
-      group -> group |> Repo.preload(:activities) |> maybe_complete_group()
+      group -> group |> Repo.preload([:activities | owner_preloads()]) |> maybe_complete_group()
     end
+  end
+
+  # The owner, for naming. An anonymous organizer row also holds the hash of a write
+  # capability; only the two fields a name needs are ever selected into a `%Group{}`.
+  defp owner_preloads do
+    [
+      :organizer,
+      anonymous_organizer: from(o in AnonymousOrganizer, select: struct(o, [:id, :display_name]))
+    ]
+  end
+
+  @doc """
+  The name the organizer chose to be shown to guests, or `nil` for none.
+
+  The account's username for a user-owned group; the self-chosen `display_name` (which
+  may be `nil`) for an anonymous-owned one. This is the domain's only accessor for the
+  organizer's name — how `nil` reads ("The organizer" / "the organizer") is
+  presentation and lives in the web layer. An owner not already preloaded is loaded
+  here, narrowly, rather than silently reading as unnamed.
+  """
+  def organizer_custom_name(%Group{} = group) do
+    case Repo.preload(group, owner_preloads()) do
+      %Group{organizer: %User{username: username}} -> username
+      %Group{anonymous_organizer: %AnonymousOrganizer{display_name: name}} -> name
+      %Group{} -> nil
+    end
+  end
+
+  @doc """
+  True when the user owns at least one group.
+
+  One query, for the log-out flash only (plan §6.4) — a claim moves an anonymous
+  organizer's sessions to the account, so logging out makes them unreachable from that
+  browser until the person logs back in. Never call it per render.
+  """
+  def owns_any_group?(%User{id: user_id}) when is_integer(user_id) do
+    Repo.exists?(from(g in Group, where: g.organizer_id == ^user_id))
+  end
+
+  @doc """
+  How many groups an organizer with no account owns. One `COUNT`, for the magic-link
+  confirmation screen's "save N sessions" consent (D-058) — never per render elsewhere,
+  and no lazy completion, which `list_groups/1` would run on every row.
+  """
+  def count_groups(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}})
+      when is_integer(id) do
+    Repo.aggregate(from(g in Group, where: g.anonymous_organizer_id == ^id), :count)
   end
 
   ## Groups — writes
 
+  @doc """
+  An unsaved `%Group{}` owned by the caller — the struct the `01 setup` form starts
+  from, so a LiveView never reaches into `scope.user.id` itself.
+  """
+  def new_group(%Scope{user: %User{id: user_id}, anonymous_organizer: nil})
+      when is_integer(user_id) do
+    %Group{organizer_id: user_id}
+  end
+
+  def new_group(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}})
+      when is_integer(id) do
+    %Group{anonymous_organizer_id: id}
+  end
+
   @doc "Returns an `%Ecto.Changeset{}` for tracking new-group changes."
+  def change_group(scope, group, attrs \\ %{})
+
   def change_group(
-        %Scope{user: %User{id: user_id}},
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
         %Group{organizer_id: user_id} = group,
-        attrs \\ %{}
-      ) do
+        attrs
+      )
+      when is_integer(user_id) do
+    Group.changeset(group, attrs)
+  end
+
+  def change_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        attrs
+      )
+      when is_integer(id) do
     Group.changeset(group, attrs)
   end
 
   @doc """
   Creates a group with the caller as organizer.
 
-  `:organizer_id` comes from the scope, never from `attrs` — see
+  The owner (`:organizer_id`, or `:anonymous_organizer_id` for an organizer with no
+  account) comes from the scope, never from `attrs` — see
   `Consensus.Activities.Group.changeset/2`.
+
+  An organizer with no account is refused with `{:error, :claimed}` once their identity
+  has been claimed. The scope is whatever the socket mounted with, and a log-in in
+  another tab can claim the identity under it — often while it still owns nothing, since
+  it is minted before step 1 is submitted. A group inserted on a claimed identity would
+  be stranded for good: no resolver returns a claimed row, the cookie is gone, and a
+  re-claim finds nothing new to move. The re-read sits in the same transaction as the
+  insert, so under production's `:immediate` mode it cannot interleave with the claim.
   """
-  def create_group(%Scope{user: %User{id: user_id}}, attrs) do
-    %Group{organizer_id: user_id}
+  def create_group(%Scope{user: %User{id: user_id}, anonymous_organizer: nil}, attrs)
+      when is_integer(user_id) do
+    do_create_group(%Group{organizer_id: user_id}, attrs)
+  end
+
+  def create_group(%Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}}, attrs)
+      when is_integer(id) do
+    Repo.transact(fn ->
+      with :ok <- ensure_unclaimed(id) do
+        do_create_group(%Group{anonymous_organizer_id: id}, attrs)
+      end
+    end)
+  end
+
+  # Gone counts as claimed too: either way nothing will ever resolve to this identity.
+  defp ensure_unclaimed(organizer_id) do
+    if Repo.exists?(
+         from(o in AnonymousOrganizer, where: o.id == ^organizer_id and is_nil(o.claimed_at))
+       ),
+       do: :ok,
+       else: {:error, :claimed}
+  end
+
+  defp do_create_group(%Group{} = group, attrs) do
+    group
     |> Group.changeset(attrs)
     |> Repo.insert()
   end
 
   @doc "Updates a group's own fields. Broadcasts `{:group_updated, group}` on success."
-  def update_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group, attrs) do
+  def update_group(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group,
+        attrs
+      )
+      when is_integer(user_id) do
+    do_update_group(group, attrs)
+  end
+
+  def update_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        attrs
+      )
+      when is_integer(id) do
+    do_update_group(group, attrs)
+  end
+
+  defp do_update_group(%Group{} = group, attrs) do
     group
     |> Group.changeset(attrs)
     |> Repo.update()
     |> broadcast_group_update()
+  end
+
+  @doc """
+  `create_group/2` and `update_organizer_display_name/2` as one transaction, for `01
+  setup`'s submit when an organizer with no account typed a name (plan §7.3).
+
+  Anonymous head only: a signed-in organizer is named by their username. The group is
+  written first, so its own errors come back exactly as `create_group/2` returns them;
+  a refused name rolls the group back with it and comes back tagged as
+  `{:error, {:organizer_name, changeset_or_not_found}}`, so a resubmit never creates a
+  second group. A claimed identity is refused with `{:error, :claimed}`, exactly as
+  `create_group/2` refuses it.
+  """
+  def create_group_with_organizer_name(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        group_attrs,
+        name_attrs
+      )
+      when is_integer(id) do
+    Repo.transact(fn ->
+      with :ok <- ensure_unclaimed(id),
+           {:ok, group} <- do_create_group(%Group{anonymous_organizer_id: id}, group_attrs),
+           {:ok, _organizer} <- write_organizer_name(id, name_attrs) do
+        {:ok, group}
+      end
+    end)
+  end
+
+  @doc """
+  `update_group/3` and `update_organizer_display_name/2` as one transaction — the `:edit`
+  twin of `create_group_with_organizer_name/3`, with the same returns. The
+  `{:group_updated, group}` broadcast fires after commit, never from inside the
+  transaction: a broadcast cannot be rolled back.
+  """
+  def update_group_with_organizer_name(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        group_attrs,
+        name_attrs
+      )
+      when is_integer(id) do
+    Repo.transact(fn ->
+      with {:ok, group} <- group |> Group.changeset(group_attrs) |> Repo.update(),
+           {:ok, _organizer} <- write_organizer_name(id, name_attrs) do
+        {:ok, group}
+      end
+    end)
+    |> broadcast_group_update()
+  end
+
+  defp write_organizer_name(organizer_id, attrs) do
+    case do_update_organizer_display_name(organizer_id, attrs) do
+      {:ok, organizer} -> {:ok, organizer}
+      {:error, reason} -> {:error, {:organizer_name, reason}}
+    end
   end
 
   @doc """
@@ -186,18 +432,30 @@ defmodule Consensus.Activities do
   No broadcast: nothing outside the organizer's own socket reads these fields.
   """
   def set_search_area(
-        %Scope{user: %User{id: user_id}},
-        %Group{organizer_id: user_id, status: :draft} = group,
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group,
         attrs
-      ) do
+      )
+      when is_integer(user_id) do
+    do_set_search_area(group, attrs)
+  end
+
+  def set_search_area(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        attrs
+      )
+      when is_integer(id) do
+    do_set_search_area(group, attrs)
+  end
+
+  defp do_set_search_area(%Group{status: :draft} = group, attrs) do
     group
     |> Group.search_area_changeset(attrs)
     |> Repo.update()
   end
 
-  def set_search_area(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, _attrs) do
-    {:error, :pool_locked}
-  end
+  defp do_set_search_area(%Group{}, _attrs), do: {:error, :pool_locked}
 
   @doc """
   Moves a group from `:draft` to `:voting`.
@@ -208,7 +466,23 @@ defmodule Consensus.Activities do
   in the caller, not a no-op the caller wants). Broadcasts `{:group_updated, group}` on
   success.
   """
-  def publish_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group) do
+  def publish_group(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group
+      )
+      when is_integer(user_id) do
+    do_publish_group(group)
+  end
+
+  def publish_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group
+      )
+      when is_integer(id) do
+    do_publish_group(group)
+  end
+
+  defp do_publish_group(%Group{} = group) do
     cond do
       group.status != :draft -> {:error, :not_draft}
       count_activities(group) == 0 -> {:error, :no_activities}
@@ -223,7 +497,23 @@ defmodule Consensus.Activities do
   Refuses with `{:error, :already_finished}` if the group is already `:completed` or
   `:cancelled`. Broadcasts `{:group_updated, group}` on success.
   """
-  def cancel_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group) do
+  def cancel_group(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group
+      )
+      when is_integer(user_id) do
+    do_cancel_group(group)
+  end
+
+  def cancel_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group
+      )
+      when is_integer(id) do
+    do_cancel_group(group)
+  end
+
+  defp do_cancel_group(%Group{} = group) do
     if group.status in [:completed, :cancelled] do
       {:error, :already_finished}
     else
@@ -239,7 +529,23 @@ defmodule Consensus.Activities do
   `maybe_complete_group/1` for the deadline-triggered path that reaches the same
   transition without an organizer scope.
   """
-  def complete_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group) do
+  def complete_group(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group
+      )
+      when is_integer(user_id) do
+    do_complete_group(group)
+  end
+
+  def complete_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group
+      )
+      when is_integer(id) do
+    do_complete_group(group)
+  end
+
+  defp do_complete_group(%Group{} = group) do
     if group.status in [:completed, :cancelled] do
       {:error, :already_finished}
     else
@@ -337,11 +643,26 @@ defmodule Consensus.Activities do
   re-read (CLAUDE.md invariants 1 and 17); the broadcast fires after commit.
   """
   def resolve_group(
-        %Scope{user: %User{id: user_id}},
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
         %Group{organizer_id: user_id} = group,
         activity_id,
         resolution
-      ) do
+      )
+      when is_integer(user_id) do
+    do_resolve_group(group, activity_id, resolution)
+  end
+
+  def resolve_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        activity_id,
+        resolution
+      )
+      when is_integer(id) do
+    do_resolve_group(group, activity_id, resolution)
+  end
+
+  defp do_resolve_group(%Group{} = group, activity_id, resolution) do
     activity_id = cast_activity_id(activity_id)
 
     if resolution not in Group.resolutions() do
@@ -386,9 +707,24 @@ defmodule Consensus.Activities do
   to the ordinary winner ending at once.
   """
   def rescue_group(
-        %Scope{user: %User{id: user_id}} = scope,
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil} = scope,
         %Group{organizer_id: user_id} = group
-      ) do
+      )
+      when is_integer(user_id) do
+    do_rescue_group(scope, group)
+  end
+
+  def rescue_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}} = scope,
+        %Group{anonymous_organizer_id: id} = group
+      )
+      when is_integer(id) do
+    do_rescue_group(scope, group)
+  end
+
+  # Takes the scope only to hand it back to `resolve_group/4`, whose own heads check
+  # ownership again — never to read the owner here.
+  defp do_rescue_group(%Scope{} = scope, %Group{} = group) do
     candidate =
       group
       |> Voting.tally()
@@ -440,7 +776,23 @@ defmodule Consensus.Activities do
   kept its `"app_rescue"` stamp, silently pre-deciding round 2. Same idiom as
   `resolve_group/4` above; the broadcast fires after commit.
   """
-  def reopen_group(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id} = group) do
+  def reopen_group(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group
+      )
+      when is_integer(user_id) do
+    do_reopen_group(group)
+  end
+
+  def reopen_group(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group
+      )
+      when is_integer(id) do
+    do_reopen_group(group)
+  end
+
+  defp do_reopen_group(%Group{} = group) do
     Repo.transact(fn ->
       group = Repo.get!(Group, group.id)
 
@@ -525,15 +877,30 @@ defmodule Consensus.Activities do
 
   Refuses with `{:error, :pool_locked}` unless the group is still a `:draft` — see
   "The pool is frozen the moment the vote opens" in the moduledoc. `:added_by_id` is
-  set from the scope; `attrs` cannot override it. Broadcasts
-  `{:activity_added, activity}` on success.
+  set from the scope; `attrs` cannot override it. It is a foreign key to `users`, so an
+  organizer with no account leaves it `nil`. Broadcasts `{:activity_added, activity}`
+  on success.
   """
   def add_activity(
-        %Scope{user: %User{id: user_id}},
-        %Group{organizer_id: user_id, status: :draft} = group,
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group,
         attrs
-      ) do
-    %Activity{group_id: group.id, added_by_id: user_id}
+      )
+      when is_integer(user_id) do
+    do_add_activity(group, user_id, attrs)
+  end
+
+  def add_activity(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        attrs
+      )
+      when is_integer(id) do
+    do_add_activity(group, nil, attrs)
+  end
+
+  defp do_add_activity(%Group{status: :draft} = group, added_by_id, attrs) do
+    %Activity{group_id: group.id, added_by_id: added_by_id}
     |> Activity.changeset(attrs)
     |> Ecto.Changeset.put_change(:position, next_position(group.id))
     |> Repo.insert()
@@ -547,9 +914,7 @@ defmodule Consensus.Activities do
     end
   end
 
-  def add_activity(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, _attrs) do
-    {:error, :pool_locked}
-  end
+  defp do_add_activity(%Group{}, _added_by_id, _attrs), do: {:error, :pool_locked}
 
   @doc """
   Updates an activity's own fields (never its position or group — see
@@ -634,11 +999,24 @@ defmodule Consensus.Activities do
   retroactively changes who is winning. See the moduledoc and D-037.
   """
   def reorder_activities(
-        %Scope{user: %User{id: user_id}},
-        %Group{organizer_id: user_id, status: :draft} = group,
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Group{organizer_id: user_id} = group,
         ordered_ids
       )
-      when is_list(ordered_ids) do
+      when is_integer(user_id) and is_list(ordered_ids) do
+    do_reorder_activities(group, ordered_ids)
+  end
+
+  def reorder_activities(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Group{anonymous_organizer_id: id} = group,
+        ordered_ids
+      )
+      when is_integer(id) and is_list(ordered_ids) do
+    do_reorder_activities(group, ordered_ids)
+  end
+
+  defp do_reorder_activities(%Group{status: :draft} = group, ordered_ids) do
     current_ids =
       from(a in Activity, where: a.group_id == ^group.id, select: a.id) |> Repo.all()
 
@@ -663,10 +1041,7 @@ defmodule Consensus.Activities do
     end
   end
 
-  def reorder_activities(%Scope{user: %User{id: user_id}}, %Group{organizer_id: user_id}, ids)
-      when is_list(ids) do
-    {:error, :pool_locked}
-  end
+  defp do_reorder_activities(%Group{}, _ordered_ids), do: {:error, :pool_locked}
 
   defp valid_reorder?(ordered_ids, current_ids) do
     length(ordered_ids) == length(current_ids) and
@@ -679,11 +1054,311 @@ defmodule Consensus.Activities do
   defp ensure_pool_editable(%Group{status: :draft}), do: :ok
   defp ensure_pool_editable(%Group{}), do: {:error, :pool_locked}
 
-  defp authorize_activity(%Scope{user: %User{id: user_id}}, %Activity{group_id: group_id}) do
+  # The documented exception to head-matched ownership (see the moduledoc): an
+  # `%Activity{}` does not carry its owner, so the group is re-read and its owner column
+  # pinned against the scope's id. Two clauses, one per kind of owner, with the same
+  # three rules as every other pair — so a both-set scope or an unsaved id raises here
+  # too, rather than reaching the re-read.
+  defp authorize_activity(
+         %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+         %Activity{group_id: group_id}
+       )
+       when is_integer(user_id) do
     case Repo.get(Group, group_id) do
       %Group{organizer_id: ^user_id} = group -> {:ok, group}
       %Group{} -> {:error, :unauthorized}
       nil -> {:error, :not_found}
     end
+  end
+
+  defp authorize_activity(
+         %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+         %Activity{group_id: group_id}
+       )
+       when is_integer(id) do
+    case Repo.get(Group, group_id) do
+      %Group{anonymous_organizer_id: ^id} = group -> {:ok, group}
+      %Group{} -> {:error, :unauthorized}
+      nil -> {:error, :not_found}
+    end
+  end
+
+  ## Anonymous organizers (D-058)
+
+  @doc """
+  Mints a new organizer identity for a browser with no account.
+
+  Returns `{raw_token, %AnonymousOrganizer{}}`. `raw_token` is 32 random bytes for the
+  browser's signed cookie and is never stored; the row holds only its SHA-256 digest.
+  Called by the web layer's mint plug on `GET /groups/new` only — never per request,
+  since every call is a write on the single SQLite writer.
+  """
+  def mint_anonymous_organizer do
+    raw_token = :crypto.strong_rand_bytes(32)
+
+    organizer =
+      raw_token
+      |> hash_organizer_token()
+      |> AnonymousOrganizer.creation_changeset()
+      |> Repo.insert!()
+
+    {raw_token, organizer}
+  end
+
+  @doc """
+  Resolves a browser's raw organizer token to its live identity, or `nil`.
+
+  The one resolver every caller shares, so the mint plug, the wizard's on_mount hook
+  and `/` all agree on whether an identity is alive. Returns `nil` for anything that
+  is not a binary, for an unknown token, for a row that has been **claimed** (its
+  sessions belong to an account now), and for a row idle longer than
+  #{@organizer_idle_days} days.
+
+  On a hit it records the visit by bumping `last_seen_at` — at most once per 24 hours,
+  through a conditional `UPDATE`, so a row already touched today costs no write. A
+  touch refused by a busy database is logged and skipped: a failed bookkeeping write
+  never fails the request it rode in on.
+  """
+  def get_anonymous_organizer_by_token(raw_token) when is_binary(raw_token) do
+    now = DateTime.utc_now(:second)
+    idle_cutoff = DateTime.add(now, -@organizer_idle_days, :day)
+    token_hash = hash_organizer_token(raw_token)
+
+    from(o in AnonymousOrganizer,
+      where:
+        o.token_hash == ^token_hash and is_nil(o.claimed_at) and
+          o.last_seen_at >= ^idle_cutoff
+    )
+    |> Repo.one()
+    |> case do
+      nil -> nil
+      %AnonymousOrganizer{} = organizer -> touch_anonymous_organizer(organizer, now)
+    end
+  end
+
+  def get_anonymous_organizer_by_token(_raw_token), do: nil
+
+  defp touch_anonymous_organizer(%AnonymousOrganizer{} = organizer, now) do
+    touch_cutoff = DateTime.add(now, -@touch_interval_seconds, :second)
+
+    if DateTime.compare(organizer.last_seen_at, touch_cutoff) == :lt do
+      {_, _} =
+        Repo.update_all(
+          from(o in AnonymousOrganizer,
+            where: o.id == ^organizer.id and o.last_seen_at < ^touch_cutoff
+          ),
+          set: [last_seen_at: now]
+        )
+
+      %{organizer | last_seen_at: now}
+    else
+      organizer
+    end
+  rescue
+    error in [Exqlite.Error, DBConnection.ConnectionError] ->
+      Logger.warning(
+        "[organizer] last_seen_at touch skipped: database busy (#{Exception.message(error)})"
+      )
+
+      organizer
+  end
+
+  defp hash_organizer_token(raw_token), do: :crypto.hash(:sha256, raw_token)
+
+  @doc """
+  Returns an `%Ecto.Changeset{}` for an anonymous organizer's display name, for the
+  `01 setup` "Your name" field. See `update_organizer_display_name/2`.
+  """
+  def change_organizer_display_name(scope, attrs \\ %{})
+
+  def change_organizer_display_name(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id} = organizer},
+        attrs
+      )
+      when is_integer(id) do
+    AnonymousOrganizer.display_name_changeset(organizer, attrs)
+  end
+
+  @doc """
+  Sets the optional name an anonymous organizer is shown to guests as.
+
+  Casts only `:display_name`, through `AnonymousOrganizer.display_name_changeset/2`:
+  trimmed, internal whitespace collapsed, invisible and text-direction characters
+  refused, capped at `AnonymousOrganizer.max_display_name_length/0` graphemes; blank
+  becomes `nil` ("the organizer"). The name lives on the person, so it changes on every
+  one of their unclaimed sessions at once (D-058).
+
+  The changeset is built on a fresh read of the row, never on the struct in the scope.
+  That struct is whatever the socket mounted with, and Ecto writes only fields that
+  differ from it — so with another tab having renamed the person since, clearing the
+  field back to the stale value would be a silent no-op reported as `{:ok, _}`.
+
+  Returns `{:ok, %AnonymousOrganizer{}}`, `{:error, changeset}`, or
+  `{:error, :not_found}` once the row is gone (swept or claimed). There is no user
+  head: a signed-in organizer is named by their username.
+  """
+  def update_organizer_display_name(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        attrs
+      )
+      when is_integer(id) do
+    do_update_organizer_display_name(id, attrs)
+  end
+
+  defp do_update_organizer_display_name(organizer_id, attrs) do
+    case Repo.get(AnonymousOrganizer, organizer_id) do
+      nil ->
+        {:error, :not_found}
+
+      organizer ->
+        organizer
+        |> AnonymousOrganizer.display_name_changeset(attrs)
+        |> Repo.update()
+    end
+  end
+
+  @doc """
+  Moves every group an anonymous organizer owns to `user`'s account — the claim
+  (D-058, plan §6.3).
+
+  **This is the one write in this module authorized by possession of a secret rather
+  than by a head-matched scope**, so where `raw_token` comes from is the whole of its
+  security: it is read only from the signed organizer cookie on the conn, in
+  `ConsensusWeb.UserAuth.log_in_user/4`, after the person has proved they own `user`.
+  It must never be taken from a client parameter — a token in a form field or a query
+  string would let anyone holding one move sessions into any account they can log in
+  to, and would put a write capability in history and `Referer`.
+
+  In one transaction:
+
+    1. a compare-and-swap on the identity, `SET claimed_by_user_id, claimed_at WHERE
+       claimed_at IS NULL` — the house idiom (`Consensus.Voting.cast_ballot/3`'s `WHERE
+       voted_at IS NULL`), so two simultaneous claims cannot both win whatever the
+       transaction mode;
+    2. every group it owns has `organizer_id` set and `anonymous_organizer_id` cleared.
+       Ownership *moves*; the identity is left owning nothing.
+
+  Returns:
+
+    * `{:ok, count}` — the number of groups moved. A re-claim by the user who already
+      claimed it moves whatever still names the identity — normally nothing, so
+      `{:ok, 0}` — which makes the claim self-healing: a group that raced onto the
+      identity after the first claim is picked up by the next one;
+    * `{:error, :already_claimed}` — claimed by a different account;
+    * `{:error, :not_found}` — an unknown token, or one idle past
+      #{@organizer_idle_days} days;
+    * `{:error, {:database_busy, message}}` — SQLite refused the write. Logged at
+      `:warning`; the caller keeps the cookie so the next log-in retries.
+  """
+  def claim_anonymous_groups(%User{id: user_id}, raw_token)
+      when is_integer(user_id) and is_binary(raw_token) do
+    now = DateTime.utc_now(:second)
+    idle_cutoff = DateTime.add(now, -@organizer_idle_days, :day)
+
+    case Repo.get_by(AnonymousOrganizer, token_hash: hash_organizer_token(raw_token)) do
+      nil ->
+        {:error, :not_found}
+
+      %AnonymousOrganizer{claimed_at: nil, last_seen_at: last_seen_at} = organizer ->
+        if DateTime.compare(last_seen_at, idle_cutoff) == :lt,
+          do: {:error, :not_found},
+          else: claim_organizer(organizer, user_id, now)
+
+      %AnonymousOrganizer{} = organizer ->
+        claim_organizer(organizer, user_id, now)
+    end
+  rescue
+    error in [Exqlite.Error, DBConnection.ConnectionError] ->
+      Logger.warning(
+        "[organizer] claim refused for user_id=#{user_id}: database busy " <>
+          "(#{Exception.message(error)})"
+      )
+
+      {:error, {:database_busy, Exception.message(error)}}
+  end
+
+  def claim_anonymous_groups(%User{id: user_id}, _raw_token) when is_integer(user_id) do
+    {:error, :not_found}
+  end
+
+  # Runs the CAS even for a row already seen as claimed: the zero-row branch is what
+  # tells "claimed by me" from "claimed by someone else", and it re-reads inside the
+  # transaction rather than trusting the read above.
+  defp claim_organizer(%AnonymousOrganizer{id: organizer_id}, user_id, now) do
+    Repo.transact(fn ->
+      claimed =
+        Repo.update_all(
+          from(o in AnonymousOrganizer, where: o.id == ^organizer_id and is_nil(o.claimed_at)),
+          set: [claimed_by_user_id: user_id, claimed_at: now, updated_at: now]
+        )
+
+      case claimed do
+        {1, _} ->
+          {:ok, move_groups(organizer_id, user_id, now)}
+
+        {0, _} ->
+          case Repo.get(AnonymousOrganizer, organizer_id) do
+            # Moved again rather than answered `{:ok, 0}` outright, so a group that
+            # landed on the identity after the first claim is not stranded.
+            %AnonymousOrganizer{claimed_by_user_id: ^user_id} ->
+              {:ok, move_groups(organizer_id, user_id, now)}
+
+            %AnonymousOrganizer{} ->
+              {:error, :already_claimed}
+
+            nil ->
+              {:error, :not_found}
+          end
+      end
+    end)
+  end
+
+  defp move_groups(organizer_id, user_id, now) do
+    {moved, _} =
+      Repo.update_all(
+        from(g in Group, where: g.anonymous_organizer_id == ^organizer_id),
+        set: [organizer_id: user_id, anonymous_organizer_id: nil, updated_at: now]
+      )
+
+    moved
+  end
+
+  @doc """
+  Deletes abandoned anonymous organizer identities and returns how many went.
+
+  An identity is abandoned when it is unclaimed, idle for more than
+  #{@sweep_idle_days} days as of `now`, and owns **no** group — in practice a drive-by
+  visit to `/groups/new` that never saved anything. One statement. Rows that own a
+  group are never touched (past #{@organizer_idle_days} days they simply stop
+  resolving), and `activity_groups.anonymous_organizer_id` is `ON DELETE RESTRICT`, so
+  a wrong predicate here raises instead of cascading through groups and votes.
+  Claimed rows are history and are kept.
+
+  Housekeeping, not correctness: run once at boot (there is no scheduler — D-029). A
+  busy database is logged and reported as `0` so it can never abort a boot.
+  """
+  def sweep_anonymous_organizers(%DateTime{} = now \\ DateTime.utc_now(:second)) do
+    cutoff = DateTime.add(now, -@sweep_idle_days, :day)
+
+    owns_a_group =
+      from(g in Group,
+        where: g.anonymous_organizer_id == parent_as(:organizer).id,
+        select: 1
+      )
+
+    {count, _} =
+      Repo.delete_all(
+        from(o in AnonymousOrganizer,
+          as: :organizer,
+          where: is_nil(o.claimed_at) and o.last_seen_at < ^cutoff and not exists(owns_a_group)
+        )
+      )
+
+    count
+  rescue
+    error in [Exqlite.Error, DBConnection.ConnectionError] ->
+      Logger.warning("[organizer] sweep skipped: database busy (#{Exception.message(error)})")
+
+      0
   end
 end

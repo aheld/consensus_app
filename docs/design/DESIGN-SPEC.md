@@ -100,7 +100,7 @@ Section labels are `DM Mono`, 11px, 600, `letter-spacing:.06em`, `uppercase`, `-
 
 ## Screens
 
-### `00a` intro (public splash, signed out) — `/`
+### `00a` intro (public splash, signed out with no sessions in this browser) — `/`
 Mint (`--canvas`) full-bleed. Vertically centred stack: `CONSENSUS` eyebrow (DM Mono, 11px,
 600, `letter-spacing:.1em`, uppercase) · `h1` 40px/1.02, 700, `letter-spacing:-.035em`,
 two lines "Decide / and Dine" (the frame said "Decide / together, / in minutes."; the
@@ -115,7 +115,7 @@ badge (`1` yellow, `2` violet-soft, `3` peach; DM Mono 700 12px) + a 14px/700 ti
 3. **Everyone ranks** — Anonymous. One winner, no debate.
 
 Footer: tangerine **Get started** button (full width, 16px pad, 16px radius, 4px shadow)
-→ registration. Below it, centred 12.5px: `Have a link? Open it →`.
+→ ~~registration~~ `/groups/new` since D-058 (organizing needs no account). Below it, centred 12.5px: `Have a link? Open it →`.
 
 > **Copy substitution, shipped.** In the frame that line links to `#1b`, the mockup's own
 > ballot. There is no such route in the app — a ballot is `/join/:slug/vote` and the slug
@@ -125,10 +125,20 @@ Footer: tangerine **Get started** button (full width, 16px pad, 16px radius, 4px
 > How it works →`. Same slot, same treatment; the destination is `/how-it-works`.
 
 > **The button's label is `Start something`, not the frame's `Get started` (D-047 §4).** The
-> same `~p"/users/register"` was called `Get started` here and `Start something` on
+> same ~~`~p"/users/register"`~~ destination was called `Get started` here and `Start something` on
 > `/how-it-works` and `/privacy` — one destination, two names, one tap apart. The front door
 > is where most readers meet the action first, so it is the one that moved. The `⋯` menu's
 > signed-out entry, which had been missed, moved with it in the consolidation pass.
+>
+> **Amended by D-058: every `Start something` goes to `/groups/new`, for everyone.** It was
+> `/users/register` while organizing cost an account; now an account only *saves* sessions,
+> so the label and the registration screen come apart again. The signed-out `⋯` menu is
+> three doors — **Log in**, **Sign up** (→ `/users/register`, hidden on that path) and
+> **Start something** (→ `/groups/new`, hidden anywhere under `/groups/`). An accountless
+> organizer *inside the wizard* gets a third menu state instead: **Save your sessions**
+> (→ `/users/register`) and **Log in**, with no Start something — on step 1 it would point
+> at the page they are on, and later it would open a second draft mid-wizard. The splash
+> itself shows only while the browser owns no session; once it does, `/` renders `00`.
 
 ### `00b` how it works — `/how-it-works`
 `--surface` background. Title block (7px gap): `h1` 30px/1.05, 700, `letter-spacing:-.03em`
@@ -167,10 +177,13 @@ card (16px radius, 3px shadow, 14px pad) with an `.eyebrow` and three bullets wh
 > §5.2's 32 is the content box inside a 2px border each side, and this is the element repeated
 > on every row that carries the timeline's rhythm.
 
-> **The CTA knows who is reading it.** The frame's **Start something** links to `#1b`, the
+> ~~**The CTA knows who is reading it.** The frame's **Start something** links to `#1b`, the
 > mockup's start page. Signed in it goes to `/groups/new`; signed out it goes to
 > `/users/register`, with an 11.5px muted line beneath saying what an account costs and that
-> voting never needs one.
+> voting never needs one.~~ **Superseded by D-058: the CTA goes to `/groups/new` for
+> everyone,** and the muted sub-line is deleted, not reworded — organizing needs no account,
+> so a warning about what an account costs would be the same false promise as the frame's
+> three sentences above. `/privacy`'s CTA follows the same rule.
 
 ### `00c` feedback — `/feedback`
 `--surface` background. `h1` 27px/1.06, 700, `letter-spacing:-.025em`. Mood row: two 36px
@@ -254,7 +267,7 @@ global footer. Geometry: [IMPORT-NOTES.md](IMPORT-NOTES.md) §6.
 > there is one way back rather than two. A flash over a screen that still looks like the form
 > reads as "nothing happened", which is the failure this whole piece of work removes.
 
-### `00` home (signed in) — `/`
+### `00` home (signed in, or an accountless organizer with a session — D-058) — `/`
 `--surface` background. Header row: `h1` "Consensus" 27px/700 `letter-spacing:-.025em` and a
 34px circular peach avatar with the user's initial (2px ink border, 700 13px).
 
@@ -270,7 +283,14 @@ Then `PAST` label and a de-emphasised card per finished/cancelled group — bord
 title 14px/700 in `--ink-soft`, subtitle 11px muted ("Kismet won · Jul 24").
 
 Empty state (no groups yet) is not in the design — render the `ACTIVE` label with a dashed
-sticker row reading "Nothing yet. Start something above."
+sticker row reading "Nothing yet. Start something above." (An accountless organizer never
+sees it: with no session, `/` is the `00a` splash.)
+
+> **Undrawn, added by D-058:** for an accountless organizer, one muted 12.5px line sits above
+> the tangerine bar — "Only in this browser — save these", the last two words an underlined
+> link to `/users/register`. Never a gate and never a second tangerine. The same quiet line
+> sits on `05` results, outside the results panel so a tie or all-vetoed takeover does not
+> hide it; `04 share` carries the full warning by the Copy link row.
 
 ### `01` setup — `/groups/new`
 Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progress bar (6px tall,
@@ -315,7 +335,11 @@ Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progres
   `aria-hidden` — the sentence beside it is the accessible text.
 - **GROUP** — overlapping 30px avatars (−8px margin) with a `+N` bubble and a 12px muted
   caption. Saved friend groups are Post-MVP: show the organizer's own avatar and the caption
-  "Just you so far · invite by link".
+  "Just you so far · invite by link". **Undrawn, added by D-058:** for an organizer with no
+  account the avatar follows an optional **Your name** field (placeholder "Your name
+  (optional)", `?` when blank) — no `maxlength`, a live grapheme counter against the 40 cap,
+  ≥16px type (invariants 11 and 18) — with a helper line saying guests see it as who invited
+  them; blank shows "the organizer". A signed-in organizer never sees the field.
 - Footer: tangerine **Pick a neighborhood →** in the design. Our step 2 is options, not
   location, so the button reads **Add the options →**.
 
@@ -481,11 +505,20 @@ bottom sheet: `--canvas` fill, 2px ink top border, `border-radius:26px 26px 32px
 - A white preview card (18px radius, 3px shadow): an 88px header with
   `linear-gradient(105deg,var(--violet) 0 55%,var(--tangerine) 55% 100%)`, the group title at
   19px/700 white and a DM Mono 12.5px line "N spots · closes Thu 6pm"; below it
-  "<Organizer> set up a vote. Tap to pick." and the join URL in DM Mono 11px muted.
+  "<Organizer> set up a vote. Tap to pick." and the join URL in DM Mono 11px muted. (An
+  unnamed accountless organizer's line is subjectless — "A vote is open…" — D-058.)
 - A four-up row of 54px share targets (16px radius, 2px border; mint/yellow-soft/violet-soft
   and a white `···`) captioned Messages · WhatsApp · Slack · More. These are decorative in
   the design; wire the row to the Web Share API when available and hide it when not.
 - Footer: an ink-filled **Copy link** (flex-1, 15px radius) and a white **QR** button.
+
+> **Undrawn, added by D-058:** for an accountless organizer only, a yellow sticker card
+> (depth 2) sits directly above **Copy link** — by the control, because "Link copied" flashes
+> there and this is the moment the organizer walks away. It says the session can be managed
+> only from this browser and what clearing data or switching devices loses (close early,
+> call off, break a tie — not "edit", the pool is frozen), and that voting and results keep
+> working. Two doors, neither tangerine: a white pill **Create an account** → `/users/register`
+> and an underlined **Already have one? Log in** → `/users/log-in?return_to=` this screen.
 
 ### desktop organizer console (1b, third frame)
 1280×790, `--surface`, 20px radius, a left rail and a main column. Lowest priority of the

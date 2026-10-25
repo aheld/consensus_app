@@ -274,6 +274,113 @@ defmodule ConsensusWeb.JoinLive.ResultsTest do
     end
   end
 
+  # D-058, plan §5.2: every sentence this screen says about the organizer, for a group
+  # whose organizer has no account — once with a self-chosen name and once without one.
+  # The nameless case is the one with something to get wrong: the fallback is cased by
+  # where it lands ("The organizer called it off", "not even for the organizer"), so each
+  # site is asserted at its own position, and the mount must not crash on a group with
+  # no `organizer_id` at all (it used to `Accounts.get_user!/1` it).
+  for {label, attrs, start, mid} <- [
+        {"named", %{display_name: "Priya"}, "Priya", "Priya"},
+        {"unnamed", %{}, "The organizer", "the organizer"}
+      ] do
+    describe "an anonymous-owned group names its organizer at every site (#{label})" do
+      @attrs attrs
+      @start start
+      @mid mid
+
+      setup do
+        scope = anonymous_scope_fixture(@attrs)
+        {group, activities} = voting_group_fixture(scope, 2)
+        %{scope: scope, group: group, activities: activities, start: @start, mid: @mid}
+      end
+
+      test "#{label}: og:description", ctx do
+        html = ctx.conn |> get(~p"/join/#{ctx.group.slug}/results") |> html_response(200)
+
+        [description] =
+          html
+          |> LazyHTML.from_document()
+          |> LazyHTML.query(~s(meta[property="og:description"]))
+          |> LazyHTML.attribute("content")
+
+        assert description =~ ~r/^#{ctx.start} called this vote on Consensus\./
+      end
+
+      test "#{label}: the flash when the pool is reopened", ctx do
+        %{scope: scope, group: group, activities: [a, b]} = ctx
+
+        for activity <- [a, b] do
+          {:ok, _} = Voting.cast_ballot(participant_fixture(group), [], activity.id)
+        end
+
+        {:ok, group} = Activities.complete_group(scope, group)
+        {:ok, lv, _html} = live(ctx.conn, ~p"/join/#{group.slug}/results")
+
+        {:ok, _group} = Activities.reopen_group(scope, Activities.get_group!(scope, group.id))
+
+        assert {"/", %{"info" => info}} = assert_redirect(lv)
+        assert info =~ "#{ctx.start} reopened the option pool"
+      end
+
+      test "#{label}: who else can close it early, while voting", ctx do
+        %{group: group, activities: [a, _b]} = ctx
+        {:ok, participant} = Voting.cast_ballot(participant_fixture(group), [a.id])
+
+        {:ok, _lv, html} =
+          live(with_participant(ctx.conn, group, participant), ~p"/join/#{group.slug}/results")
+
+        assert html =~ "#{ctx.start} can also close it early."
+      end
+
+      test "#{label}: not even the organizer can add a vote — joined, never sent", ctx do
+        %{scope: scope, group: group} = ctx
+        participant = participant_fixture(group)
+        {:ok, group} = Activities.complete_group(scope, group)
+
+        {:ok, lv, _html} =
+          live(with_participant(ctx.conn, group, participant), ~p"/join/#{group.slug}/results")
+
+        assert has_element?(lv, "#results-closed-no-ballot", "not even for #{ctx.mid}.")
+      end
+
+      test "#{label}: closed early while watching — who closed it, and not even them", ctx do
+        %{scope: scope, group: group} = ctx
+        {:ok, lv, _html} = live(ctx.conn, ~p"/join/#{group.slug}/results")
+
+        {:ok, _group} = Activities.complete_group(scope, group)
+        send(lv.pid, {:group_updated, group})
+        _ = render(lv)
+
+        assert has_element?(
+                 lv,
+                 "#results-closed-just-now",
+                 "#{ctx.start} closed it while you were on this page"
+               )
+
+        assert has_element?(lv, "#results-closed-just-now", "not even for #{ctx.mid}.")
+      end
+
+      test "#{label}: not even the organizer can add a vote — a cold arrival", ctx do
+        %{scope: scope, group: group} = ctx
+        {:ok, group} = Activities.complete_group(scope, group)
+
+        {:ok, lv, _html} = live(ctx.conn, ~p"/join/#{group.slug}/results")
+
+        assert has_element?(lv, "#results-closed-missed", "not even for #{ctx.mid}.")
+      end
+
+      test "#{label}: who called it off", ctx do
+        %{scope: scope, group: group} = ctx
+        {:ok, group} = Activities.cancel_group(scope, group)
+
+        {:ok, lv, _html} = live(ctx.conn, ~p"/join/#{group.slug}/results")
+
+        assert has_element?(lv, "#results-cancelled", "#{ctx.start} called it off")
+      end
+    end
+  end
+
   # The two false promises the participant's half of the shared component carried after
   # the organizer's half had been corrected. `grep -rn 'nudge' lib/` finds no nudge path,
   # and `/about` says this app sends no notifications.

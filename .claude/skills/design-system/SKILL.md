@@ -130,7 +130,7 @@ above the `inner_block` and `Chrome.footer/1` below it. Attrs:
 | `background` | a Tailwind class, default `"bg-surface"` | the colour behind the column |
 | `back` | a path \| `nil` (default) | **the screen's one back affordance.** `nil` omits the control — never a dead circle. A screen that draws a second one is a regression. |
 | `context` | a string \| `nil` | the header's right-hand DM Mono slot (`STEP 2 OF 3`, `LIVE SESSION`, `ADMIN`). `:app` only. |
-| `variant` | `:app` (default) \| `:public` \| `:marketing` | `:app` = context slot + `⋯` menu, for every screen this app owns, signed in or out. `:public` = the `/join` tree: a **yellow** `Create your own →` pill, no `‹`, no `⋯` (yellow at rest, tangerine only on hover — the ballot's "Send my votes" owns the screen's tangerine). `:marketing` = `/`, `/about`, `/privacy`, `/how-it-works`, `/feedback` **while signed out**: a plain `Log in` link, no `⋯` (it read `Sign in` until D-048 — one destination, one name). Those routes write `variant={if @current_scope, do: :app, else: :marketing}`. |
+| `variant` | `:app` (default) \| `:public` \| `:marketing` | `:app` = context slot + `⋯` menu, for every screen this app owns, signed in or out. `:public` = the `/join` tree: a **yellow** `Create your own →` pill, no `‹`, no `⋯` (yellow at rest, tangerine only on hover — the ballot's "Send my votes" owns the screen's tangerine). `:marketing` = `/`, `/about`, `/privacy`, `/how-it-works`, `/feedback` **while signed out**: a plain `Log in` link, no `⋯` (it read `Sign in` until D-048 — one destination, one name). The standing pages write `variant={if @current_scope, do: :app, else: :marketing}`; `/` writes `variant={if @home_mode == :list, do: :app, else: :marketing}`, because since D-058 an accountless organizer with a session gets the `00` list (and `:app` chrome) with no account. The `⋯` menu's entries — signed in, signed out (`Log in`, `Sign up`, `Start something` → `/groups/new`), and the accountless organizer inside the wizard (`Save your sessions`, `Log in`) — are the `phoenix` skill's subject. |
 
 `Chrome.footer/1` takes `variant` and `current_path` (both from `Layouts.app/1`) and is on every
 screen: the two 26px feedback faces (mint smile → `/feedback?mood=happy`, peach frown →
@@ -268,8 +268,8 @@ Start the app itself with the `consensus-dev` launch config (`mix phx.server`, p
 
 | Route | Reference file |
 |---|---|
-| `/` signed out | `docs/design/screens/1b-0-00a-intro-start-page.html` |
-| `/` signed in | `docs/design/screens/1b-2-00-home-start-page-1a.html` |
+| `/` signed out, no sessions in this browser | `docs/design/screens/1b-0-00a-intro-start-page.html` |
+| `/` signed in, or an accountless organizer with a session (D-058) | `docs/design/screens/1b-2-00-home-start-page-1a.html` |
 | `/groups/new` | `docs/design/screens/1a-0-01-setup.html` |
 | `/groups/:id/options` | `docs/design/screens/1a-1-02-add-options-manual-mvp.html` |
 | `/groups/:id/options/:activity_id` | `docs/design/screens/1a-2-02b-edit-an-option-full-screen.html` |

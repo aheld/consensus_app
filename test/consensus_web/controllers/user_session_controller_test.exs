@@ -301,6 +301,30 @@ defmodule ConsensusWeb.UserSessionControllerTest do
       refute get_session(conn, :user_token)
       assert Phoenix.Flash.get(conn.assigns.flash, :info) =~ "Logged out successfully"
     end
+
+    # D-058, plan §6.4. A log-in claims this browser's accountless sessions, so after
+    # logging out they are out of reach from here until the person signs back in. The
+    # `⋯` item has no room for a confirm, so the flash is where that is said.
+    test "an account that owns a session is told its sessions stay with the account", %{
+      conn: conn,
+      user: user
+    } do
+      Consensus.ActivitiesFixtures.group_fixture(Consensus.Accounts.Scope.for_user(user))
+
+      conn = conn |> log_in_user(user) |> delete(~p"/users/log-out")
+
+      assert redirected_to(conn) == ~p"/"
+      refute get_session(conn, :user_token)
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) ==
+               "Logged out. Your sessions stay with your account — log back in to reach them."
+    end
+
+    test "an account that owns no session gets the plain flash", %{conn: conn, user: user} do
+      conn = conn |> log_in_user(user) |> delete(~p"/users/log-out")
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Logged out successfully."
+    end
   end
 
   # D-045. `ConsensusWeb.AdminLive.Users` promised "you will come back to Admin → Users"
@@ -387,6 +411,177 @@ defmodule ConsensusWeb.UserSessionControllerTest do
       # paths back to this same screen, where this filter runs again.)
       refute body =~ ~s(name="user[return_to]")
       refute body =~ ~s(value="https://evil.example/pwn")
+    end
+  end
+
+  # D-058, plan §6.1: every log-in funnels through `UserAuth.log_in_user/3`, so one hook
+  # there claims for password, magic link and post-registration alike. These drive the
+  # real endpoint, so the cookie arrives the way a browser sends it and the `:browser`
+  # pipeline's own re-issue of it is what the deletion has to win against.
+  describe "POST /users/log-in - claiming this browser's accountless sessions" do
+    import Consensus.ActivitiesFixtures
+
+    alias Consensus.Accounts.Scope
+    alias Consensus.Activities
+    alias Consensus.Activities.Group
+    alias Consensus.Repo
+    alias ConsensusWeb.OrganizerAuth
+
+    @organizer_cookie OrganizerAuth.cookie_name()
+    @ninety_days 90 * 24 * 60 * 60
+
+    setup %{conn: conn} do
+      {raw_token, organizer} = anonymous_organizer_fixture()
+      group = group_fixture(Scope.for_anonymous_organizer(organizer))
+
+      %{conn: put_organizer_token(conn, raw_token), raw_token: raw_token, group: group}
+    end
+
+    test "a password log-in claims, deletes the cookie and names the count", %{
+      conn: conn,
+      user: user,
+      group: group
+    } do
+      user = set_password(user)
+
+      conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"login" => user.username, "password" => valid_user_password()}
+        })
+
+      assert get_session(conn, :user_token)
+      assert %{max_age: 0} = conn.resp_cookies[@organizer_cookie]
+
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) ==
+               "Welcome back! 1 session saved to your account."
+
+      assert [%Group{id: id}] = Activities.list_groups(Scope.for_user(user))
+      assert id == group.id
+    end
+
+    test "a magic-link log-in claims when the consent box comes back ticked", %{
+      conn: conn,
+      unconfirmed_user: user,
+      group: group
+    } do
+      {token, _hashed_token} = generate_user_magic_link_token(user)
+
+      conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"token" => token, "claim" => "true"},
+          "_action" => "confirmed"
+        })
+
+      assert get_session(conn, :user_token)
+      assert %{max_age: 0} = conn.resp_cookies[@organizer_cookie]
+      info = Phoenix.Flash.get(conn.assigns.flash, :info)
+      assert info =~ "The password that was set on this account has been removed"
+      assert String.ends_with?(info, " 1 session saved to your account.")
+      assert Repo.get!(Group, group.id).organizer_id == user.id
+    end
+
+    # Login CSRF that steals data: an attacker requests a magic link for their own
+    # account and forwards it to someone organizing without one. Opened in the victim's
+    # browser, the link must not move the victim's sessions into the attacker's account.
+    test "a forwarded magic link logs in but claims nothing without consent", %{
+      conn: conn,
+      raw_token: raw_token,
+      group: group
+    } do
+      attacker = user_fixture()
+      {token, _hashed_token} = generate_user_magic_link_token(attacker)
+      topic = OrganizerAuth.live_socket_id(raw_token)
+      ConsensusWeb.Endpoint.subscribe(topic)
+
+      conn = post(conn, ~p"/users/log-in", %{"user" => %{"token" => token}})
+
+      assert get_session(conn, :user_token)
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Welcome back!"
+      # The victim keeps their identity: only the pipeline's slide of the cookie, never
+      # the claim's deletion.
+      assert %{max_age: @ninety_days} = conn.resp_cookies[@organizer_cookie]
+      assert %Group{organizer_id: nil} = Repo.get!(Group, group.id)
+      assert Activities.list_groups(Scope.for_user(attacker)) == []
+      refute_receive %Phoenix.Socket.Broadcast{topic: ^topic}
+    end
+
+    test "an unticked consent box (\"false\") is no consent", %{
+      conn: conn,
+      user: user,
+      group: group
+    } do
+      {token, _hashed_token} = generate_user_magic_link_token(user)
+
+      conn = post(conn, ~p"/users/log-in", %{"user" => %{"token" => token, "claim" => "false"}})
+
+      assert get_session(conn, :user_token)
+      assert Repo.get!(Group, group.id).organizer_id == nil
+    end
+
+    @tag :capture_log
+    test "a busy claim still logs in, and keeps the cookie for the next log-in", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token,
+      group: group
+    } do
+      user = set_password(user)
+
+      Repo.query!("""
+      CREATE TEMP TRIGGER d058_busy_controller_claim BEFORE UPDATE ON anonymous_organizers
+      BEGIN SELECT RAISE(ABORT, 'database is locked'); END
+      """)
+
+      conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"login" => user.username, "password" => valid_user_password()}
+        })
+
+      Repo.query!("DROP TRIGGER d058_busy_controller_claim")
+
+      assert get_session(conn, :user_token)
+      assert redirected_to(conn) == ~p"/"
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Welcome back!"
+      # Only the pipeline's slide of it — never the claim's deletion.
+      assert %{max_age: @ninety_days} = conn.resp_cookies[@organizer_cookie]
+      assert Repo.get!(Group, group.id).organizer_id == nil
+
+      # Log out (the cookie survives that untouched), log back in in the same browser:
+      # the cookie it still carries is the retry, and this time it claims.
+      conn = delete(conn, ~p"/users/log-out")
+      refute match?(%{max_age: 0}, conn.resp_cookies[@organizer_cookie])
+      topic = OrganizerAuth.live_socket_id(raw_token)
+      ConsensusWeb.Endpoint.subscribe(topic)
+
+      conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"login" => user.username, "password" => valid_user_password()}
+        })
+
+      assert %{max_age: 0} = conn.resp_cookies[@organizer_cookie]
+      assert Repo.get!(Group, group.id).organizer_id == user.id
+      assert_receive %Phoenix.Socket.Broadcast{event: "disconnect", topic: ^topic}
+    end
+
+    test "claimed by someone else: logs in normally, cookie deleted, nothing announced", %{
+      conn: conn,
+      user: user,
+      raw_token: raw_token,
+      group: group
+    } do
+      user = set_password(user)
+      other = user_fixture()
+      assert {:ok, 1} = Activities.claim_anonymous_groups(other, raw_token)
+
+      conn =
+        post(conn, ~p"/users/log-in", %{
+          "user" => %{"login" => user.username, "password" => valid_user_password()}
+        })
+
+      assert get_session(conn, :user_token)
+      assert %{max_age: 0} = conn.resp_cookies[@organizer_cookie]
+      assert Phoenix.Flash.get(conn.assigns.flash, :info) == "Welcome back!"
+      assert Repo.get!(Group, group.id).organizer_id == other.id
     end
   end
 

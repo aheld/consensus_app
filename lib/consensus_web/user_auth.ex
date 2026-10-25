@@ -4,8 +4,11 @@ defmodule ConsensusWeb.UserAuth do
   import Plug.Conn
   import Phoenix.Controller
 
+  require Logger
+
   alias Consensus.Accounts
   alias Consensus.Accounts.Scope
+  alias ConsensusWeb.OrganizerAuth
 
   # Make the remember me cookie valid for 14 days. This should match
   # the session validity setting in UserToken.
@@ -35,26 +38,116 @@ defmodule ConsensusWeb.UserAuth do
 
   Redirects to the session's `:user_return_to` path
   or falls back to the `signed_in_path/1`.
+
+  A log-in also claims the sessions this browser started with no account (D-058, plan
+  §6): the organizer token is read from its signed cookie, and
+  `Consensus.Activities.claim_anonymous_groups/2` moves whatever it owns to `user`. The
+  person is logged in whatever the claim answers; see `claim_anonymous_groups/3` below.
+
+  `opts`:
+
+    * `claim:` (default `true`) — `false` skips the claim and leaves the organizer cookie
+      exactly where it was, so a later log-in from this browser still claims. A password
+      or registration post proves this browser chose the account; a magic link does not —
+      it is a URL anyone can forward, so an attacker can mail a link for *their own*
+      account to someone organizing without one, and an automatic claim would move the
+      victim's sessions into the attacker's account (login CSRF that steals data).
+      `ConsensusWeb.UserSessionController` therefore passes `claim: false` on the
+      magic-link path unless the person ticked the explicit consent on
+      `ConsensusWeb.UserLive.Confirmation`. The consent is only that — the token still
+      comes from the cookie, never from the form.
   """
-  def log_in_user(conn, user, params \\ %{}) do
+  def log_in_user(conn, user, params \\ %{}, opts \\ []) do
     user_return_to = get_session(conn, :user_return_to)
+    # Read before `renew_session/2`, like `:user_return_to` above. The cookie is not in
+    # the session, so the renewal could not lose it anyway — reading it first is what
+    # keeps it that way if the token ever moves.
+    organizer_token =
+      if Keyword.get(opts, :claim, true), do: OrganizerAuth.read_organizer_cookie(conn)
 
     conn
     |> create_or_extend_session(user, params)
+    |> claim_anonymous_groups(user, organizer_token)
     |> redirect(to: user_return_to || signed_in_path(conn))
+  end
+
+  # The claim (plan §6.3). Failing a log-in over a housekeeping write is the worse outcome,
+  # so nothing here may raise into `log_in_user/4`: the context already turns a busy
+  # database into a tuple, and anything else is caught below and treated the same way.
+  #
+  #   * groups moved — the cookie goes and the count joins whatever `:info` the
+  #     controller already set (the magic link's "password removed" sentence included);
+  #   * nothing to move, claimed by another account, unknown or expired — the cookie
+  #     goes, silently. A shared browser's previous owner is not announced;
+  #   * busy — the cookie stays, so the next log-in retries.
+  #
+  # Every outcome but busy settles the token for good, so every one of them also tells
+  # each socket still mounted with the anonymous scope to disconnect — **zero groups
+  # moved included**. That is the common case, not an edge: the identity is minted on
+  # `GET /groups/new` and owns nothing until step 1 is submitted, so a `/groups/new` tab
+  # open while another tab logs in holds a scope for an identity that is now claimed.
+  # Left mounted it would create a group on that identity, which no resolver returns and
+  # no later claim reaches — stranded for good. (`Activities.create_group/2` refuses a
+  # claimed identity as well; this is the prompt half, that is the guarantee.)
+  defp claim_anonymous_groups(conn, _user, nil), do: conn
+
+  defp claim_anonymous_groups(conn, user, organizer_token) do
+    case safe_claim(user, organizer_token) do
+      {:error, {:database_busy, _message}} ->
+        conn
+
+      result ->
+        ConsensusWeb.Endpoint.broadcast(
+          OrganizerAuth.live_socket_id(organizer_token),
+          "disconnect",
+          %{}
+        )
+
+        conn
+        |> OrganizerAuth.delete_organizer_cookie()
+        |> put_claimed_info(result)
+    end
+  end
+
+  # `merge_flash/2`, not `put_flash/3`: the latter raises on a conn whose flash was never
+  # fetched, and this path must not raise.
+  defp put_claimed_info(conn, {:ok, count}) when count > 0,
+    do: merge_flash(conn, info: claimed_info(conn, count))
+
+  defp put_claimed_info(conn, _settled), do: conn
+
+  defp safe_claim(user, organizer_token) do
+    Consensus.Activities.claim_anonymous_groups(user, organizer_token)
+  rescue
+    error ->
+      Logger.error("[organizer] claim crashed at log-in: #{Exception.message(error)}")
+      {:error, {:database_busy, Exception.message(error)}}
+  catch
+    :exit, reason ->
+      Logger.error("[organizer] claim exited at log-in: #{inspect(reason)}")
+      {:error, {:database_busy, inspect(reason)}}
+  end
+
+  defp claimed_info(conn, count) do
+    saved = "#{count} #{if count == 1, do: "session", else: "sessions"} saved to your account."
+
+    case conn.assigns |> Map.get(:flash, %{}) |> Phoenix.Flash.get(:info) do
+      nil -> saved
+      info -> info <> " " <> saved
+    end
   end
 
   @doc """
   Records where log-in should land, from a caller-supplied path.
 
-  `log_in_user/3` already honours `:user_return_to`, but until D-045 the only thing that
+  `log_in_user/4` already honours `:user_return_to`, but until D-045 the only thing that
   ever wrote it was `maybe_store_return_to/1`, which runs in a plug on a **GET** request.
   A LiveView that wants to send someone away to re-authenticate has no conn to write, so
   `ConsensusWeb.AdminLive.Users` flashed "you will come back to Admin → Users" and the app
   then delivered them to `/users/settings` (`signed_in_path/1` for an already-signed-in
   conn). This is the missing half: the LiveView puts the destination in the log-in URL,
   `ConsensusWeb.UserLive.Login` carries it through the form, and
-  `ConsensusWeb.UserSessionController` calls this before `log_in_user/3`.
+  `ConsensusWeb.UserSessionController` calls this before `log_in_user/4`.
 
   **The path is validated, and it must stay validated.** This writes a value that a
   successful authentication then redirects to, so an unchecked `return_to` on this
@@ -191,6 +284,14 @@ defmodule ConsensusWeb.UserAuth do
   # the guest's record of what they did before acquiring one. Preserved on log-out for the
   # same reason — logging out of an account must not orphan the vote a guest cast in the
   # same browser.
+  #
+  # **The organizer token deliberately gets no clause here** (D-058, plan §6.2). It is a
+  # write capability, not a receipt, and it does not need one: it lives in its own signed
+  # cookie, which `clear_session/1` never touches, and `log_in_user/4` reads that cookie
+  # before calling this. The exception above stays exactly as narrow as D-045 wrote it —
+  # guest ballot receipts, not a general keep-useful-things rule. Log-out leaves the
+  # cookie alone too: it can only still be there if a claim failed transiently, and then
+  # it is what lets the next log-in retry.
   defp renew_session(conn, _user) do
     delete_csrf_token()
 

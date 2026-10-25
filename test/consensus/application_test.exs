@@ -63,6 +63,35 @@ defmodule Consensus.ApplicationTest do
              "Consensus.Seeds must start before ConsensusWeb.Endpoint accepts traffic"
     end
 
+    # D-058, plan §4.6: the boot sweep of abandoned anonymous organizers. It must come
+    # after Seeds — never between Seeds and the migrator, which the test above pins as
+    # adjacent — and before the caches and the endpoint.
+    test "runs housekeeping after seeding and before the endpoint accepts traffic" do
+      children = App.children()
+
+      migrator = index_of(children, &match?({Ecto.Migrator, _}, &1))
+      seeds = index_of(children, &match?({Consensus.Seeds, _}, &1))
+      housekeeping = index_of(children, &match?({Consensus.Housekeeping, _}, &1))
+      link_cache = index_of(children, &(&1 == Consensus.LinkPreview.Cache))
+      discovery_cache = index_of(children, &(&1 == Consensus.Discovery.Cache))
+      endpoint = index_of(children, &(&1 == ConsensusWeb.Endpoint))
+
+      assert housekeeping,
+             "Consensus.Housekeeping is not in the supervision tree — abandoned " <>
+               "anonymous organizers would never be swept"
+
+      assert seeds == migrator + 1,
+             "Consensus.Housekeeping must not sit between Ecto.Migrator and Consensus.Seeds"
+
+      assert housekeeping > seeds, "Consensus.Housekeeping must start after Consensus.Seeds"
+
+      assert housekeeping < link_cache and housekeeping < discovery_cache,
+             "Consensus.Housekeeping must start before the caches"
+
+      assert housekeeping < endpoint,
+             "Consensus.Housekeeping must start before ConsensusWeb.Endpoint accepts traffic"
+    end
+
     test "starts the link preview cache after the repo and before the endpoint" do
       children = App.children()
 
@@ -116,6 +145,11 @@ defmodule Consensus.ApplicationTest do
       assert {Consensus.Seeds, seed_opts} = Enum.find(children, &match?({Consensus.Seeds, _}, &1))
       assert seed_opts[:skip] == true
 
+      assert {Consensus.Housekeeping, housekeeping_opts} =
+               Enum.find(children, &match?({Consensus.Housekeeping, _}, &1))
+
+      assert housekeeping_opts[:skip] == true
+
       System.put_env("RELEASE_NAME", "consensus")
       Application.put_env(:consensus, :seed_on_boot, true)
 
@@ -126,6 +160,27 @@ defmodule Consensus.ApplicationTest do
 
       assert {Consensus.Seeds, seed_opts} = Enum.find(children, &match?({Consensus.Seeds, _}, &1))
       assert seed_opts[:skip] == false
+
+      assert {Consensus.Housekeeping, housekeeping_opts} =
+               Enum.find(children, &match?({Consensus.Housekeeping, _}, &1))
+
+      assert housekeeping_opts[:skip] == false
+    end
+
+    test "gates housekeeping on skip_seeds?/0 in both RELEASE_NAME states" do
+      Application.delete_env(:consensus, :seed_on_boot)
+
+      for release_name <- [nil, "consensus"] do
+        if release_name,
+          do: System.put_env("RELEASE_NAME", release_name),
+          else: System.delete_env("RELEASE_NAME")
+
+        assert {Consensus.Housekeeping, opts} =
+                 Enum.find(App.children(), &match?({Consensus.Housekeeping, _}, &1))
+
+        assert opts[:skip] == App.skip_seeds?()
+        assert opts[:skip] == is_nil(release_name)
+      end
     end
   end
 

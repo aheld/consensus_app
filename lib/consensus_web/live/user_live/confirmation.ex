@@ -6,11 +6,23 @@ defmodule ConsensusWeb.UserLive.Confirmation do
   see `Consensus.Accounts.login_user_by_magic_link/1`. This page says so before the
   button is pressed, rather than surprising the person afterwards, and the warning is
   visually louder than the button it warns about.
+
+  It is also where a magic-link log-in asks before claiming this browser's accountless
+  sessions (D-058). A password log-in claims them automatically; a magic link cannot,
+  because the account behind it is whoever *requested* it, and a link is a URL anyone
+  can forward — an attacker could mail a link for their own account and collect the
+  victim's sessions. So when the browser holds an organizer identity that owns sessions,
+  each form carries an **unticked** "save them to <email>" box, and
+  `ConsensusWeb.UserSessionController` claims only when it comes back ticked. The box is
+  consent, never the capability: the token is read from the signed cookie at the post.
   """
 
   use ConsensusWeb, :live_view
 
   alias Consensus.Accounts
+  alias Consensus.Accounts.Scope
+  alias Consensus.Activities
+  alias ConsensusWeb.OrganizerAuth
 
   @impl true
   def render(assigns) do
@@ -60,6 +72,7 @@ defmodule ConsensusWeb.UserLive.Confirmation do
           class="flex flex-col gap-3"
         >
           <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
+          <.claim_consent field={@form[:claim]} count={@claimable_count} email={@user.email} />
           <div class="grid">
             <.button
               variant="primary"
@@ -100,7 +113,10 @@ defmodule ConsensusWeb.UserLive.Confirmation do
           class="flex flex-col gap-3"
         >
           <input type="hidden" name={@form[:token].name} value={@form[:token].value} />
-          <%= if @current_scope do %>
+          <.claim_consent field={@form[:claim]} count={@claimable_count} email={@user.email} />
+          <%!-- `Scope.authenticated?/1` rather than truthiness (D-058): an anonymous
+                organizer's `%Scope{user: nil}` is truthy and is not a signed-in user. --%>
+          <%= if Scope.authenticated?(@current_scope) do %>
             <div class="grid">
               <.button variant="primary" type="submit" phx-disable-with="Logging in…">
                 Log in
@@ -149,8 +165,38 @@ defmodule ConsensusWeb.UserLive.Confirmation do
     """
   end
 
+  # Unticked by default, and only rendered when there is something to save. The box's
+  # state survives the `phx-trigger-action` round trip because it is read from the form,
+  # which `handle_event("submit", ...)` rebuilds from the submitted params.
+  attr :field, Phoenix.HTML.FormField, required: true
+  attr :count, :integer, required: true
+  attr :email, :string, required: true
+
+  defp claim_consent(assigns) do
+    ~H"""
+    <div
+      :if={@count > 0}
+      id="claim-consent"
+      class="rounded-2xl border-2 border-ink bg-white p-4 shadow-sticker-2"
+    >
+      <.input
+        field={@field}
+        type="checkbox"
+        label={"Also save the #{sessions(@count)} started in this browser to #{@email}"}
+      />
+      <p class="text-[12.5px] leading-[1.5] text-muted">
+        Only tick this if you started them and this is your address. Left unticked, they
+        stay in this browser, and you can save them the next time you log in here.
+      </p>
+    </div>
+    """
+  end
+
+  defp sessions(1), do: "1 session"
+  defp sessions(count), do: "#{count} sessions"
+
   @impl true
-  def mount(%{"token" => token}, _session, socket) do
+  def mount(%{"token" => token}, session, socket) do
     if user = Accounts.get_user_by_magic_link_token(token) do
       form = to_form(%{"token" => token}, as: "user")
 
@@ -160,7 +206,8 @@ defmodule ConsensusWeb.UserLive.Confirmation do
          user: user,
          form: form,
          trigger_submit: false,
-         clears_password?: clears_password?(user)
+         clears_password?: clears_password?(user),
+         claimable_count: claimable_count(session)
        ), temporary_assigns: [form: nil]}
     else
       {:ok,
@@ -173,6 +220,17 @@ defmodule ConsensusWeb.UserLive.Confirmation do
   @impl true
   def handle_event("submit", %{"user" => params}, socket) do
     {:noreply, assign(socket, form: to_form(params, as: "user"), trigger_submit: true)}
+  end
+
+  # How many sessions this browser's organizer identity would hand over. Read from the
+  # session's mirror of the cookie (`OrganizerAuth.fetch_organizer_token/2` keeps the two
+  # identical on every request) — fine for deciding whether to *ask*; the claim itself
+  # reads the cookie.
+  defp claimable_count(session) do
+    case Activities.get_anonymous_organizer_by_token(session[OrganizerAuth.session_key()]) do
+      nil -> 0
+      organizer -> Activities.count_groups(Scope.for_anonymous_organizer(organizer))
+    end
   end
 
   # Confirming an unconfirmed account that already has a password always discards that

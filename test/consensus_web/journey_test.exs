@@ -57,14 +57,26 @@ defmodule ConsensusWeb.JourneyTest do
     conn: conn
   } do
     ## 1. A cold visitor lands on the splash and registers with a username and password.
+    #
+    # This is the *signed-up* journey, so it reaches registration through the Sign up
+    # entry, not through "Start something": since D-058 that goes straight into the wizard
+    # with no account, and the account is only what saves a session. The route a visitor
+    # who wants an account actually takes is the splash's Log in link, then the ⋯ menu's
+    # Sign up on the log-in screen.
 
     {:ok, home, html} = live(conn, ~p"/")
     assert html =~ "Decide"
-    assert html =~ "Start something"
+    assert has_element?(home, ~s{#home-start[href="/groups/new"]}, "Start something")
+
+    {:ok, login, _html} =
+      home
+      |> element("#chrome-sign-in", "Log in")
+      |> render_click()
+      |> follow_redirect(conn, ~p"/users/log-in")
 
     {:ok, register, _html} =
-      home
-      |> element(~s{a[href="/users/register"]}, "Start something")
+      login
+      |> element("#chrome-menu-sign-up", "Sign up")
       |> render_click()
       |> follow_redirect(conn, ~p"/users/register")
 

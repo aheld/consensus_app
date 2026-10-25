@@ -12,32 +12,41 @@ defmodule ConsensusWeb.GroupLive.New do
   Submitting creates or updates the group and moves on to step 2 (`GroupLive.Options`).
   Publishing — the point a draft's share link starts working — happens later, on step 3
   (see `docs/plans/creation-flow.md`, decision 5).
+
+  An organizer with no account (D-058) reaches this screen too — `@current_scope` is
+  then the anonymous scope `ConsensusWeb.OrganizerAuth` assigned, and the only read of
+  `scope.user` left is the signed-in Group row's avatar. Such an organizer also gets an optional "Your name" field
+  in the Group row (plan §7.3): it is its own form (`as: "organizer"`, an
+  `AnonymousOrganizer` changeset) rendered inside `#group-form`, so one submit carries
+  both, and one transaction (`Activities.create_group_with_organizer_name/3` and its
+  `:edit` twin) writes both or neither. It is absent for a signed-in organizer, whom
+  guests see by username.
   """
 
   use ConsensusWeb, :live_view
 
+  alias Consensus.Accounts.Scope
   alias Consensus.Activities
-  alias Consensus.Activities.Group
+  alias Consensus.Activities.AnonymousOrganizer
   alias Consensus.Deadlines
 
   @impl true
   def mount(params, _session, socket) do
     clock = Deadlines.clock_from_params(get_connect_params(socket))
     now = DateTime.utc_now()
-    scope = socket.assigns.current_scope
 
     socket =
       socket
       |> assign(:clock, clock)
       |> assign(:now, now)
-      |> assign(:scope, scope)
+      |> assign_organizer_form(%{})
       |> apply_action(socket.assigns.live_action, params)
 
     {:ok, socket}
   end
 
   defp apply_action(socket, :new, _params) do
-    group = %Group{organizer_id: socket.assigns.scope.user.id}
+    group = Activities.new_group(socket.assigns.current_scope)
 
     socket
     |> assign(:page_title, "New session")
@@ -46,11 +55,11 @@ defmodule ConsensusWeb.GroupLive.New do
     |> assign(:selected_at, nil)
     |> assign(:chips, Deadlines.options(socket.assigns.now, socket.assigns.clock))
     |> assign_custom(nil)
-    |> assign_form(Activities.change_group(socket.assigns.scope, group))
+    |> assign_form(Activities.change_group(socket.assigns.current_scope, group))
   end
 
   defp apply_action(socket, :edit, %{"id" => id}) do
-    case fetch_group(socket.assigns.scope, id) do
+    case fetch_group(socket.assigns.current_scope, id) do
       {:ok, group} ->
         chips =
           build_chips(
@@ -67,7 +76,7 @@ defmodule ConsensusWeb.GroupLive.New do
         |> assign(:selected_at, group.deadline_at)
         |> assign(:chips, chips)
         |> assign_custom(group.deadline_at)
-        |> assign_form(Activities.change_group(socket.assigns.scope, group))
+        |> assign_form(Activities.change_group(socket.assigns.current_scope, group))
 
       :error ->
         socket
@@ -118,6 +127,42 @@ defmodule ConsensusWeb.GroupLive.New do
     assign(socket, :form, to_form(changeset))
   end
 
+  # "Your name" (plan §7.3), for an organizer with no account only. Built on the
+  # anonymous organizer in the scope, so a returning organizer finds the name they set
+  # last time already in the field — it lives on the person, not the session. `nil` for
+  # a signed-in organizer, which is what the template and every helper below read as
+  # "there is no name field".
+  defp assign_organizer_form(socket, attrs, action \\ nil)
+
+  defp assign_organizer_form(
+         %{assigns: %{current_scope: %Scope{anonymous_organizer: %AnonymousOrganizer{}} = scope}} =
+           socket,
+         attrs,
+         action
+       ) do
+    form =
+      scope
+      |> Activities.change_organizer_display_name(attrs)
+      |> Map.put(:action, action)
+      |> to_form(as: "organizer")
+
+    assign(socket, :organizer_form, form)
+  end
+
+  defp assign_organizer_form(socket, _attrs, _action), do: assign(socket, :organizer_form, nil)
+
+  # A signed-in organizer's form posts no `"organizer"` params at all; an anonymous
+  # one's always does, since the field sits inside `#group-form`.
+  defp organizer_params(params), do: Map.get(params, "organizer", %{})
+
+  defp organizer_name_valid?(nil), do: true
+  defp organizer_name_valid?(%Phoenix.HTML.Form{source: changeset}), do: changeset.valid?
+
+  # What the avatar's initial and the counter read: the raw field, as typed.
+  defp typed_name(form), do: form[:display_name].value |> to_string()
+
+  defp name_length(form), do: form |> typed_name() |> String.length()
+
   # The picker starts closed on both actions — the chips are the fast path and the design
   # gives them the row. On `:edit` the field is nevertheless pre-filled from the stored
   # deadline, so opening it shows what is already set instead of an empty box the
@@ -147,14 +192,17 @@ defmodule ConsensusWeb.GroupLive.New do
     {socket, group_params} = apply_custom_deadline(socket, params, group_params)
 
     changeset =
-      socket.assigns.scope
+      socket.assigns.current_scope
       |> Activities.change_group(
         socket.assigns.group,
         keep_selected_deadline(group_params, socket)
       )
       |> Map.put(:action, :validate)
 
-    {:noreply, assign_form(socket, changeset)}
+    {:noreply,
+     socket
+     |> assign_form(changeset)
+     |> assign_organizer_form(organizer_params(params), :validate)}
   end
 
   def handle_event("select_deadline", %{"key" => key}, socket) do
@@ -180,6 +228,7 @@ defmodule ConsensusWeb.GroupLive.New do
 
   def handle_event("save", %{"group" => group_params} = params, socket) do
     {socket, group_params} = apply_custom_deadline(socket, params, group_params)
+    socket = assign_organizer_form(socket, organizer_params(params), :validate)
 
     save_group(socket, socket.assigns.live_action, keep_selected_deadline(group_params, socket))
   end
@@ -335,7 +384,7 @@ defmodule ConsensusWeb.GroupLive.New do
     params = Map.put(socket.assigns.form.params, "deadline_at", DateTime.to_iso8601(at))
 
     changeset =
-      socket.assigns.scope
+      socket.assigns.current_scope
       |> Activities.change_group(socket.assigns.group, params)
       |> Map.put(:action, :validate)
 
@@ -346,32 +395,99 @@ defmodule ConsensusWeb.GroupLive.New do
   end
 
   defp save_group(socket, action, group_params) do
-    if deadline_blank?(group_params) do
-      {:noreply, assign_form(socket, missing_deadline_changeset(socket, group_params))}
-    else
-      case perform_save(action, socket.assigns.scope, socket.assigns.group, group_params) do
-        {:ok, group} ->
-          {:noreply, push_navigate(socket, to: ~p"/groups/#{group.id}/options")}
+    cond do
+      deadline_blank?(group_params) ->
+        {:noreply, assign_form(socket, missing_deadline_changeset(socket, group_params))}
 
-        {:error, changeset} ->
-          {:noreply, assign_form(socket, changeset)}
-      end
+      # A refused name writes nothing, the group included: on `:new` a group created
+      # here would be created again by the corrected resubmit. The group's own errors
+      # are shown alongside, so the organizer fixes both in one pass.
+      not organizer_name_valid?(socket.assigns.organizer_form) ->
+        {:noreply, assign_form(socket, submitted_changeset(socket, group_params))}
+
+      true ->
+        case perform_save(
+               action,
+               socket.assigns.current_scope,
+               socket.assigns.group,
+               group_params,
+               name_params(socket.assigns.organizer_form)
+             ) do
+          {:ok, group} ->
+            {:noreply, push_navigate(socket, to: ~p"/groups/#{group.id}/options")}
+
+          # The group and the name are one transaction (plan §7.3), so a refused name
+          # wrote nothing — the group included. It was validated above, so this is a
+          # race (the row went, or changed under another tab); the field shows why.
+          {:error, {:organizer_name, %Ecto.Changeset{} = name_changeset}} ->
+            {:noreply,
+             assign(
+               socket,
+               :organizer_form,
+               name_changeset |> Map.put(:action, :validate) |> to_form(as: "organizer")
+             )}
+
+          {:error, {:organizer_name, :not_found}} ->
+            {:noreply,
+             put_flash(
+               socket,
+               :error,
+               "This session couldn't be saved. Reload the page and try again."
+             )}
+
+          # A log-in in another tab claimed this browser's identity under the open form
+          # (D-058): nothing was written. A full request re-runs the plugs, which find
+          # the account the browser is now signed in to, so the session starts there.
+          {:error, :claimed} ->
+            {:noreply,
+             socket
+             |> put_flash(
+               :error,
+               "You logged in from another tab, so this session wasn't saved. " <>
+                 "Start it again here — it will belong to your account."
+             )
+             |> redirect(to: ~p"/groups/new")}
+
+          {:error, changeset} ->
+            {:noreply, assign_form(socket, changeset)}
+        end
     end
+  end
+
+  # The name rides along only when the field differs from what the organizer mounted
+  # with. An untouched field must not write the mounted value back over a name another
+  # tab has set since. `nil` means "save the group alone".
+  defp name_params(nil), do: nil
+
+  defp name_params(form) do
+    if name_changed?(form), do: form.params, else: nil
+  end
+
+  defp submitted_changeset(socket, group_params) do
+    socket.assigns.current_scope
+    |> Activities.change_group(socket.assigns.group, group_params)
+    |> Map.put(:action, :insert)
   end
 
   defp deadline_blank?(group_params), do: group_params["deadline_at"] in [nil, ""]
 
   defp missing_deadline_changeset(socket, group_params) do
-    socket.assigns.scope
+    socket.assigns.current_scope
     |> Activities.change_group(socket.assigns.group, group_params)
     |> Ecto.Changeset.add_error(:deadline_at, "Pick when voting closes")
     |> Map.put(:action, :insert)
   end
 
-  defp perform_save(:new, scope, _group, params), do: Activities.create_group(scope, params)
+  defp perform_save(:new, scope, _group, params, nil), do: Activities.create_group(scope, params)
 
-  defp perform_save(:edit, scope, group, params),
+  defp perform_save(:new, scope, _group, params, name_params),
+    do: Activities.create_group_with_organizer_name(scope, params, name_params)
+
+  defp perform_save(:edit, scope, group, params, nil),
     do: Activities.update_group(scope, group, params)
+
+  defp perform_save(:edit, scope, group, params, name_params),
+    do: Activities.update_group_with_organizer_name(scope, group, params, name_params)
 
   # -- the unsaved-draft guard (D-045) -------------------------------------------------
 
@@ -383,10 +499,20 @@ defmodule ConsensusWeb.GroupLive.New do
   # `:new` and `:edit` are both covered by comparing against what is *stored* rather than
   # by testing for emptiness — on `:edit` the form arrives pre-filled, so "non-empty"
   # would arm the prompt on a form nobody has touched.
+  #
+  # The name counts too (plan §7.3): it is written by the same submit, so a typed name is
+  # as lost as a typed title. Its comparison is the changeset's own — a change exists only
+  # when the normalised value differs from the stored one.
   defp draft?(assigns) do
     typed_title(assigns.form) != stored_title(assigns.group) or
-      deadline_moved?(assigns.selected_at, assigns.group.deadline_at)
+      deadline_moved?(assigns.selected_at, assigns.group.deadline_at) or
+      name_changed?(assigns.organizer_form)
   end
+
+  defp name_changed?(nil), do: false
+
+  defp name_changed?(%Phoenix.HTML.Form{source: changeset}),
+    do: Map.has_key?(changeset.changes, :display_name)
 
   defp typed_title(form), do: form[:title].value |> to_string() |> String.trim()
   defp stored_title(group), do: group.title |> to_string() |> String.trim()
@@ -396,8 +522,12 @@ defmodule ConsensusWeb.GroupLive.New do
   defp deadline_moved?(_selected, nil), do: true
   defp deadline_moved?(selected, stored), do: DateTime.compare(selected, stored) != :eq
 
-  defp discard_prompt,
+  # Names the name only where there is a name field to lose.
+  defp discard_prompt(nil),
     do: "Leave without saving this session? The title and deadline aren't stored yet."
+
+  defp discard_prompt(_organizer_form),
+    do: "Leave without saving this session? The title, deadline and your name aren't stored yet."
 
   defp deadline_error_message(form) do
     case form[:deadline_at].errors do
@@ -416,8 +546,8 @@ defmodule ConsensusWeb.GroupLive.New do
       current_path={@current_path}
       current_scope={@current_scope}
       back={~p"/"}
-      back_confirm={draft?(assigns) && discard_prompt()}
-      footer_confirm={draft?(assigns) && discard_prompt()}
+      back_confirm={draft?(assigns) && discard_prompt(@organizer_form)}
+      footer_confirm={draft?(assigns) && discard_prompt(@organizer_form)}
       context="STEP 1 OF 3"
     >
       <div class="flex flex-1 flex-col gap-5 px-5 pb-6 pt-4">
@@ -522,11 +652,61 @@ defmodule ConsensusWeb.GroupLive.New do
             </p>
           </div>
 
-          <div class="flex flex-col gap-2">
+          <div :if={is_nil(@organizer_form)} class="flex flex-col gap-2">
             <.eyebrow>Group</.eyebrow>
             <div class="flex items-center gap-2">
               <Layouts.avatar user={@current_scope.user} size={30} />
               <span class="text-xs text-muted">Just you so far · invite by link</span>
+            </div>
+          </div>
+
+          <%!-- "Your name", for an organizer with no account (plan §7.3). Optional: blank
+                shows guests "The organizer", and requiring it would put a step in front of
+                organizing that voting does not have (product invariant 1).
+
+                Its own form namespace (`organizer[display_name]`, an `AnonymousOrganizer`
+                changeset) inside `#group-form`, so the one submit carries both. No
+                `maxlength` (invariant 11): the counter reads what the changeset reads and
+                turns tangerine past it, and the changeset is the cap. `text-base` is the
+                16px floor (invariant 18). The avatar is the typed name's initial, `?` while
+                the field is blank — `Layouts.avatar/1`'s own fallback. --%>
+          <div :if={@organizer_form} id="organizer-name" class="flex flex-col gap-2">
+            <.eyebrow>Group</.eyebrow>
+            <div class="flex items-start gap-2.5">
+              <Layouts.avatar
+                id="organizer-avatar"
+                user={%{username: String.trim(typed_name(@organizer_form))}}
+                size={30}
+                class="mt-3"
+              />
+              <div class="min-w-0 flex-1">
+                <.input
+                  field={@organizer_form[:display_name]}
+                  type="text"
+                  placeholder="Your name (optional)"
+                  aria-label="Your name"
+                  autocomplete="given-name"
+                  class="text-base"
+                />
+              </div>
+            </div>
+            <div class="flex items-start justify-between gap-3">
+              <p class="text-[11.5px] leading-[1.4] text-muted">
+                Shown to guests as who invited them, on the invite page and in the link preview. Leave it blank to show 'The organizer'.
+              </p>
+              <span
+                id="organizer-name-count"
+                class={[
+                  "shrink-0 font-mono text-[10px]",
+                  if(name_length(@organizer_form) > AnonymousOrganizer.max_display_name_length(),
+                    do: "font-semibold text-tangerine",
+                    else: "text-muted"
+                  )
+                ]}
+                aria-live="polite"
+              >
+                {name_length(@organizer_form)}/{AnonymousOrganizer.max_display_name_length()}
+              </span>
             </div>
           </div>
 

@@ -60,6 +60,37 @@ docker run --rm -v consensus-upgrade:/data \
   >/dev/null 2>&1 || fail "rollback of migration $last failed"
 echo "PASS  rolled migration $last back down on a populated volume"
 
+# D-058's migration deliberately wipes every group, and the rehearsal below proves it —
+# but only while D-058 is `$last`. Once a later migration lands, that one is rolled back
+# instead, D-058 stays applied, and a hard-coded "zero groups" would fail. So the
+# D-058-specific half is keyed on `$last`; the foreign-key half holds after any migration.
+D058=20261024012242
+
+# Put a group and an option on the rolled-back schema, so the second boot's migration
+# meets real rows in `activity_groups` and `activities`, not just in `users`. This is
+# what proves the wipe runs on the boot path, on the boot-time repo connection, and
+# leaves nothing orphaned. Parameters rather than SQL string literals: the eval argument
+# is single-quoted here.
+if [ "$last" = "$D058" ]; then
+  docker run --rm -v consensus-upgrade:/data \
+    -e SECRET_KEY_BASE="$SKB" -e DATABASE_PATH=/data/consensus.db -e PHX_HOST="$PHX_HOST" \
+    consensus:ci /app/bin/consensus eval '
+    Application.ensure_all_started(:ssl)
+    Application.ensure_loaded(:consensus)
+    now = "2026-10-23T12:00:00"
+    {:ok, _, _} = Ecto.Migrator.with_repo(Consensus.Repo, fn repo ->
+      %{num_rows: 1} = repo.query!(
+        "INSERT INTO activity_groups (title, slug, status, organizer_id, inserted_at, updated_at)
+         SELECT ?, ?, ?, id, ?, ? FROM users WHERE is_admin = 1 LIMIT 1",
+        ["Before the upgrade", "preupgrade", "draft", now, now])
+      %{num_rows: 1} = repo.query!(
+        "INSERT INTO activities (group_id, position, name, inserted_at, updated_at)
+         SELECT id, 0, ?, ?, ? FROM activity_groups WHERE slug = ?",
+        ["An option from before the upgrade", now, now, "preupgrade"])
+    end)' >/dev/null 2>&1 || fail "could not insert a group and an option on the rolled-back schema"
+  echo "PASS  inserted a group and an option on the pre-upgrade schema"
+fi
+
 run_one consensus-upgrade-2 4012 || fail "second boot never became healthy"
 echo "PASS  second boot healthy on the same volume"
 
@@ -80,6 +111,28 @@ name=$(docker exec consensus-upgrade-2 /app/bin/consensus rpc \
 [ "$name" = "renamed_operator" ] \
   || fail "the admin is now '$name', not 'renamed_operator' — the seeds re-ran or the data was lost"
 echo "PASS  the renamed admin survived the upgrade: $name"
+
+# Whatever migration just ran: nothing orphaned, and enforcement still on in the running
+# app — a `PRAGMA foreign_keys = OFF` rebuild would fail these two. When that migration is
+# D-058's, which wipes every group by cascade inside the DDL transaction, the pre-upgrade
+# group and option must also be gone.
+wipe=$(docker exec consensus-upgrade-2 /app/bin/consensus rpc '
+  rows = fn sql -> Consensus.Repo.query!(sql).rows end
+  [[groups]] = rows.("SELECT count(*) FROM activity_groups")
+  [[activities]] = rows.("SELECT count(*) FROM activities")
+  orphans = length(rows.("PRAGMA foreign_key_check"))
+  [[fk]] = rows.("PRAGMA foreign_keys")
+  IO.puts("WIPE=#{groups},#{activities},#{orphans},#{fk}")' \
+  2>/dev/null | tr -d '\r' | sed -n 's/^WIPE=//p' | tail -1)
+[ -n "$wipe" ] && [ "${wipe#*,*,}" = "0,1" ] \
+  || fail "after the upgrade groups,activities,foreign_key_check rows,foreign_keys = '$wipe', expected ?,?,0,1"
+echo "PASS  nothing orphaned, foreign keys on"
+
+if [ "$last" = "$D058" ]; then
+  [ "$wipe" = "0,0,0,1" ] \
+    || fail "after the upgrade groups,activities,foreign_key_check rows,foreign_keys = '$wipe', expected 0,0,0,1"
+  echo "PASS  the pre-upgrade group and option are gone"
+fi
 
 cleanup
 docker volume rm consensus-upgrade >/dev/null 2>&1

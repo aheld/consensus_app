@@ -28,6 +28,14 @@ defmodule Consensus.Activities.Group do
   the organizer, per `docs/research/activity-discovery.md` §4.1. Written only by
   `Consensus.Activities.set_search_area/3`, through `search_area_changeset/2` below
   — never through `changeset/2`.
+
+  A group has exactly one owner: a `Consensus.Accounts.User` through `organizer_id`,
+  **or** an organizer with no account through `anonymous_organizer_id` (D-058) — never
+  both and never neither. The database enforces that with the named CHECK
+  `organizer_xor_anonymous_organizer` (migration
+  `20261024012242_accountless_organizers.exs`), and `changeset/2` declares it so a
+  violation comes back as a changeset error rather than a raise. A claim *moves*
+  ownership from the second column to the first; it never leaves both set.
   """
 
   use Ecto.Schema
@@ -83,6 +91,7 @@ defmodule Consensus.Activities.Group do
     field :search_bbox, :string
 
     belongs_to :organizer, Consensus.Accounts.User
+    belongs_to :anonymous_organizer, Consensus.Activities.AnonymousOrganizer
     belongs_to :resolved_activity, Consensus.Activities.Activity
 
     has_many :activities, Consensus.Activities.Activity, preload_order: [asc: :position]
@@ -93,9 +102,11 @@ defmodule Consensus.Activities.Group do
   @doc """
   Changeset for creating or editing a group's own fields.
 
-  `:organizer_id` is set programmatically by `Consensus.Activities` from the caller's
-  scope and is deliberately absent from `cast/3` — the same shape `Consensus.Accounts`
-  uses to keep `:is_admin` out of the registration changeset. `:status`, `:completed_at` and
+  `:organizer_id` (or, for an organizer with no account, `:anonymous_organizer_id`) is
+  set programmatically by `Consensus.Activities` from the caller's scope and is
+  deliberately absent from `cast/3` — the same shape `Consensus.Accounts` uses to keep
+  `:is_admin` out of the registration changeset. This is the changeset an owner reaches
+  the database through, so it carries the ownership CHECK. `:status`, `:completed_at` and
   `:cancelled_at` are likewise absent: they only ever change through the lifecycle
   functions in `Consensus.Activities`, never through an organizer-facing form.
 
@@ -118,6 +129,10 @@ defmodule Consensus.Activities.Group do
     |> validate_deadline_window()
     |> put_slug()
     |> unique_constraint(:slug)
+    |> check_constraint(:organizer_id,
+      name: :organizer_xor_anonymous_organizer,
+      message: "a group must have exactly one owner"
+    )
   end
 
   # Until D-055 `deadline_at` was cast and never validated at all — not required, not

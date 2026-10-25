@@ -48,7 +48,10 @@ defmodule ConsensusWeb.UserLive.Registration do
   use ConsensusWeb, :live_view
 
   alias Consensus.Accounts
+  alias Consensus.Accounts.Scope
   alias Consensus.Accounts.User
+  alias Consensus.Activities
+  alias ConsensusWeb.UserLive
 
   # How many times the sent screen will re-send the magic link. See `handle_event("resend", …)`.
   @max_resends 2
@@ -120,6 +123,13 @@ defmodule ConsensusWeb.UserLive.Registration do
             again with the right address — you will need a different username, because
             <span class="font-semibold text-ink">{@created_user.username}</span>
             is taken now — and tell an admin about the wrong one.
+          </p>
+          <%!-- D-058, plan §7.4: only when this browser holds an accountless organizer
+                identity that owns a session (`@brings_sessions?`, read once at mount). Here
+                rather than in the lede, whose last words lead straight into the address.
+                Same sentence `UserLive.Login`'s sent screen carries, from one function. --%>
+          <p :if={@brings_sessions?} id="registration-sent-bring-sessions" class="mt-2">
+            {UserLive.Login.bring_sessions_line()}
           </p>
         </:fallback>
         <:actions>
@@ -298,8 +308,16 @@ defmodule ConsensusWeb.UserLive.Registration do
      |> assign(:created_user, nil)
      |> assign(:resends_left, @max_resends)
      |> assign(:draft?, false)
+     |> assign(:brings_sessions?, brings_sessions?(socket.assigns[:organizer_scope]))
      |> assign_form(changeset)}
   end
+
+  # `@organizer_scope` is `OrganizerAuth`'s `:mount_organizer_scope` — the anonymous
+  # identity, or nil. One `COUNT` per mount; the line it decides is about this browser.
+  defp brings_sessions?(%Scope{} = organizer_scope),
+    do: Activities.count_groups(organizer_scope) > 0
+
+  defp brings_sessions?(nil), do: false
 
   @impl true
   def handle_event("choose_mode", %{"mode" => mode}, socket) do

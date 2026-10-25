@@ -5,6 +5,7 @@ defmodule Consensus.ActivitiesFixtures do
 
   import Ecto.Query
 
+  alias Consensus.Accounts.Scope
   alias Consensus.Activities
   alias Consensus.Activities.Activity
   alias Consensus.Repo
@@ -83,6 +84,46 @@ defmodule Consensus.ActivitiesFixtures do
     |> Activity.changeset(attrs)
     |> Ecto.Changeset.put_change(:position, position)
     |> Repo.insert!()
+  end
+
+  @doc """
+  Mints an organizer with no account (D-058) and returns `{raw_token, organizer}`.
+
+  Goes through `Consensus.Activities.mint_anonymous_organizer/0`, the real write path,
+  so the raw token is whatever the resolver will accept. `attrs` are then stamped on
+  directly — `:display_name`, `:last_seen_at`, `:claimed_at`, `:claimed_by_user_id` —
+  for the same reason `group_fixture/2` backdates a deadline: an identity idle for 90
+  days, or one already claimed, is a thing time and another request do, not a thing
+  the mint can be asked for.
+  """
+  def anonymous_organizer_fixture(attrs \\ %{}) do
+    {raw_token, organizer} = Activities.mint_anonymous_organizer()
+
+    attrs = Map.new(attrs)
+
+    organizer =
+      if attrs == %{},
+        do: organizer,
+        else: organizer |> Ecto.Changeset.change(attrs) |> Repo.update!()
+
+    {raw_token, organizer}
+  end
+
+  @doc "A `%Scope{}` for a freshly minted organizer with no account."
+  def anonymous_scope_fixture(attrs \\ %{}) do
+    {_raw_token, organizer} = anonymous_organizer_fixture(attrs)
+    Scope.for_anonymous_organizer(organizer)
+  end
+
+  @doc """
+  A group owned by a freshly minted organizer with no account.
+
+  Returns `{scope, group}` — unlike `group_fixture/2` there is no scope in hand to call
+  it with, and every caller needs the one that owns the group.
+  """
+  def anonymous_group_fixture(attrs \\ %{}) do
+    scope = anonymous_scope_fixture()
+    {scope, group_fixture(scope, attrs)}
   end
 
   defp next_position(group_id) do
