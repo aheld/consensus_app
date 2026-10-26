@@ -69,6 +69,12 @@ defmodule Consensus.Activities do
   can be enforced — `ConsensusWeb.GroupLive.Options` and `.Review` hide their editing
   controls once a group leaves `:draft`, but a `phx-click` can be pushed at any socket
   the organizer can mount. See D-037.
+
+  An option's **details** (website, phone, address, location, category) are
+  deliberately outside the frozen set: `update_activity_details/3` works in every
+  status but `:cancelled`. None of the three reasons above applies to a phone number,
+  and the winner card is where a wrong one hurts (D-060). `adopt_lookup_result/3`
+  renames, so it stays inside.
   """
 
   import Ecto.Query, warn: false
@@ -935,16 +941,165 @@ defmodule Consensus.Activities do
       activity
       |> Activity.changeset(attrs)
       |> Repo.update()
-      |> case do
-        {:ok, updated} = result ->
-          broadcast(group.id, {:activity_updated, updated})
-          result
-
-        error ->
-          error
-      end
+      |> broadcast_activity_update(group.id)
     end
   end
+
+  @doc """
+  `02b`'s Save while the group is still a draft: the activity's own fields
+  (`Activity.changeset/2`) **and** its details (`Activity.details_changeset/2`) in one
+  write, so a Save cannot half-apply. Ownership, the frozen-pool refusal and the
+  broadcast are `update_activity/3`'s. After publish the editor saves through
+  `update_activity_details/3` instead.
+  """
+  def update_activity_and_details(%Scope{} = scope, %Activity{} = activity, attrs) do
+    with {:ok, group} <- authorize_activity(scope, activity),
+         :ok <- ensure_pool_editable(group) do
+      activity
+      |> Activity.changeset(attrs)
+      |> Activity.details_changeset(attrs)
+      |> Repo.update()
+      |> broadcast_activity_update(group.id)
+    end
+  end
+
+  @doc """
+  Updates an activity's **details** — website (`source_url`), phone, address,
+  location, category — and nothing else (`Activity.details_changeset/2`).
+
+  Ownership is `update_activity/3`'s re-read (`authorize_activity/2`). Deliberately
+  **not** behind the frozen-pool check (D-060, amending D-037): votes point at an
+  option's identity, not its phone number, and a wrong phone matters most *after* the
+  vote, on the winner card. A `:cancelled` group is refused with
+  `{:error, :group_closed}` — there is no winner card left to fix. Broadcasts
+  `{:activity_updated, activity}`, so open results screens update live.
+  """
+  def update_activity_details(%Scope{} = scope, %Activity{} = activity, attrs) do
+    with {:ok, group} <- authorize_activity(scope, activity),
+         :ok <- ensure_group_open(group) do
+      activity
+      |> Activity.details_changeset(attrs)
+      |> Repo.update()
+      |> broadcast_activity_update(group.id)
+    end
+  end
+
+  @doc """
+  Adopts a lookup result the organizer confirmed with **Use this**: the provider's
+  canonical name, its details and its `osm_ref` provenance in one write
+  (`Activity.lookup_changeset/2`), so a half-applied suggestion cannot exist.
+
+  `attrs` must come from `Consensus.Discovery.Result.persistable_attrs/1` — the
+  retention firewall — never from a form. Same ownership re-read as
+  `update_activity/3`, and the same `{:error, :pool_locked}` once the group has left
+  `:draft`, because it renames. Broadcasts `{:activity_updated, activity}`. A result
+  that came from the shared catalog links the option to its row (`catalog_item_id`)
+  and counts one use of it; the option's later edits stay its own (D-060 §3.2).
+  """
+  def adopt_lookup_result(%Scope{} = scope, %Activity{} = activity, attrs) when is_map(attrs) do
+    with {:ok, group} <- authorize_activity(scope, activity),
+         :ok <- ensure_pool_editable(group) do
+      Repo.transact(fn ->
+        with {:ok, current} <- release_before_relink(activity, attrs) do
+          current |> Activity.lookup_changeset(attrs) |> Repo.update()
+        end
+      end)
+      |> broadcast_activity_update(group.id)
+      |> tap(fn
+        {:ok, %Activity{catalog_item_id: row_id}} -> Consensus.Catalog.record_use(row_id)
+        _error -> :ok
+      end)
+    end
+  end
+
+  # Every write to an option ends here: the shared catalog row it created (if any)
+  # follows the edit — `Consensus.Catalog.sync_activity/1` never raises and never fails
+  # this write (D-060) — and open screens hear about it.
+  @doc """
+  An admin's fix to someone else's option, from `/admin/items` (D-060): the
+  **details only** (`Activity.details_changeset/2`). Admins cannot rename, reorder or
+  delete another organizer's options — invariant 16's reasons bind them too, and a
+  delete would cascade votes. Matches an admin scope in the head (a non-admin raises
+  `FunctionClauseError`), re-reads the actor's role in the write's transaction, logs an `[audit] activity_details_edit` line, and broadcasts
+  like any other write so open screens update.
+  """
+  def admin_update_activity_details(
+        %Scope{user: %User{is_admin: true} = actor},
+        %Activity{} = activity,
+        attrs
+      ) do
+    Consensus.Catalog.as_admin(actor, fn ->
+      activity |> Activity.details_changeset(attrs) |> Repo.update()
+    end)
+    |> broadcast_activity_update(activity.group_id)
+    |> Consensus.Audit.log("activity_details_edit", actor, activity.id)
+  end
+
+  @doc """
+  The admin listing of every option in every group, newest first, with its group (and
+  the group's owners, for `ConsensusWeb.OrganizerLabel`) preloaded. Filters:
+  `:group_status`, `:details` (`true` — has a phone, address, location or category)
+  and `:shared` (`true` — its organizer has **Let anyone find this** on).
+  """
+  def list_all_activities_for_admin(%Scope{user: %User{is_admin: true}}, filters \\ %{}) do
+    Activity
+    |> join(:inner, [a], g in assoc(a, :group), as: :group)
+    |> admin_group_status(filters[:group_status])
+    |> admin_has_details(filters[:details])
+    |> admin_shared(filters[:shared])
+    |> order_by([a], desc: a.inserted_at, desc: a.id)
+    |> preload(group: [:organizer, :anonymous_organizer])
+    |> Repo.all()
+  end
+
+  defp admin_group_status(query, status) when status in [nil, ""], do: query
+
+  defp admin_group_status(query, status) when is_binary(status) do
+    case Enum.find(Group.statuses(), &(Atom.to_string(&1) == status)) do
+      nil -> query
+      atom -> where(query, [group: g], g.status == ^atom)
+    end
+  end
+
+  defp admin_has_details(query, true) do
+    where(
+      query,
+      [a],
+      not is_nil(a.phone) or not is_nil(a.address) or not is_nil(a.latitude) or
+        not is_nil(a.category)
+    )
+  end
+
+  defp admin_has_details(query, _off), do: query
+
+  defp admin_shared(query, true), do: where(query, [a], not is_nil(a.shared_to_catalog_at))
+  defp admin_shared(query, _off), do: query
+
+  # Adopting a shared-catalog row re-links the option. If the option was itself
+  # sharing a row it created, that share ends first — otherwise the old row would keep
+  # pointing at an option that no longer links to it, and no unshare could ever reach
+  # it again. Any other adoption leaves the link alone (the own row then syncs).
+  defp release_before_relink(%Activity{id: id}, %{catalog_item_id: new_row})
+       when not is_nil(new_row) do
+    current = Repo.get!(Activity, id)
+
+    if current.shared_to_catalog_at && current.catalog_item_id != new_row,
+      do: Consensus.Catalog.release_activity(current),
+      else: {:ok, current}
+  end
+
+  defp release_before_relink(%Activity{id: id}, _attrs), do: {:ok, Repo.get!(Activity, id)}
+
+  defp broadcast_activity_update({:ok, updated} = result, group_id) do
+    Consensus.Catalog.sync_activity(updated)
+    broadcast(group_id, {:activity_updated, updated})
+    result
+  end
+
+  defp broadcast_activity_update(error, _group_id), do: error
+
+  defp ensure_group_open(%Group{status: :cancelled}), do: {:error, :group_closed}
+  defp ensure_group_open(%Group{}), do: :ok
 
   @doc """
   Deletes an activity and renumbers the remaining activities in its group to stay
@@ -960,7 +1115,12 @@ defmodule Consensus.Activities do
     with {:ok, group} <- authorize_activity(scope, activity),
          :ok <- ensure_pool_editable(group) do
       Repo.transact(fn ->
-        with {:ok, deleted} <- Repo.delete(activity) do
+        # An option that goes away takes its catalog share with it (D-060), exactly as
+        # turning the toggle off would — the FK's SET NULL would otherwise leave the row
+        # public with nobody able to retract it.
+        with {:ok, _released} <-
+               Activity |> Repo.get!(activity.id) |> Consensus.Catalog.release_activity(),
+             {:ok, deleted} <- Repo.delete(activity) do
           remaining = renumber(group.id)
           {:ok, {deleted, remaining}}
         end
@@ -1059,11 +1219,14 @@ defmodule Consensus.Activities do
   # pinned against the scope's id. Two clauses, one per kind of owner, with the same
   # three rules as every other pair — so a both-set scope or an unsaved id raises here
   # too, rather than reaching the re-read.
-  defp authorize_activity(
-         %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
-         %Activity{group_id: group_id}
-       )
-       when is_integer(user_id) do
+  @doc false
+  # Public for `Consensus.Catalog`, whose share/unshare are owning writes on an
+  # `%Activity{}` too (D-060) and must use this exact pair rather than a second copy.
+  def authorize_activity(
+        %Scope{user: %User{id: user_id}, anonymous_organizer: nil},
+        %Activity{group_id: group_id}
+      )
+      when is_integer(user_id) do
     case Repo.get(Group, group_id) do
       %Group{organizer_id: ^user_id} = group -> {:ok, group}
       %Group{} -> {:error, :unauthorized}
@@ -1071,11 +1234,11 @@ defmodule Consensus.Activities do
     end
   end
 
-  defp authorize_activity(
-         %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
-         %Activity{group_id: group_id}
-       )
-       when is_integer(id) do
+  def authorize_activity(
+        %Scope{user: nil, anonymous_organizer: %AnonymousOrganizer{id: id}},
+        %Activity{group_id: group_id}
+      )
+      when is_integer(id) do
     case Repo.get(Group, group_id) do
       %Group{anonymous_organizer_id: ^id} = group -> {:ok, group}
       %Group{} -> {:error, :unauthorized}

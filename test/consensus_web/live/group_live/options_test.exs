@@ -632,10 +632,28 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       assert flash["info"] =~ "the pool is locked"
     end
 
-    test "bounces from the per-option editor too", %{conn: conn, scope: scope} do
+    test "the per-option editor opens locked instead (D-060, t7-d)", %{conn: conn, scope: scope} do
       group = group_fixture(scope, %{deadline_at: future_deadline()})
       {:ok, activity} = Activities.add_activity(scope, group, %{name: "Guisados"})
       {:ok, group} = Activities.publish_group(scope, group)
+
+      {:ok, lv, _html} = live(conn, ~p"/groups/#{group}/options/#{activity.id}")
+
+      assert has_element?(lv, "#edit-locked-note", "the options people voted on can't change")
+      assert has_element?(lv, "#locked-name", "Guisados")
+      refute has_element?(lv, ~s|#edit-option-form input[name="activity[name]"]|)
+      refute has_element?(lv, ~s|button[phx-click="remove_option"]|)
+      refute has_element?(lv, ~s|button[phx-click="toggle_replace_image"]|)
+    end
+
+    test "a cancelled group still bounces from the per-option editor", %{
+      conn: conn,
+      scope: scope
+    } do
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+      {:ok, activity} = Activities.add_activity(scope, group, %{name: "Guisados"})
+      {:ok, group} = Activities.publish_group(scope, group)
+      {:ok, group} = Activities.cancel_group(scope, group)
 
       assert {:error, {:live_redirect, %{to: to}}} =
                live(conn, ~p"/groups/#{group}/options/#{activity.id}")

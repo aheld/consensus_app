@@ -23,7 +23,9 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
       {"amenity", "pub"},
       {"amenity", "food_court"},
       {"amenity", "biergarten"}
-    ]
+    ],
+    category_tag: "cuisine",
+    category_label: "Cuisine"
   ]
   @bar [
     categories: [
@@ -190,7 +192,7 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
   end
 
   describe "recorded responses (real Nominatim answers, 2026-10-25)" do
-    test "Zahav: name, website, street address, cuisine chip, node ref" do
+    test "Zahav: name, website, street and full address, phone, location, cuisine, node ref" do
       stub_recorded("zahav")
 
       assert {:ok, [%Result{} = zahav]} = Nominatim.search("Zahav", @philly_area, @restaurant)
@@ -200,8 +202,15 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
                website_url: "https://www.zahavrestaurant.com/",
                source: :osm,
                external_ref: "node/6374481270",
-               chips: [{"cuisine", "israeli"}],
-               address: "237 Saint James Place"
+               osm_ref: "node/6374481270",
+               address: "237 Saint James Place",
+               full_address: "237 Saint James Place, Philadelphia",
+               phone: "+1-215-625-8800",
+               latitude: 39.946306,
+               longitude: -75.145187,
+               category: "israeli",
+               # Discovery stamps this from retained_fields/0; the adapter never does.
+               retainable: []
              }
     end
 
@@ -216,7 +225,7 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
              ]
 
       assert hd(results).website_url == "https://www.vernickphilly.com/"
-      assert List.last(results).chips == [{"cuisine", "coffee shop"}]
+      assert List.last(results).category == "coffee shop"
     end
 
     test "Vernick under bar: neither is a bar, so the allowlist drops both" do
@@ -235,9 +244,9 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
       assert hd(results).external_ref == "way/1253791238"
       # The way carries no website tag: nulled, never dropped.
       assert hd(results).website_url == nil
-      assert hd(results).chips == [{"cuisine", "new american"}]
+      assert hd(results).category == "new american"
       assert Enum.at(results, 1).address == "1776 Benjamin Franklin Parkway"
-      assert Enum.at(results, 1).chips == [{"cuisine", "donut"}]
+      assert Enum.at(results, 1).category == "donut"
     end
   end
 
@@ -387,7 +396,7 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
       assert Enum.map(results, & &1.address) == ["237 Main St", "Main St", nil, nil, nil]
     end
 
-    test "cuisine humanisation: first semicolon value, underscores to spaces; absent means no chips" do
+    test "cuisine humanisation: first semicolon value, underscores to spaces; absent means no category" do
       install_recording_stub([
         place(1, "Multi", %{"extratags" => %{"cuisine" => "middle_eastern;israeli"}}),
         place(2, "Plain", %{"extratags" => %{"cuisine" => "thai"}}),
@@ -397,12 +406,97 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
 
       assert {:ok, results} = Nominatim.search("anything", @philly_area, @restaurant)
 
-      assert Enum.map(results, & &1.chips) == [
-               [{"cuisine", "middle eastern"}],
-               [{"cuisine", "thai"}],
+      assert Enum.map(results, & &1.category) == ["middle eastern", "thai", nil, nil]
+    end
+
+    test "without a category_tag the category is Nominatim's own type, humanised" do
+      install_recording_stub([
+        place(1, "Lanes", %{
+          "category" => "leisure",
+          "type" => "bowling_alley",
+          "extratags" => %{"cuisine" => "pizza"}
+        })
+      ])
+
+      bowling = [categories: [{"leisure", "bowling_alley"}]]
+      assert {:ok, [lanes]} = Nominatim.search("anything", @philly_area, bowling)
+      assert lanes.category == "bowling alley"
+    end
+
+    test "an over-long category is dropped rather than failing a later Use this" do
+      long = String.duplicate("x", Consensus.Activities.Activity.max_category_length() + 1)
+      install_recording_stub([place(1, "Long", %{"extratags" => %{"cuisine" => long}})])
+
+      assert {:ok, [result]} = Nominatim.search("anything", @philly_area, @restaurant)
+      assert result.category == nil
+    end
+  end
+
+  describe "details (D-060)" do
+    test "phone: the first value of phone | contact:phone that passes the Activity rule" do
+      install_recording_stub([
+        place(1, "Multi", %{"extratags" => %{"phone" => "+1 215 555 0100;+1 267 555 0101"}}),
+        place(2, "Contact", %{"extratags" => %{"contact:phone" => "(215) 555-0102"}}),
+        place(3, "Junk first", %{
+          "extratags" => %{"phone" => "call us!", "contact:phone" => "215.555.0103"}
+        }),
+        place(4, "Too short", %{"extratags" => %{"phone" => "911"}}),
+        place(5, "None")
+      ])
+
+      assert {:ok, results} = Nominatim.search("anything", @philly_area, @restaurant)
+
+      assert Enum.map(results, & &1.phone) == [
+               "+1 215 555 0100",
+               "(215) 555-0102",
+               "215.555.0103",
                nil,
                nil
              ]
+    end
+
+    test "coordinates: jsonv2's strings parsed, both or neither, in range" do
+      install_recording_stub([
+        place(1, "Good", %{"lat" => "39.9463060", "lon" => "-75.1451870"}),
+        place(2, "Lat only", %{"lat" => "39.9"}),
+        place(3, "Garbage", %{"lat" => "north", "lon" => "-75.1"}),
+        place(4, "Out of range", %{"lat" => "91.0", "lon" => "-75.1"})
+      ])
+
+      assert {:ok, results} = Nominatim.search("anything", @philly_area, @restaurant)
+
+      assert Enum.map(results, &{&1.latitude, &1.longitude}) == [
+               {39.946306, -75.145187},
+               {nil, nil},
+               {nil, nil},
+               {nil, nil}
+             ]
+    end
+
+    test "full address: street plus the first locality; no street, no stored address" do
+      install_recording_stub([
+        place(1, "City", %{"address" => %{"road" => "Main St", "city" => "Philadelphia"}}),
+        place(2, "Town", %{"address" => %{"road" => "Main St", "town" => "Media"}}),
+        place(3, "Street only", %{"address" => %{"road" => "Main St"}}),
+        place(4, "City only", %{"address" => %{"city" => "Philadelphia"}})
+      ])
+
+      assert {:ok, results} = Nominatim.search("anything", @philly_area, @restaurant)
+
+      assert Enum.map(results, & &1.full_address) == [
+               "Main St, Philadelphia",
+               "Main St, Media",
+               "Main St",
+               nil
+             ]
+    end
+
+    test "osm_ref is the element ref, and every retainable field is declared (ODbL)" do
+      install_recording_stub([place(42, "Ref")])
+
+      assert {:ok, [result]} = Nominatim.search("anything", @philly_area, @restaurant)
+      assert result.osm_ref == "node/42"
+      assert Nominatim.retained_fields() == Result.retainable_fields()
     end
   end
 
@@ -498,22 +592,44 @@ defmodule Consensus.Discovery.Provider.NominatimTest do
     # Config.Reader from the same files `mix release`/`mix phx.server` read, not
     # from this env's Application env (which config/test.exs points at
     # DiscoveryStub).
-    test "config.exs registers four types on this one module with different category data" do
+    test "config.exs registers four types, each the catalog then this one module, with different category data" do
       config = Config.Reader.read!("config/config.exs", env: :prod)
       providers = config[:consensus][Consensus.Discovery][:providers]
+      catalog = Consensus.Catalog.Provider
 
       assert Map.keys(providers) |> Enum.sort() == ["bar", "bowling", "cinema", "restaurant"]
-      assert providers["restaurant"] == {Nominatim, @restaurant}
-      assert providers["bar"] == {Nominatim, @bar}
-      assert providers["bowling"] == {Nominatim, categories: [{"leisure", "bowling_alley"}]}
-      assert providers["cinema"] == {Nominatim, categories: [{"amenity", "cinema"}]}
 
-      # The invariant-12 proof, stated as data: one module, four category lists —
-      # there is no per-type code for a branch to live in.
-      modules = providers |> Map.values() |> Enum.map(fn {module, _opts} -> module end)
-      assert Enum.uniq(modules) == [Nominatim]
+      assert providers["restaurant"] ==
+               [{catalog, activity_type: "restaurant"}, {Nominatim, @restaurant}]
 
-      lists = providers |> Map.values() |> Enum.map(fn {_module, opts} -> opts[:categories] end)
+      assert providers["bar"] == [{catalog, activity_type: "bar"}, {Nominatim, @bar}]
+
+      assert providers["bowling"] ==
+               [
+                 {catalog, activity_type: "bowling"},
+                 {Nominatim, categories: [{"leisure", "bowling_alley"}]}
+               ]
+
+      assert providers["cinema"] ==
+               [
+                 {catalog, activity_type: "cinema"},
+                 {Nominatim, categories: [{"amenity", "cinema"}]}
+               ]
+
+      # The invariant-12 proof, stated as data: the same two modules in the same order
+      # for every type, with the type and the category lists as the only difference —
+      # there is no per-type code for a branch to live in. The catalog is first so a
+      # catalog hit never reaches Nominatim (D-060 §3.4).
+      chains =
+        providers |> Map.values() |> Enum.map(fn chain -> Enum.map(chain, &elem(&1, 0)) end)
+
+      assert Enum.uniq(chains) == [[catalog, Nominatim]]
+
+      lists =
+        providers
+        |> Map.values()
+        |> Enum.map(fn chain -> elem(List.last(chain), 1)[:categories] end)
+
       assert length(Enum.uniq(lists)) == map_size(providers)
 
       # And the boot-time registry validation would accept it.

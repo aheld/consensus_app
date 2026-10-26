@@ -78,7 +78,12 @@ config :consensus, ConsensusWeb.Endpoint,
 # holds either way. Start dev with ASSIST_LIVE=1 to swap the real Nominatim adapter
 # back in (config/runtime.exs).
 config :consensus, Consensus.Discovery,
-  providers: %{"restaurant" => {Consensus.Dev.ScriptedProvider, []}}
+  providers: %{
+    "restaurant" => [
+      {Consensus.Catalog.Provider, activity_type: "restaurant"},
+      {Consensus.Dev.ScriptedProvider, []}
+    ]
+  }
 
 # Both knobs optional (these are the defaults): delay_ms is the shimmer-visible
 # pause before every answer, slow_ms is the `slow` query's screenshot hold.

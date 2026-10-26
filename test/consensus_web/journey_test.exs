@@ -217,12 +217,16 @@ defmodule ConsensusWeb.JourneyTest do
     assert html =~ "http://192.0.2.10/mozza.jpg",
            "the image URL pulled from the pasted link did not survive"
 
-    # The pool froze when the vote opened (D-037): the option editor that step 5 used is
-    # no longer reachable for this group, because a delete there would cascade into
-    # ballots. The review screen above is where the organizer sees the pool now, and it
-    # is the one that had to still carry the pasted image.
+    # The pool froze when the vote opened (D-037): the option editor that step 5 used now
+    # opens LOCKED (D-060, frame t7-d) — name and description read-only, no Remove,
+    # because a delete there would cascade into ballots — and only the details stay
+    # fixable. The pool list itself still bounces to the review screen above.
+    {:ok, editor, _html} = live(conn, ~p"/groups/#{group.id}/options/#{second.id}")
+    assert has_element?(editor, "#edit-locked-note")
+    refute has_element?(editor, ~s|button[phx-click="remove_option"]|)
+
     assert {:error, {:live_redirect, %{to: locked_to}}} =
-             live(conn, ~p"/groups/#{group.id}/options/#{second.id}")
+             live(conn, ~p"/groups/#{group.id}/options")
 
     assert locked_to == ~p"/groups/#{group.id}/review"
 

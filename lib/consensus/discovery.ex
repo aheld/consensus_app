@@ -44,6 +44,7 @@ defmodule Consensus.Discovery do
   require Logger
 
   @results_cap 3
+  @default_category_label "Kind"
 
   @doc "The most suggestion rows a search may return (the brief: never more than 3)."
   def results_cap, do: @results_cap
@@ -69,7 +70,7 @@ defmodule Consensus.Discovery do
     if trimmed == "" do
       {:ok, []}
     else
-      provider = provider_for(activity_type)
+      chain = provider_for(activity_type)
 
       # The span wraps the CACHE too, not just the provider call: a hit is an
       # outcome worth seeing, and an operator reading only HTTP-level events
@@ -84,11 +85,11 @@ defmodule Consensus.Discovery do
           activity_type: activity_type,
           query: trimmed,
           area: area_name(area),
-          provider: provider_module(provider)
+          providers: Enum.map(chain, &provider_module/1)
         },
         fn ->
-          {result, cache} = run_search(provider, activity_type, trimmed, area)
-          {result, search_stop_metadata(result, cache)}
+          {result, cache, answered_by} = run_chain(chain, activity_type, trimmed, area)
+          {result, search_stop_metadata(result, cache, answered_by)}
         end
       )
     end
@@ -118,19 +119,66 @@ defmodule Consensus.Discovery do
   @spec attribution_for(String.t()) ::
           %{prefix: String.t(), text: String.t(), url: String.t()} | nil
   def attribution_for(activity_type) do
-    with {module, _opts} <- provider_for(activity_type),
-         %{prefix: prefix, text: text, url: url} <- safe_attribution(module) do
-      %{prefix: prefix, text: text, url: url}
-    else
-      _ -> nil
-    end
+    activity_type
+    |> provider_for()
+    |> Enum.find_value(fn
+      {module, _opts} when is_atom(module) -> valid_attribution(safe_attribution(module))
+      _malformed -> nil
+    end)
+  end
+
+  @doc """
+  The attribution owed for one set of `results` (D-060): the first one a result
+  carries. `search/3` stamps each result with its provider's `attribution/0` unless
+  the adapter set a per-result one — which is how a catalog answer made only of
+  organizer-entered rows owes nothing, while a catalog row whose details came from
+  OSM still carries the OSM line. `nil` when no result owes any.
+  """
+  @spec attribution_for_results([Result.t()]) ::
+          %{prefix: String.t(), text: String.t(), url: String.t()} | nil
+  def attribution_for_results(results) when is_list(results) do
+    Enum.find_value(results, fn
+      %Result{attribution: attribution} -> valid_attribution(attribution)
+      _other -> nil
+    end)
+  end
+
+  def attribution_for_results(_results), do: nil
+
+  defp valid_attribution(%{prefix: prefix, text: text, url: url}),
+    do: %{prefix: prefix, text: text, url: url}
+
+  defp valid_attribution(_other), do: nil
+
+  @doc """
+  What the UI calls an option's generic `category` for `activity_type` — "Cuisine"
+  for a restaurant. Registry data (the entry's `category_label:` option), read with
+  `Keyword.get/3` and never branched on (invariant 12); "Kind" for a type with no
+  provider or no label. Never raises.
+  """
+  @spec category_label_for(String.t()) :: String.t()
+  def category_label_for(activity_type) do
+    activity_type
+    |> provider_for()
+    |> Enum.find_value(@default_category_label, fn
+      {_module, opts} when is_list(opts) ->
+        case Keyword.get(opts, :category_label) do
+          label when is_binary(label) and label != "" -> label
+          _other -> nil
+        end
+
+      _malformed ->
+        nil
+    end)
   end
 
   @doc """
   Boot-time registry validation, run by `Consensus.Discovery.Cache.start_link/1`
   before the cache table exists (research §4.5).
 
-  Raises `ArgumentError` if any registered adapter declares
+  Raises `ArgumentError` if any registered adapter declares a `retained_fields/0`
+  entry outside `Consensus.Discovery.Result.retainable_fields/0` (D-060 — a provider
+  cannot retain a `rating` by declaring it), or declares
   `may_store_results?: false` — a provider whose terms forbid server-side result
   storage must be un-registerable, so "not allowed" is a fact the supervision
   tree enforces rather than a memo. Also raises (loudly, at boot, when it is
@@ -139,13 +187,35 @@ defmodule Consensus.Discovery do
   """
   @spec validate_registry!() :: :ok
   def validate_registry! do
-    Enum.each(registry(), &validate_registration!/1)
+    Enum.each(registry(), fn
+      {type, entries} when is_list(entries) ->
+        Enum.each(entries, &validate_registration!({type, &1}))
+
+      registration ->
+        validate_registration!(registration)
+    end)
+
     :ok
   end
 
   ## Search plumbing
 
-  defp run_search(:none, _type, _query, _area), do: {{:ok, []}, :none}
+  # The registry entry is an ordered list (D-060, the change D-059 §8 said a second
+  # provider would need): the first provider with a non-empty answer wins and the rest
+  # are never called — a catalog hit sends no Nominatim request. `{:ok, []}` and every
+  # error fall through; only the last provider's answer is returned when none hit, so
+  # failure is still silence. Returns {result, cache, answering module or nil}.
+  defp run_chain([], _type, _query, _area), do: {{:ok, []}, :none, nil}
+
+  defp run_chain([entry | rest], type, query, area) do
+    {result, cache} = run_search(entry, type, query, area)
+
+    case {result, rest} do
+      {{:ok, [_ | _]}, _rest} -> {result, cache, provider_module(entry)}
+      {_miss, []} -> {result, cache, nil}
+      {_miss, rest} -> run_chain(rest, type, query, area)
+    end
+  end
 
   defp run_search({module, provider_opts}, type, query, area)
        when is_atom(module) and is_list(provider_opts) do
@@ -171,7 +241,7 @@ defmodule Consensus.Discovery do
         # Downcased for the cache key only — "Vernick" and "vernick" are the
         # same lookup, matching Geocoder.geocode/1's normalization, but the
         # text sent to the provider stays exactly as the caller typed it.
-        cache_key = {:search, type, String.downcase(query), area}
+        cache_key = {:search, module, type, String.downcase(query), area}
 
         case Cache.get(cache_key) do
           {:hit, result} ->
@@ -205,11 +275,11 @@ defmodule Consensus.Discovery do
   # :telemetry.span/3 does NOT merge start metadata into the stop event — the
   # stop event carries only what the function returns. Everything the log line
   # needs is therefore repeated here rather than assumed to have survived.
-  defp search_stop_metadata({:ok, results}, cache),
-    do: %{outcome: :ok, count: length(results), cache: cache}
+  defp search_stop_metadata({:ok, results}, cache, answered_by),
+    do: %{outcome: :ok, count: length(results), cache: cache, answered_by: answered_by}
 
-  defp search_stop_metadata({:error, reason}, cache),
-    do: %{outcome: :error, reason: reason, cache: cache}
+  defp search_stop_metadata({:error, reason}, cache, _answered_by),
+    do: %{outcome: :error, reason: reason, cache: cache, answered_by: nil}
 
   defp area_name(%Area{name: name}), do: name
   defp area_name(_area), do: nil
@@ -225,7 +295,22 @@ defmodule Consensus.Discovery do
         # degrades the whole answer rather than silently reaching a caller
         # that will render whatever fields it happens to find.
         if Enum.all?(results, &is_struct(&1, Result)) do
-          {:ok, Enum.take(results, @results_cap)}
+          # The retention firewall's stamp (D-060): what may be persisted is the
+          # provider's declaration, applied here, never whatever an adapter put in
+          # the struct. Result.persistable_attrs/1 reads nothing else.
+          retainable = safe_retained_fields(module)
+          attribution = valid_attribution(safe_attribution(module))
+
+          {:ok,
+           results
+           |> Enum.take(@results_cap)
+           |> Enum.map(fn %Result{} = result ->
+             %Result{
+               result
+               | retainable: retainable,
+                 attribution: result.attribution || attribution
+             }
+           end)}
         else
           {:error, :search_failed}
         end
@@ -279,6 +364,19 @@ defmodule Consensus.Discovery do
     _kind, _reason -> :invalid
   end
 
+  # Anything outside the known list is dropped, and a callback that raises retains
+  # nothing — the conservative failure for a storage rule.
+  defp safe_retained_fields(module) do
+    case module.retained_fields() do
+      fields when is_list(fields) -> Enum.filter(Result.retainable_fields(), &(&1 in fields))
+      _other -> []
+    end
+  rescue
+    _exception -> []
+  catch
+    _kind, _reason -> []
+  end
+
   defp safe_attribution(module) do
     module.attribution()
   rescue
@@ -296,9 +394,12 @@ defmodule Consensus.Discovery do
     end
   end
 
-  defp provider_for(activity_type), do: Map.get(registry(), activity_type, :none)
+  # Always a list. A bare `{module, opts}` entry is a one-element chain, so test and dev
+  # configs that register a single provider keep working unchanged.
+  defp provider_for(activity_type), do: registry() |> Map.get(activity_type, []) |> List.wrap()
 
   defp validate_registration!({type, {module, opts}}) when is_atom(module) and is_list(opts) do
+    validate_retained_fields!(type, module)
     policy = module.cache_policy()
 
     case Map.fetch!(policy, :may_store_results?) do
@@ -327,5 +428,25 @@ defmodule Consensus.Discovery do
     #{inspect(type)} is #{inspect(other)} — every entry must be
     `{provider_module, opts}` (see Consensus.Discovery.Provider).
     """
+  end
+
+  defp validate_retained_fields!(type, module) do
+    declared = module.retained_fields()
+    allowed = Result.retainable_fields()
+
+    unless is_list(declared) and Enum.all?(declared, &(&1 in allowed)) do
+      raise ArgumentError, """
+      #{inspect(module)} (registered for #{inspect(type)} in the
+      `config :consensus, Consensus.Discovery, providers:` registry) declares
+      retained_fields/0 as #{inspect(declared)}.
+
+      Every retained field must be one of #{inspect(allowed)}
+      (Consensus.Discovery.Result.retainable_fields/0). That list is the retention
+      firewall D-060 put in place of D-052 §4's URL-only boundary: a field outside
+      it has no column, and declaring one is a licence decision to record in
+      docs/decisions.md first, never a config change. There is deliberately no
+      `rating` or `price`.
+      """
+    end
   end
 end

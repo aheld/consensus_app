@@ -36,11 +36,11 @@ defmodule Consensus.Discovery.Telemetry do
 
       [lookup 7Kd2] geocode  q="philadelphia" cache=miss -> ok name="Philadelphia" bbox=39.867,-75.28,40.137,-74.955 (1340ms)
       [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=philadelphia&format=jsonv2&limit=1&countrycodes=us
-      [lookup 7Kd2] search   type=<type> q="vernick" area="Philadelphia" provider=Nominatim
+      [lookup 7Kd2] search   type=<type> q="vernick" area="Philadelphia" providers=Catalog,Nominatim
       [lookup 7Kd2] provider Nominatim categories=amenity=<value>,amenity=cafe,...
       [lookup 7Kd2] repro    https://nominatim.openstreetmap.org/search?q=vernick&format=jsonv2&layer=poi&viewbox=...
       [lookup 7Kd2] provider -> 200 2 results filtered=0 (690ms)
-      [lookup 7Kd2] search   cache=miss -> ok 2 results (695ms)
+      [lookup 7Kd2] search   cache=miss -> ok 2 results answered_by=Nominatim (695ms)
       [lookup 7Kd2] enrich   url="https://vernickphilly.com/" cache=miss -> ok title="Vernick Food & Drink" image=yes (500ms)
 
   (`<type>` and `<value>` stand in for real values above on purpose:
@@ -59,6 +59,11 @@ defmodule Consensus.Discovery.Telemetry do
   A `repro` line appears on a cache **hit** too, for the geocode: the URL is a pure
   function of the query, and a cached answer is exactly when you want to check what
   the upstream would say now.
+
+  The search line names the whole provider chain in order (D-060): the shared
+  catalog answers first, and on a hit the stop line reads `answered_by=Catalog`
+  with **no** `provider` line under it — nothing was requested upstream, which is
+  the point of asking the catalog first.
 
   The `provider` lines bracket the one upstream request. The `:start` line names
   the adapter and the registered category allowlist, and is logged before the
@@ -184,8 +189,8 @@ defmodule Consensus.Discovery.Telemetry do
       quoted(meta[:query]),
       " area=",
       quoted(meta[:area]),
-      " provider=",
-      provider_name(meta[:provider])
+      " providers=",
+      provider_names(meta[:providers])
     ])
   end
 
@@ -196,6 +201,7 @@ defmodule Consensus.Discovery.Telemetry do
       " -> ",
       outcome_phrase(meta),
       results_detail(meta),
+      answered_by(meta[:answered_by]),
       duration(measurements)
     ])
   end
@@ -333,6 +339,20 @@ defmodule Consensus.Discovery.Telemetry do
   end
 
   defp provider_name(_other), do: "none"
+
+  # The chain in order (D-060): `providers=Catalog,Nominatim`.
+  defp provider_names([_ | _] = modules), do: Enum.map_join(modules, ",", &answering_name/1)
+  defp provider_names(_other), do: "none"
+
+  # Which provider's answer won, on a hit. A catalog hit reads `answered_by=Provider`
+  # with no `provider` line under it — correct, since nothing was requested upstream.
+  defp answered_by(nil), do: []
+  defp answered_by(module), do: [" answered_by=", answering_name(module)]
+
+  # `Consensus.Catalog.Provider` and `...Provider.Nominatim` both end in a generic
+  # segment for one of them; name the catalog by its context.
+  defp answering_name(Consensus.Catalog.Provider), do: "Catalog"
+  defp answering_name(module), do: provider_name(module)
 
   defp categories(categories) when is_list(categories) and categories != [] do
     categories

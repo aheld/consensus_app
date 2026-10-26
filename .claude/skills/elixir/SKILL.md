@@ -596,7 +596,7 @@ because `max_cases: 1` removes that regardless of the tag.
 
 Verified 2026-08-12: `MIX_TEST_PARTITION=p11 mix precommit` → **1256 tests, 0 failures**,
 "Finished in 6.0 seconds (1.9s async, 4.1s sync)"; after D-058 (2026-10-24, partitioned
-`mix test`) **1572 tests, 0 failures**. Re-run for a current count rather than
+`mix test`) **1680 tests, 0 failures**. Re-run for a current count rather than
 quoting that number — the count grows as the app is written.
 
 **Always pass `MIX_TEST_PARTITION` when anything else might be running the suite.** Two
@@ -1029,7 +1029,7 @@ MIX_TEST_PARTITION=7 mix test     # own DB file; or add test/consensus/accounts_
 MIX_TEST_PARTITION=7 mix precommit  # the local gate (rewrites files, runs in :test)
 ```
 
-Expect the count of the day: 1572 tests, 0 failures as of 2026-10-25 (1555 before D-059, 1256 on 2026-08-12 before D-058). Re-run rather than
+Expect the count of the day: 1680 tests, 0 failures as of 2026-10-25 (1572 before D-060, 1555 before D-059, 1256 on 2026-08-12 before D-058). Re-run rather than
 trusting that number — the count grows as the app is written — but a failure is a real
 signal, not background noise, provided you partitioned the database.
 

@@ -71,14 +71,21 @@ config :consensus, Consensus.LinkPreview, fetcher: Consensus.LinkPreview.Fetcher
 # for a branch to live in. `categories:` is an allowlist over Nominatim's answer
 # (its `category`/`type` pair), not a query filter: free-text search cannot be
 # filtered by tag, so ten results come back and the ones outside the list are
-# dropped (D-059). An unregistered type falls through to {:ok, []} and the
+# dropped (D-059). `category_tag:` names the extratag an option's generic `category`
+# detail is read from (without one, Nominatim's own `type`), and `category_label:` is
+# what the UI calls that field — data, so "Cuisine" is never a branch (D-060). Each
+# entry is an ORDERED LIST (D-060 §3.4): the shared catalog answers first and the first
+# non-empty answer wins, so a catalog hit sends no Nominatim request; the type reaches
+# the catalog as data (`activity_type:`), because no adapter is ever told it. An
+# unregistered type falls through to {:ok, []} and the
 # typed/paste path. config/test.exs replaces this map with a stub registry, so the
 # live adapter is never reached from the suite; config/runtime.exs repeats it for
 # ASSIST_LIVE=1, and test/consensus/discovery/provider/nominatim_test.exs asserts the
 # two copies agree.
 config :consensus, Consensus.Discovery,
   providers: %{
-    "restaurant" =>
+    "restaurant" => [
+      {Consensus.Catalog.Provider, activity_type: "restaurant"},
       {Consensus.Discovery.Provider.Nominatim,
        categories: [
          {"amenity", "restaurant"},
@@ -87,18 +94,28 @@ config :consensus, Consensus.Discovery,
          {"amenity", "pub"},
          {"amenity", "food_court"},
          {"amenity", "biergarten"}
-       ]},
-    "bar" =>
+       ],
+       category_tag: "cuisine",
+       category_label: "Cuisine"}
+    ],
+    "bar" => [
+      {Consensus.Catalog.Provider, activity_type: "bar"},
       {Consensus.Discovery.Provider.Nominatim,
        categories: [
          {"amenity", "bar"},
          {"amenity", "pub"},
          {"amenity", "biergarten"},
          {"amenity", "nightclub"}
-       ]},
-    "bowling" =>
-      {Consensus.Discovery.Provider.Nominatim, categories: [{"leisure", "bowling_alley"}]},
-    "cinema" => {Consensus.Discovery.Provider.Nominatim, categories: [{"amenity", "cinema"}]}
+       ]}
+    ],
+    "bowling" => [
+      {Consensus.Catalog.Provider, activity_type: "bowling"},
+      {Consensus.Discovery.Provider.Nominatim, categories: [{"leisure", "bowling_alley"}]}
+    ],
+    "cinema" => [
+      {Consensus.Catalog.Provider, activity_type: "cinema"},
+      {Consensus.Discovery.Provider.Nominatim, categories: [{"amenity", "cinema"}]}
+    ]
   }
 
 # The one Nominatim client's HTTP seam, shared by the geocoder and the POI provider

@@ -142,6 +142,52 @@ defmodule Consensus.DiscoveryTest do
     end
   end
 
+  describe "search/3 — the retention stamp (D-060)" do
+    test "every result carries the provider's retained_fields/0, never what the adapter set" do
+      DiscoveryStub.stub_retained_fields([:name, :website_url])
+      DiscoveryStub.stub_results([%Result{result("Zahav") | retainable: [:phone, :latitude]}])
+
+      assert {:ok, [zahav]} = Discovery.search("restaurant", "zahav", nil)
+      assert zahav.retainable == [:name, :website_url]
+    end
+
+    test "a declared field outside the retainable list is dropped at search time" do
+      DiscoveryStub.stub_retained_fields([:name, :rating, :phone])
+      DiscoveryStub.stub_results([result("Zahav")])
+
+      assert {:ok, [zahav]} = Discovery.search("restaurant", "zahav", nil)
+      assert zahav.retainable == [:name, :phone]
+    end
+
+    test "a retained_fields/0 that is not a list retains nothing" do
+      DiscoveryStub.stub_retained_fields(:everything)
+      DiscoveryStub.stub_results([result("Zahav")])
+
+      assert {:ok, [zahav]} = Discovery.search("restaurant", "zahav", nil)
+      assert zahav.retainable == []
+    end
+  end
+
+  describe "category_label_for/1" do
+    test "reads the registry entry's category_label" do
+      put_providers(%{"restaurant" => {DiscoveryStub, category_label: "Cuisine"}})
+
+      assert Discovery.category_label_for("restaurant") == "Cuisine"
+    end
+
+    test "is Kind for an entry without a label and for a type with no provider" do
+      assert Discovery.category_label_for("restaurant") == "Kind"
+      assert Discovery.category_label_for("karaoke") == "Kind"
+    end
+
+    test "never raises, whatever the caller holds" do
+      put_providers(%{"weird" => :not_a_module_tuple})
+
+      assert Discovery.category_label_for("weird") == "Kind"
+      assert Discovery.category_label_for(nil) == "Kind"
+    end
+  end
+
   describe "search/3 — never raises" do
     test "a provider that raises becomes {:error, :search_failed}" do
       DiscoveryStub.stub_search(fn _query, _area, _opts -> raise "kaboom" end)
@@ -491,6 +537,16 @@ defmodule Consensus.DiscoveryTest do
       assert is_pid(pid)
     end
 
+    test "an adapter declaring a retained field outside the retainable list is refused" do
+      DiscoveryStub.stub_retained_fields([:name, :rating])
+
+      error = assert_raise ArgumentError, fn -> Discovery.validate_registry!() end
+
+      assert error.message =~ "DiscoveryStub"
+      assert error.message =~ ":rating"
+      assert error.message =~ "retainable_fields/0"
+    end
+
     test "a malformed registry entry is refused at boot" do
       put_providers(%{"weird" => :not_a_module_tuple})
 
@@ -520,6 +576,9 @@ defmodule Consensus.DiscoveryTest.ForbiddenProvider do
 
   @impl true
   def location_mode, do: :unused
+
+  @impl true
+  def retained_fields, do: []
 end
 
 defmodule Consensus.DiscoveryTest.RaisingAttributionProvider do
@@ -537,6 +596,9 @@ defmodule Consensus.DiscoveryTest.RaisingAttributionProvider do
 
   @impl true
   def location_mode, do: :unused
+
+  @impl true
+  def retained_fields, do: []
 end
 
 defmodule Consensus.DiscoveryTest.RaisingPolicyProvider do
@@ -554,4 +616,7 @@ defmodule Consensus.DiscoveryTest.RaisingPolicyProvider do
 
   @impl true
   def location_mode, do: :unused
+
+  @impl true
+  def retained_fields, do: []
 end

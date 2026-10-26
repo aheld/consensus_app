@@ -305,6 +305,13 @@ defmodule ConsensusWeb.AdminLive.Users do
               do: " (#{@unread_feedback} unread)",
               else: ""}
           </.link>
+          <.link
+            navigate={~p"/admin/items"}
+            id="admin-items-link"
+            class="-my-3 inline-flex min-h-[44px] w-fit items-center text-[12.5px] font-semibold text-ink underline decoration-2 underline-offset-2 hover:text-tangerine active:text-tangerine"
+          >
+            Go to Admin → Items
+          </.link>
         </div>
 
         <div

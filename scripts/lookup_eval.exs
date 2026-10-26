@@ -49,6 +49,7 @@ fixtures = [
 provider =
   case Application.get_env(:consensus, Consensus.Discovery)[:providers]["restaurant"] do
     {module, _opts} -> inspect(module)
+    chain when is_list(chain) -> Enum.map_join(chain, " → ", fn {module, _} -> inspect(module) end)
     other -> inspect(other)
   end
 
@@ -111,3 +112,39 @@ IO.puts("""
 #{hits} of #{length(counted)} expected hits found \
 (#{errors} upstream errors; #{surprises} expected misses hit anyway).
 """)
+
+# The shared catalog (D-060, docs/plans/item-details-and-catalog.md §8): seed a
+# throwaway row in the dev database, prove the D-059 miss `Joes Pizza` is now answered
+# by the catalog with NO Nominatim request (the app-wide gate's grant count does not
+# move), then delete the row whatever happened.
+alias Consensus.Catalog.CatalogItem
+
+catalog_area = resolved_areas["Philadelphia"]
+
+seeded =
+  %CatalogItem{}
+  |> CatalogItem.share_changeset(%{
+    activity_type: "restaurant",
+    name: "Joe's Pizza",
+    address: "122 S 16th St, Philadelphia",
+    latitude: 39.9502,
+    longitude: -75.1676
+  })
+  |> Consensus.Repo.insert!()
+
+try do
+  granted = Consensus.Discovery.Nominatim.Gate.granted()
+  answer = Discovery.search("restaurant", "Joes Pizza", catalog_area)
+  requests = Consensus.Discovery.Nominatim.Gate.granted() - granted
+
+  verdict =
+    case answer do
+      {:ok, [%{source: :catalog, name: "Joe's Pizza"} | _]} when requests == 0 -> "✅"
+      _ -> "❌"
+    end
+
+  IO.puts("#{verdict} catalog   \"Joes Pizza\" → #{inspect(answer |> elem(1) |> Enum.map(& &1.name))} " <>
+    "(#{requests} Nominatim requests; expected 0)")
+after
+  Consensus.Repo.delete!(seeded)
+end

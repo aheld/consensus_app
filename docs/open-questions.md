@@ -394,7 +394,10 @@ its price** (each forbids storing the fields the durable `activities` row is mad
 [research/activity-discovery.md](research/activity-discovery.md) §3), the provider is
 OpenStreetMap via Overpass (Nominatim since D-059) with a local Overture extract as the destination, and the caching
 question dissolves because the retention boundary is URL-only — what gets stored is a name, a
-URL, and what the venue's own page says, which no provider's terms can reach. The budget half
+URL, and what the venue's own page says, which no provider's terms can reach. (*D-060: the
+boundary is now a per-provider `retained_fields/0` declaration; OSM's ODbL permits storing
+phone, address and location, so those are stored too, and a provider whose terms forbid a
+field simply omits it.*) The budget half
 also answers itself: $0 at any volume this product can reach, no key, no card on file. The
 surviving numbers are unchanged, so this section runs Q-4, Q-5, then Q-7.
 

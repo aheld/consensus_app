@@ -53,9 +53,16 @@ defmodule Consensus.Discovery.Provider.Nominatim do
   — the same allowlist the paste path enforces, never a second one that
   drifts. An invalid URL nulls the field, never drops the result.
 
-  Lat/lon, `display_name`, `importance`, `place_id` and the phone/email/hours
-  tags are read past and never mapped: `Result` has nowhere to put them (the
-  licence firewall, D-052 §4).
+  The details (D-060) come from the same response: `phone` is the first of
+  the `phone` | `contact:phone` extratags (each `;`-split) that passes
+  `Consensus.Activities.Activity.valid_phone?/1`; `lat`/`lon` (strings in
+  jsonv2) are parsed; `full_address` is the street line plus the locality. The
+  `category` is the first value of the extratag the registry entry names in
+  `category_tag:` (`"cuisine"` for dining) or, for an entry without one,
+  Nominatim's own `type` humanised (`"bowling_alley"` → `"bowling alley"`).
+  ODbL permits storing all of it, so `retained_fields/0` declares every
+  retainable field. `display_name`, `importance`, `place_id` and the
+  email/hours tags are still read past: nothing displays them.
 
   ## Errors
 
@@ -68,6 +75,7 @@ defmodule Consensus.Discovery.Provider.Nominatim do
 
   @behaviour Consensus.Discovery.Provider
 
+  alias Consensus.Activities.Activity
   alias Consensus.Discovery.Area
   alias Consensus.Discovery.Nominatim
   alias Consensus.Discovery.Result
@@ -82,12 +90,15 @@ defmodule Consensus.Discovery.Provider.Nominatim do
   @min_span_deg 0.04
 
   @website_tags ["website", "contact:website", "url"]
+  @phone_tags ["phone", "contact:phone"]
+  @locality_keys ["city", "town", "village", "hamlet"]
 
   @impl true
   def search(query, area, opts)
 
   def search(query, %Area{bbox: bbox}, opts) when is_binary(query) and is_list(opts) do
     categories = Keyword.get(opts, :categories, [])
+    category_tag = Keyword.get(opts, :category_tag)
     query = sanitize_query(query)
 
     # Both refusals answer with the brief's silence rather than a request: an
@@ -96,7 +107,7 @@ defmodule Consensus.Discovery.Provider.Nominatim do
     if categories == [] or query == "" do
       {:ok, []}
     else
-      safe_search(query, bbox, categories)
+      safe_search(query, bbox, categories, category_tag)
     end
   end
 
@@ -124,6 +135,11 @@ defmodule Consensus.Discovery.Provider.Nominatim do
   @impl true
   def location_mode, do: :required
 
+  # ODbL: storage permitted, attribution required (research §4.1, trap I) — so every
+  # field, with the attribution following the data through `osm_ref`.
+  @impl true
+  def retained_fields, do: Result.retainable_fields()
+
   @doc """
   The query parameters `search/3` sends for `query` inside `bbox`. Public so
   tests can pin them; not part of the `Consensus.Discovery.Provider` contract.
@@ -149,11 +165,22 @@ defmodule Consensus.Discovery.Provider.Nominatim do
   #{@min_span_deg}°. The reordering lives here and nowhere else.
   """
   @spec viewbox(Area.bbox()) :: String.t()
-  def viewbox({min_lat, min_lon, max_lat, max_lon}) do
-    {min_lat, max_lat} = widen(min_lat, max_lat)
-    {min_lon, max_lon} = widen(min_lon, max_lon)
+  def viewbox(bbox) do
+    {min_lat, min_lon, max_lat, max_lon} = widen_bbox(bbox)
 
     Enum.map_join([min_lon, max_lat, max_lon, min_lat], ",", &coord_to_string/1)
+  end
+
+  @doc """
+  `bbox` with each axis widened to at least #{@min_span_deg}° around its centre — the
+  search-time widening `viewbox/1` applies. Public so `Consensus.Catalog` decides
+  "nearby" with exactly the same box the Nominatim lookup would have searched (D-060).
+  """
+  @spec widen_bbox(Area.bbox()) :: Area.bbox()
+  def widen_bbox({min_lat, min_lon, max_lat, max_lon}) do
+    {min_lat, max_lat} = widen(min_lat, max_lat)
+    {min_lon, max_lon} = widen(min_lon, max_lon)
+    {min_lat, min_lon, max_lat, max_lon}
   end
 
   defp widen(low, high) do
@@ -174,8 +201,8 @@ defmodule Consensus.Discovery.Provider.Nominatim do
 
   ## The request
 
-  defp safe_search(query, bbox, categories) do
-    perform_search(query, bbox, categories)
+  defp safe_search(query, bbox, categories, category_tag) do
+    perform_search(query, bbox, categories, category_tag)
   rescue
     exception ->
       Logger.error(
@@ -186,7 +213,7 @@ defmodule Consensus.Discovery.Provider.Nominatim do
       {:error, :search_failed}
   end
 
-  defp perform_search(query, bbox, categories) do
+  defp perform_search(query, bbox, categories, category_tag) do
     params = request_params(query, bbox)
 
     # The URL goes out on the span's :start, built by the client from the same
@@ -204,7 +231,7 @@ defmodule Consensus.Discovery.Provider.Nominatim do
       fn ->
         {result, filtered} =
           case Nominatim.search(params) do
-            {:ok, places} -> to_results(places, categories)
+            {:ok, places} -> to_results(places, categories, category_tag)
             {:error, reason} -> {{:error, reason}, 0}
           end
 
@@ -229,9 +256,9 @@ defmodule Consensus.Discovery.Provider.Nominatim do
 
   ## Element → Result mapping
 
-  defp to_results(places, categories) do
+  defp to_results(places, categories, category_tag) do
     {allowed, dropped} = Enum.split_with(places, &allowed?(&1, categories))
-    {{:ok, Enum.flat_map(allowed, &map_place/1)}, length(dropped)}
+    {{:ok, Enum.flat_map(allowed, &map_place(&1, category_tag))}, length(dropped)}
   end
 
   defp allowed?(%{"category" => key, "type" => value}, categories),
@@ -239,7 +266,10 @@ defmodule Consensus.Discovery.Provider.Nominatim do
 
   defp allowed?(_place, _categories), do: false
 
-  defp map_place(%{"osm_type" => osm_type, "osm_id" => osm_id, "name" => name} = place)
+  defp map_place(
+         %{"osm_type" => osm_type, "osm_id" => osm_id, "name" => name} = place,
+         category_tag
+       )
        when osm_type in ["node", "way", "relation"] and is_integer(osm_id) and is_binary(name) do
     case String.trim(name) do
       "" ->
@@ -248,21 +278,29 @@ defmodule Consensus.Discovery.Provider.Nominatim do
       trimmed_name ->
         address = map_or_empty(place["address"])
         extratags = map_or_empty(place["extratags"])
+        ref = "#{osm_type}/#{osm_id}"
+        {latitude, longitude} = coordinates(place)
+        street = address(address)
 
         [
           %Result{
             name: trimmed_name,
             website_url: website_url(extratags),
             source: :osm,
-            external_ref: "#{osm_type}/#{osm_id}",
-            chips: chips(extratags),
-            address: address(address)
+            external_ref: ref,
+            osm_ref: ref,
+            address: street,
+            full_address: full_address(street, address),
+            phone: phone(extratags),
+            latitude: latitude,
+            longitude: longitude,
+            category: category(place, extratags, category_tag)
           }
         ]
     end
   end
 
-  defp map_place(_place), do: []
+  defp map_place(_place, _category_tag), do: []
 
   defp map_or_empty(%{} = map), do: map
   defp map_or_empty(_other), do: %{}
@@ -311,20 +349,82 @@ defmodule Consensus.Discovery.Provider.Nominatim do
 
   defp address(_address), do: nil
 
-  # The cuisine tag is semicolon-multivalued ("thai;noodles") — the first value
-  # is the chip, underscores humanised to spaces.
-  defp chips(%{"cuisine" => cuisine}) when is_binary(cuisine) do
-    value =
-      cuisine
-      |> String.split(";", parts: 2)
-      |> hd()
-      |> String.trim()
-      |> String.replace("_", " ")
+  # The street line plus the first locality Nominatim gives ("237 Saint James
+  # Place, Philadelphia"). No street, no stored address: a bare city is not a
+  # detail anyone can find a place by. Over the Activity cap → the street alone.
+  defp full_address(nil, _address), do: nil
 
-    if value == "", do: nil, else: [{"cuisine", value}]
+  defp full_address(street, address) do
+    full =
+      case Enum.find_value(@locality_keys, &non_blank(address[&1])) do
+        nil -> street
+        locality -> "#{street}, #{locality}"
+      end
+
+    if String.length(full) <= Activity.max_address_length(), do: full, else: street
   end
 
-  defp chips(_extratags), do: nil
+  # Phone tags are crowd-edited and often multivalued ("+1 215…;+1 267…"): the
+  # first value that passes the same rule the changeset enforces, or nil.
+  defp phone(extratags) do
+    @phone_tags
+    |> Enum.flat_map(fn tag ->
+      case extratags[tag] do
+        value when is_binary(value) -> String.split(value, ";")
+        _other -> []
+      end
+    end)
+    |> Enum.map(&String.trim/1)
+    |> Enum.find(&Activity.valid_phone?/1)
+  end
+
+  # jsonv2 sends coordinates as strings. Both or neither, in range.
+  defp coordinates(%{"lat" => lat, "lon" => lon}) do
+    with {latitude, ""} when latitude >= -90 and latitude <= 90 <- parse_float(lat),
+         {longitude, ""} when longitude >= -180 and longitude <= 180 <- parse_float(lon) do
+      {latitude, longitude}
+    else
+      _ -> {nil, nil}
+    end
+  end
+
+  defp coordinates(_place), do: {nil, nil}
+
+  defp parse_float(value) when is_binary(value), do: Float.parse(String.trim(value))
+  defp parse_float(value) when is_number(value), do: {value / 1, ""}
+  defp parse_float(_value), do: :error
+
+  # With a `category_tag` (registry data — "cuisine" for dining) the tag's first
+  # `;`-separated value; without one, Nominatim's own `type`. Underscores humanised
+  # either way, and nothing over the Activity cap.
+  defp category(_place, extratags, tag) when is_binary(tag),
+    do: humanise(first_value(extratags[tag]))
+
+  defp category(place, _extratags, _tag), do: humanise(place["type"])
+
+  defp first_value(value) when is_binary(value),
+    do: value |> String.split(";", parts: 2) |> hd()
+
+  defp first_value(_value), do: nil
+
+  defp humanise(value) when is_binary(value) do
+    value = value |> String.trim() |> String.replace("_", " ")
+
+    if value == "" or String.length(value) > Activity.max_category_length(),
+      do: nil,
+      else: value
+  end
+
+  defp humanise(_value), do: nil
+
+  defp non_blank(value) when is_binary(value) do
+    case String.trim(value) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp non_blank(_value), do: nil
 
   ## Query hygiene
 

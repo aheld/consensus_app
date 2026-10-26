@@ -55,9 +55,11 @@ defmodule ConsensusWeb.ResultsComponents do
   """
 
   use Phoenix.Component
+  use ConsensusWeb, :verified_routes
 
   import ConsensusWeb.Sticker
 
+  alias ConsensusWeb.ItemDetails
   alias ConsensusWeb.OrganizerLabel
 
   @doc """
@@ -144,6 +146,13 @@ defmodule ConsensusWeb.ResultsComponents do
     back verbatim wherever it falls — which is how "Only The organizer can…" happens.
     """
 
+  attr :fix_details, :boolean,
+    default: false,
+    doc: """
+    the organizer's quiet **Fix details** link under the winner, into the locked `02b`
+    (`t7-g` → `t7-d`, D-060). Only `GroupLive.Results` passes it: a guest owns nothing.
+    """
+
   slot :banner, doc: "e.g. the participant's mint \"Your votes are in.\" confirmation"
   slot :footer, required: true
 
@@ -181,6 +190,7 @@ defmodule ConsensusWeb.ResultsComponents do
           outcome={@outcome}
           tally={@tally}
           organizer_username={@organizer_username}
+          fix_details={@fix_details}
         />
 
         <div class="flex flex-col gap-[11px]">
@@ -414,10 +424,17 @@ defmodule ConsensusWeb.ResultsComponents do
       <.photo_frame src={@row.activity.image_url} alt={@row.activity.name} height="h-[130px]" />
       <div>
         <p class="text-[19px] font-bold text-ink">{@row.activity.name}</p>
+        <ItemDetails.detail_line activity={@row.activity} size={:winner} class="mt-1.5" />
         <p :if={@row.activity.description} class="mt-0.5 text-sm text-ink-soft">
           {@row.activity.description}
         </p>
       </div>
+      <%!-- `t7-g` (D-060): the action the session ends in. **Website is not a third
+            button here** (owner ruling, 2026-10-25): the tangerine `View … →` below
+            already opens the same `source_url` and is the card's forward action. The
+            frame's "N OF M RANKED IT #1" line is not built either — nothing here ranks
+            (D-034); the shipped headline stands. --%>
+      <ItemDetails.action_row activity={@row.activity} id="winner-actions" />
       <.link
         :if={@row.activity.source_url}
         href={@row.activity.source_url}
@@ -436,6 +453,15 @@ defmodule ConsensusWeb.ResultsComponents do
       >
         Copy summary for the group chat
       </button>
+      <.link
+        :if={@fix_details}
+        id="winner-fix-details"
+        navigate={~p"/groups/#{@group}/options/#{@row.activity.id}?from=results"}
+        class="self-start text-[12px] font-semibold text-muted underline hover:text-tangerine active:text-tangerine"
+      >
+        Fix details
+      </.link>
+      <ItemDetails.osm_credit :if={ItemDetails.osm_derived?(@row.activity)} id="winner-osm-credit" />
     </.sticker_card>
 
     <div
