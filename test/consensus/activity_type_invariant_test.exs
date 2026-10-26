@@ -46,6 +46,18 @@ defmodule Consensus.ActivityTypeInvariantTest do
     "lib/consensus_web/live/endgame/all_vetoed.ex" => "a comment citing the invariant",
     "lib/consensus/discovery.ex" =>
       "the registry lookup itself: an opaque Map.get/3 key, per research §4.4",
+    "lib/consensus/catalog.ex" =>
+      "the shared catalog (D-060): the row's type is data — copied from the group on " <>
+        "share and handed to a keyword where/2 filter on search — never compared, " <>
+        "matched or branched on",
+    "lib/consensus/catalog/catalog_item.ex" =>
+      "the catalog schema: field, cast, moduledoc (D-060)",
+    "lib/consensus/catalog/provider.ex" =>
+      "the catalog adapter (D-060): reads the registry entry's opaque activity_type " <>
+        "option and passes it to Consensus.Catalog.search/3 — never compared or matched",
+    "lib/consensus_web/live/admin_live/items.ex" =>
+      "admin display (D-060): a catalog row's type is printed and offered as a filter " <>
+        "value from Discovery.available_types/0 — never compared, matched or branched on",
     "lib/consensus/discovery/telemetry.ex" =>
       "observability only: the value is copied verbatim into :telemetry span " <>
         "metadata and rendered with to_string/1 into a log line — never compared, " <>

@@ -48,7 +48,8 @@ end
 if config_env() == :dev and System.get_env("ASSIST_LIVE") == "1" do
   config :consensus, Consensus.Discovery,
     providers: %{
-      "restaurant" =>
+      "restaurant" => [
+        {Consensus.Catalog.Provider, activity_type: "restaurant"},
         {Consensus.Discovery.Provider.Nominatim,
          categories: [
            {"amenity", "restaurant"},
@@ -57,18 +58,28 @@ if config_env() == :dev and System.get_env("ASSIST_LIVE") == "1" do
            {"amenity", "pub"},
            {"amenity", "food_court"},
            {"amenity", "biergarten"}
-         ]},
-      "bar" =>
+         ],
+         category_tag: "cuisine",
+         category_label: "Cuisine"}
+      ],
+      "bar" => [
+        {Consensus.Catalog.Provider, activity_type: "bar"},
         {Consensus.Discovery.Provider.Nominatim,
          categories: [
            {"amenity", "bar"},
            {"amenity", "pub"},
            {"amenity", "biergarten"},
            {"amenity", "nightclub"}
-         ]},
-      "bowling" =>
-        {Consensus.Discovery.Provider.Nominatim, categories: [{"leisure", "bowling_alley"}]},
-      "cinema" => {Consensus.Discovery.Provider.Nominatim, categories: [{"amenity", "cinema"}]}
+         ]}
+      ],
+      "bowling" => [
+        {Consensus.Catalog.Provider, activity_type: "bowling"},
+        {Consensus.Discovery.Provider.Nominatim, categories: [{"leisure", "bowling_alley"}]}
+      ],
+      "cinema" => [
+        {Consensus.Catalog.Provider, activity_type: "cinema"},
+        {Consensus.Discovery.Provider.Nominatim, categories: [{"amenity", "cinema"}]}
+      ]
     }
 end
 

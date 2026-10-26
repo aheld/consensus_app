@@ -416,7 +416,7 @@ DELETE  /users/log-out                         ConsensusWeb.UserSessionControlle
 WS      /live/websocket                        Phoenix.LiveView.Socket
 ```
 
-(Abridged further: `/admin/feedback`, `/how-it-works`, `/about`, `/privacy` and `/feedback` are
+(Abridged further: `/admin/feedback`, `/admin/items`, `/how-it-works`, `/about`, `/privacy` and `/feedback` are
 real too — `mix phx.routes` is the authority.) **`/admin/home-page` is gone** (D-027, the
 admin-editable home page was deleted) — do not document it as a route. The `/join` tree is real
 (the voting loop) and lives in its own `live_session :participant`.

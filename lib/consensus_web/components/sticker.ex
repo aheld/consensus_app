@@ -854,6 +854,12 @@ defmodule ConsensusWeb.Sticker do
   attr :rest, :global
   slot :inner_block, doc: "a status line under the detail — what the voter already chose"
 
+  slot :meta,
+    doc: """
+    a line between the name and the detail — the option's category chip and address
+    (`ConsensusWeb.ItemDetails.detail_line/1`, frame `t7-f`, D-060)
+    """
+
   def deck_stack(assigns) do
     ~H"""
     <%!-- `absolute inset-0`, so the caller only has to give it a `relative` box with a
@@ -957,6 +963,7 @@ defmodule ConsensusWeb.Sticker do
             <p class="line-clamp-2 text-[21px] font-bold leading-[1.1] tracking-[-0.02em]">
               {@name}
             </p>
+            {render_slot(@meta)}
             <p :if={@detail} class="line-clamp-2 text-[12px] leading-[1.4] text-muted">{@detail}</p>
             {render_slot(@inner_block)}
           </div>

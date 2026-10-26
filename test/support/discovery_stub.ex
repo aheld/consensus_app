@@ -21,6 +21,8 @@ defmodule Consensus.DiscoveryStub do
       the boot-time registry validation pass in test.
     * `attribution/0` — `nil`.
     * `location_mode/0` — `:optional`.
+    * `retained_fields/0` — every retainable field, like the live Nominatim
+      adapter (D-060); `stub_retained_fields/1` narrows it for the firewall tests.
   """
 
   @behaviour Consensus.Discovery.Provider
@@ -76,6 +78,17 @@ defmodule Consensus.DiscoveryStub do
 
   @doc "Installs an `attribution/0` return (a `%{prefix:, text:, url:}` map, or nil)."
   def stub_attribution(attribution), do: install(:attribution, attribution)
+
+  @impl true
+  def retained_fields do
+    case lookup(:retained_fields) do
+      {:ok, fields} -> fields
+      nil -> Consensus.Discovery.Result.retainable_fields()
+    end
+  end
+
+  @doc "Installs a `retained_fields/0` return for this process and anything it spawns."
+  def stub_retained_fields(fields), do: install(:retained_fields, fields)
 
   @doc "Installs a `location_mode/0` return."
   def stub_location_mode(mode) when mode in [:required, :optional, :unused] do

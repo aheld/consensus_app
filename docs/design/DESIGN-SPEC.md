@@ -541,6 +541,58 @@ question rather than a metric one:
 > results screens and here. The counter inside it is `font-medium text-ink-soft` — DM Mono
 > 11px/500 `#3B4A42`, exactly what the frame computes for that line.
 
+### `t7` item details — `02b`, `02`/`03` cards, the ballot, the `05` winner card (D-060)
+Frame: [site/item-details.dc.html](site/item-details.dc.html) (`T7-Item-Details.dc.html` in
+the design project, read 2026-10-25, not truncated). Seven panels, `t7-a`…`t7-g`. Shared
+rendering lives in `ConsensusWeb.ItemDetails` (`detail_line/1`, `osm_credit/1`,
+`action_row/1`).
+
+- **`02b` Details** (`t7-a`) — a dashed rule and a `DETAILS` eyebrow inside the existing form:
+  Website (the editable `source_url`; **↻ Refetch** moves to its label row), Phone, Address
+  (`n/200` counter), the category field (label from `Discovery.category_label_for/1` —
+  "Cuisine" for dining, "Kind" otherwise; `n/60` counter), Location, and the OSM credit when
+  the option's details came from OSM. All fields 16px with `py-2.5` (invariant 18), no
+  `maxlength` (invariant 11). Location is a text state, never numbers: `📍 On the map · Open
+  in Maps · Remove`, or "Not on the map yet" + a white **Find from address** (`Finding…`
+  while busy, disabled with no address typed), and on failure the one ink line "Couldn't
+  find that address." (`t7-b`).
+- **`02b` after publish** (`t7-d`) — reached from `03 review`'s per-row **Fix details** and the
+  `05` winner card's. A quiet `--surface` line under the header, no **Remove**, the photo at
+  96px with no controls and no shadow, Name/Description as flat `canvas/50` panels tagged
+  `LOCKED`. Details stay editable; Save returns to `03` (or to `05` with `?from=results`).
+- **Cards** (`t7-e`) — chip (`1.5px ink/45`) + street address on one truncating line where the
+  provenance line was on `02`, and where the description line was on `03`. A card with no
+  details keeps its old line. One credit at the foot of each list, only when some card's
+  details came from OSM.
+- **Ballot** (`t7-f`) — the chip overlays the tile's photo strip, the address takes the tile's
+  bottom line, the swipe card gets the chip + address row under the name (a new `:meta` slot
+  on `Sticker.deck_stack/1`). No phone, website or map link. The credit sits above the
+  status region.
+- **`05` winner** (`t7-g`) — chip + address under the name, then **Call · Directions** (white,
+  ≥44px, splitting the row), and for the organizer a quiet **Fix details** link. Each button
+  renders only when its detail exists, and the row is absent when neither does.
+
+> **Owner rulings on the frame (2026-10-25), all built as recommended.** (1) The frame's new
+> winner card and its "N OF M RANKED IT #1" line are **not** built: nothing ranks (D-034), and
+> the shipped mint winner card stays, gaining the frame's detail line, action row, Fix
+> details and credit. (2) **No Website button**: the card's tangerine `View … →` already
+> opens the same `source_url` and stays the forward action, so the row is Call ·
+> Directions. (3) Directions with an address but no location opens an openstreetmap.org
+> address search (the frame's Kismet case). (4) The credit opens in a **new tab**
+> everywhere; on the ballot that is required, since a same-tab link off it discards the
+> unsent ballot. (5) On `02` the chip + address replace the provenance line **except during
+> the 02e enriching interval**, whose "link attached · details arriving" line stays until
+> the fetch lands. (6) Accepted as drawn: the once-per-list credit, the ink (not violet)
+> toggle, `t7-d`'s missing Remove and read-only photo, the ink failure line. (7) Not built:
+> the `ALEX` added-by pill and the "+ Add your own" ballot tile (co-creation, Post-MVP).
+
+> **Build deviations.** The credit links to the ODbL licence, not the frame's
+> `osm.org/copyright`: the words and URL come from the provider's own `attribution/0`, the
+> same source the `t5` assist slot renders. `t7-d` drops **↻ Refetch**: it refills the photo
+> and description, which are frozen once the vote opens. `02b` keeps its single Save (no
+> Cancel); the frame redraws a Cancel the app removed deliberately (the header's `‹` is the
+> back affordance). The share toggle (`t7-c`) is a form field applied on **Save**, not a live switch, so a share never snapshots a half-typed field; its off track is `canvas/40` where the frame draws `#EDF1EE` (no token), and its disabled knob `ink-12`.
+
 ### endgame · all vetoed — a takeover *state* of `/groups/:id/results` and `/join/:slug/results`
 
 Ground truth is [all-vetoed.dc.html](all-vetoed.dc.html) (a dc-runtime doc — serve the

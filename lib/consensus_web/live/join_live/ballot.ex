@@ -150,6 +150,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
 
   alias Consensus.Activities.Activity
   alias Consensus.Voting
+  alias ConsensusWeb.ItemDetails
 
   @impl true
   def mount(_params, _session, socket) do
@@ -752,6 +753,13 @@ defmodule ConsensusWeb.JoinLive.Ballot do
 
   defp meta_line(%Activity{}), do: "No details yet"
 
+  # The grid tile's bottom line: the address takes the old meta line when there is one
+  # (`t7-f`), and the description otherwise, as before details existed.
+  defp tile_meta_line(%Activity{address: address}) when is_binary(address) and address != "",
+    do: address
+
+  defp tile_meta_line(%Activity{} = activity), do: meta_line(activity)
+
   defp ballot_status_text(approved, veto_id, veto_allowed?) do
     picked_text = "#{MapSet.size(approved)} PICKED"
 
@@ -1136,7 +1144,17 @@ defmodule ConsensusWeb.JoinLive.Ballot do
                 "rounded-[9px] border-[1.5px] border-ink stripe-pitch-6",
                 approved?(activity.id, @approved) && "stripes-ink"
               ]}
-            />
+            >
+              <%!-- `t7-f` (D-060): the category chip overlays the photo strip, so the tile
+                    keeps its height. Category and address only on the ballot — no phone,
+                    website or map link: the ballot is for choosing, not calling. --%>
+              <span
+                :if={ItemDetails.category_text(activity.category)}
+                class="absolute bottom-1 left-[5px] z-[1] rounded-full border-[1.5px] border-ink/45 bg-white px-1.5 text-[9.5px] font-semibold leading-[1.4] text-ink"
+              >
+                {ItemDetails.category_text(activity.category)}
+              </span>
+            </.photo_frame>
             <%!-- `line-clamp-2`, the same cap `Sticker.deck_stack/1` puts on the same
                   field. Grid rows stretch to the taller cell, so an unclamped third line
                   in one card grew its row-mate too — and the row-mate's own name stayed one
@@ -1166,7 +1184,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
                 "block truncate font-mono text-[10.5px] font-medium",
                 if(vetoed?(activity.id, @veto_id), do: "text-faint", else: "text-ink-soft")
               ]}>
-                {meta_line(activity)}
+                {tile_meta_line(activity)}
               </span>
             </div>
           </button>
@@ -1220,6 +1238,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
             unsticking a voter and it sent them hunting for a control that is not on the
             screen and that `Voting.ensure_veto_permitted/2` would refuse anyway. --%>
       <.submit_block
+        osm_credit={ItemDetails.osm_derived?(@group.activities)}
         approved={@approved}
         veto_id={@veto_id}
         veto_allowed={@group.veto_allowed}
@@ -1293,6 +1312,9 @@ defmodule ConsensusWeb.JoinLive.Ballot do
           phx-hook="SwipeCard"
           data-activity-id={@card.id}
         >
+          <:meta>
+            <ItemDetails.detail_line activity={@card} size={:winner} />
+          </:meta>
           <p
             :if={card_state_note(decision_for(@card.id, @approved, @veto_id, @deck_seen))}
             class="font-mono text-[10.5px] font-medium text-ink"
@@ -1529,6 +1551,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
       </div>
 
       <.submit_block
+        osm_credit={ItemDetails.osm_derived?(@group.activities)}
         approved={@approved}
         veto_id={@veto_id}
         veto_allowed={@group.veto_allowed}
@@ -1614,6 +1637,7 @@ defmodule ConsensusWeb.JoinLive.Ballot do
     """
 
   attr :class, :any, default: nil
+  attr :osm_credit, :boolean, default: false, doc: "whether any option's details came from OSM"
 
   defp submit_block(assigns) do
     ~H"""
@@ -1643,6 +1667,14 @@ defmodule ConsensusWeb.JoinLive.Ballot do
             cannot happen — but the moment to learn that sending is permanent is while you
             are still deciding what to pick, which is exactly the empty state. Pinned by
             "both views say submitting is final before the press (D-036)". --%>
+      <%!-- `t7-f`: OSM's licence asks for attribution wherever its data is shown, guests
+            included. A new tab, always — a same-tab link off this screen would discard the
+            unsent ballot. --%>
+      <ItemDetails.osm_credit
+        :if={@osm_credit}
+        id="ballot-osm-credit"
+        class="text-center"
+      />
       <div
         id="ballot-status-region"
         class="flex flex-col gap-1 rounded-2xl border-2 border-ink-30 bg-white/65 px-3 py-2 text-center"

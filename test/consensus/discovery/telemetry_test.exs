@@ -51,7 +51,7 @@ defmodule Consensus.Discovery.TelemetryTest do
       log = capture_info(fn -> Discovery.search("restaurant", "vernick", area()) end)
 
       assert log =~ ~s(search   type=restaurant q="vernick" area="Philadelphia")
-      assert log =~ "provider="
+      assert log =~ "providers="
       assert log =~ "-> ok 1 result"
     end
 
@@ -99,10 +99,10 @@ defmodule Consensus.Discovery.TelemetryTest do
       assert log =~ "reason=:rate_limited"
     end
 
-    test "a type with no registered provider still logs, with provider=none" do
+    test "a type with no registered provider still logs, with providers=none" do
       log = capture_info(fn -> Discovery.search("bowling", "lanes", area()) end)
 
-      assert log =~ "provider=none"
+      assert log =~ "providers=none"
       assert log =~ "-> ok 0 results"
     end
   end

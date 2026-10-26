@@ -268,7 +268,7 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
         result(
           website_url: unique_website_url(),
           address: "2031 Walnut St",
-          chips: [{"cuisine", "american"}]
+          category: "american"
         )
       ])
 
@@ -526,6 +526,111 @@ defmodule ConsensusWeb.GroupLive.OptionsAssistTest do
       refute_receive :fetch_started, 100
       assert Process.alive?(view.pid)
     end
+
+    test "Use this stores every detail the provider retains (D-060)", %{conn: conn, scope: scope} do
+      DiscoveryStub.stub_results([
+        result(
+          name: "Zahav",
+          website_url: nil,
+          address: "237 Saint James Place",
+          full_address: "237 Saint James Place, Philadelphia",
+          phone: "+1-215-625-8800",
+          latitude: 39.946306,
+          longitude: -75.145187,
+          category: "israeli",
+          osm_ref: "node/6374481270"
+        )
+      ])
+
+      group = group_with_area(scope)
+      {:ok, view, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      add_typed(view, "zahav")
+      render_async(view)
+      activity = only_activity(scope, group)
+
+      view
+      |> element(~s|button[phx-click="assist_use"][phx-value-id="#{activity.id}"]|)
+      |> render_click()
+
+      confirmed = only_activity(scope, group)
+      assert confirmed.name == "Zahav"
+      # The FULL address is stored; the short street line was only the row's display.
+      assert confirmed.address == "237 Saint James Place, Philadelphia"
+      assert confirmed.phone == "+1-215-625-8800"
+      assert {confirmed.latitude, confirmed.longitude} == {39.946306, -75.145187}
+      assert confirmed.category == "israeli"
+      assert confirmed.osm_ref == "node/6374481270"
+    end
+
+    test "the firewall: a provider retaining only name + website persists nothing else, and a website it may not keep is never fetched",
+         %{conn: conn, scope: scope} do
+      test_pid = self()
+      website = unique_website_url()
+
+      DiscoveryStub.stub_retained_fields([:name, :website_url])
+
+      DiscoveryStub.stub_results([
+        result(
+          name: "Zahav",
+          website_url: website,
+          full_address: "237 Saint James Place, Philadelphia",
+          phone: "+1-215-625-8800",
+          latitude: 39.946306,
+          longitude: -75.145187,
+          category: "israeli"
+        )
+      ])
+
+      group = group_with_area(scope)
+      {:ok, view, _html} = live(conn, ~p"/groups/#{group}/options")
+
+      add_typed(view, "zahav")
+      render_async(view)
+      activity = only_activity(scope, group)
+
+      view
+      |> element(~s|button[phx-click="assist_use"][phx-value-id="#{activity.id}"]|)
+      |> render_click()
+
+      render_async(view)
+      confirmed = only_activity(scope, group)
+      assert {confirmed.name, confirmed.source_url} == {"Zahav", website}
+
+      assert {confirmed.phone, confirmed.address, confirmed.latitude, confirmed.longitude,
+              confirmed.category} == {nil, nil, nil, nil, nil}
+
+      # And the other direction: a provider that may not keep the website gets no fetch.
+      DiscoveryStub.stub_retained_fields([:name])
+
+      LinkPreviewStub.stub(fn _url, _opts ->
+        send(test_pid, :fetch_started)
+        {:error, :nope}
+      end)
+
+      add_typed(view, "zahav again")
+      render_async(view)
+
+      [_first, second] =
+        Activities.get_group!(scope, group.id).activities |> Enum.sort_by(& &1.position)
+
+      view
+      |> element(~s|button[phx-click="assist_use"][phx-value-id="#{second.id}"]|)
+      |> render_click()
+
+      assert only_source_url(scope, second.id) == nil
+      refute_receive :fetch_started, 100
+    end
+  end
+
+  defp only_source_url(scope, activity_id) do
+    scope
+    |> Activities.get_group!(
+      Consensus.Repo.get!(Consensus.Activities.Activity, activity_id).group_id
+    )
+    |> Map.fetch!(:activities)
+    |> Enum.find(&(&1.id == activity_id))
+    |> Map.fetch!(:source_url)
   end
 
   describe "dismiss" do

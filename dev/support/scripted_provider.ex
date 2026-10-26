@@ -58,14 +58,17 @@ defmodule Consensus.Dev.ScriptedProvider do
 
   # Frame 02c/02d's exact sample content (frame-review §c): name + street address
   # (+ a cuisine chip that only the one-match shape renders), nothing the licence
-  # forbids. Philadelphia venues, like the frame's.
+  # forbids. Philadelphia venues, like the frame's. The phone/coordinates/full address
+  # are what `Use this` stores (D-060), so the 02b Details section and the 05 action
+  # row can be driven in dev too.
   @vernick_food %Result{
     name: "Vernick Food & Drink",
     website_url: "https://www.vernickphilly.com",
     source: :scripted,
     external_ref: nil,
-    chips: [{"cuisine", "american"}],
-    address: "2031 Walnut St"
+    category: "american",
+    address: "2031 Walnut St",
+    full_address: "2031 Walnut St, Philadelphia"
   }
 
   @vernick_trio [
@@ -75,16 +78,17 @@ defmodule Consensus.Dev.ScriptedProvider do
       website_url: nil,
       source: :scripted,
       external_ref: nil,
-      chips: [{"cuisine", "seafood"}],
-      address: "1 N 19th St"
+      category: "seafood",
+      address: "1 N 19th St",
+      full_address: "1 N 19th St, Philadelphia"
     },
     %Result{
       name: "Vernick Coffee Bar",
       website_url: nil,
       source: :scripted,
       external_ref: nil,
-      chips: nil,
-      address: "1 N 19th St"
+      address: "1 N 19th St",
+      full_address: "1 N 19th St, Philadelphia"
     }
   ]
 
@@ -93,8 +97,12 @@ defmodule Consensus.Dev.ScriptedProvider do
     website_url: "https://www.zahavrestaurant.com",
     source: :scripted,
     external_ref: nil,
-    chips: [{"cuisine", "israeli"}],
-    address: "237 St James Pl"
+    category: "israeli",
+    address: "237 St James Pl",
+    full_address: "237 Saint James Place, Philadelphia",
+    phone: "+1-215-625-8800",
+    latitude: 39.946306,
+    longitude: -75.145187
   }
 
   @impl true
@@ -148,6 +156,10 @@ defmodule Consensus.Dev.ScriptedProvider do
 
   @impl true
   def location_mode, do: :optional
+
+  # Zahav's details are the recorded Nominatim answer (test/fixtures/nominatim/zahav.json).
+  @impl true
+  def retained_fields, do: Result.retainable_fields()
 
   defp answer(reply) do
     case delay_ms() do

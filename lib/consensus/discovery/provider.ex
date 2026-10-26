@@ -79,4 +79,14 @@ defmodule Consensus.Discovery.Provider do
   see the reviewer's note in research §4.3.
   """
   @callback location_mode() :: :required | :optional | :unused
+
+  @doc """
+  The `Consensus.Discovery.Result` fields this provider's terms let us persist when
+  an organizer confirms a result — a subset of
+  `Consensus.Discovery.Result.retainable_fields/0` (D-060, replacing D-052 §4's
+  URL-only boundary). A field left out is still displayed and never stored.
+  `Consensus.Discovery.Cache` refuses to boot with a provider that declares anything
+  outside that list, so a new `rating` cannot be retained by declaring it.
+  """
+  @callback retained_fields() :: [atom()]
 end

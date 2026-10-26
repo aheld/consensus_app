@@ -96,33 +96,50 @@ defmodule ConsensusWeb.GroupLive.Options do
   alias Consensus.Activities
   alias Consensus.Activities.Activity
   alias Consensus.Activities.Group
+  alias Consensus.Catalog
   alias Consensus.Discovery
   alias Consensus.Discovery.Area
   alias Consensus.Discovery.Result
   alias Consensus.LinkPreview
+  alias ConsensusWeb.ItemDetails
 
   @impl true
-  def mount(%{"id" => id}, _session, socket) do
+  def mount(%{"id" => id} = params, _session, socket) do
     group = Activities.get_group!(socket.assigns.current_scope, parse_id(id))
 
-    if group.status == :draft do
-      {:ok, mount_editor(socket, group)}
-    else
-      # The pool is frozen once the vote opens (D-037): every write on this screen would
-      # be refused by `Consensus.Activities` anyway, and a screen full of controls that
-      # silently do nothing is worse than not being here. Same shape as
-      # `ConsensusWeb.GroupLive.Share` bouncing a `:draft` back to review — the lock is a
-      # route-level fact, not a disabled button.
-      {:ok,
-       socket
-       |> put_flash(:info, "Voting has started — the pool is locked.")
-       |> push_navigate(to: ~p"/groups/#{group}/review")}
+    cond do
+      group.status == :draft ->
+        {:ok, mount_editor(socket, group)}
+
+      # `t7-d` (D-060): after publish the editor is still reachable for ONE option, to fix
+      # its details — the name, description, photo and order stay frozen. Only
+      # `:edit_activity` routes carry an `activity_id`; the pool list itself still
+      # bounces, and a cancelled group has no winner card left to fix.
+      group.status != :cancelled and is_map_key(params, "activity_id") ->
+        {:ok, mount_editor(socket, group)}
+
+      true ->
+        # The pool is frozen once the vote opens (D-037): every write on this screen would
+        # be refused by `Consensus.Activities` anyway, and a screen full of controls that
+        # silently do nothing is worse than not being here. Same shape as
+        # `ConsensusWeb.GroupLive.Share` bouncing a `:draft` back to review — the lock is a
+        # route-level fact, not a disabled button.
+        {:ok,
+         socket
+         |> put_flash(:info, "Voting has started — the pool is locked.")
+         |> push_navigate(to: ~p"/groups/#{group}/review")}
     end
   end
 
   defp mount_editor(socket, group) do
     socket
     |> assign(:group, group)
+    |> assign(:locked?, group.status != :draft)
+    |> assign(:category_label, Discovery.category_label_for(group.activity_type))
+    |> assign(:edit_params, %{})
+    |> assign(:locating, false)
+    |> assign(:locate_failed, false)
+    |> assign(:return_to, ~p"/groups/#{group}/options")
     |> assign(:add_form, fresh_add_form())
     |> assign(:add_reset, 0)
     |> assign(:add_refocus, false)
@@ -157,6 +174,16 @@ defmodule ConsensusWeb.GroupLive.Options do
   # was `stream_insert`ed — so the pool silently rendered a single option while the footer
   # still counted three. Re-stream with `reset: true` on every arrival at `:index`, which
   # covers returning from a save, from Cancel, and from a direct patch alike.
+  # A locked editor (`t7-d`) mounts for one option only, and a live patch to the pool
+  # list must not hand a published group its add and delete controls — every write
+  # there is refused by `Consensus.Activities`, but a screen of dead controls is the
+  # thing `mount/3`'s bounce exists to avoid.
+  defp apply_action(%{assigns: %{locked?: true}} = socket, :index, _params) do
+    socket
+    |> put_flash(:info, "Voting has started — the pool is locked.")
+    |> push_navigate(to: ~p"/groups/#{socket.assigns.group}/review")
+  end
+
   defp apply_action(socket, :index, _params) do
     socket
     |> assign(:page_title, "Add the options")
@@ -171,8 +198,15 @@ defmodule ConsensusWeb.GroupLive.Options do
     |> stream(:activities, socket.assigns.group.activities, reset: true)
   end
 
-  defp apply_action(socket, :edit_activity, %{"activity_id" => raw_id}) do
+  defp apply_action(socket, :edit_activity, %{"activity_id" => raw_id} = params) do
+    socket = assign(socket, :return_to, return_to(socket.assigns, params))
+
     case find_activity(socket.assigns.group, raw_id) do
+      nil when socket.assigns.locked? ->
+        socket
+        |> put_flash(:error, "Could not find that option.")
+        |> push_navigate(to: socket.assigns.return_to)
+
       nil ->
         socket
         |> put_flash(:error, "Could not find that option.")
@@ -182,11 +216,22 @@ defmodule ConsensusWeb.GroupLive.Options do
         socket
         |> assign(:page_title, "Edit option")
         |> assign(:editing_activity, activity)
-        |> assign(:edit_form, to_form(Activity.changeset(activity, %{}), as: :activity))
+        |> assign(:edit_params, %{})
+        |> assign(:locating, false)
+        |> assign(:locate_failed, false)
+        |> assign(:edit_form, edit_form(socket.assigns, activity, %{}))
         |> assign(:image_form, image_url_form(activity))
         |> assign(:replacing_image, false)
     end
   end
+
+  # Where the editor goes back to. Before publish it is always the pool list (a patch
+  # within this LiveView). After publish there is no pool list to return to — `t7-d` is
+  # reached from `03 review` or the organizer's `05 results` — so `?from=results` picks
+  # the latter and anything else the former. A fixed allowlist, never a URL from params.
+  defp return_to(%{locked?: false, group: group}, _params), do: ~p"/groups/#{group}/options"
+  defp return_to(%{group: group}, %{"from" => "results"}), do: ~p"/groups/#{group}/results"
+  defp return_to(%{group: group}, _params), do: ~p"/groups/#{group}/review"
 
   ## Events — :index
 
@@ -302,30 +347,80 @@ defmodule ConsensusWeb.GroupLive.Options do
   ## Events — :edit_activity
 
   def handle_event("validate", %{"activity" => params}, socket) do
-    changeset =
-      socket.assigns.editing_activity
-      |> Activity.changeset(params)
-      |> Map.put(:action, :validate)
-
-    {:noreply, assign(socket, :edit_form, to_form(changeset, as: :activity))}
+    {:noreply, put_edit_params(socket, params, :validate)}
   end
 
+  # Before publish, one write for the name, description and details
+  # (`update_activity_and_details/3`); after, details only (`update_activity_details/3`
+  # — the name and description are not even in the form then). A website that changed
+  # re-runs the enrichment, before publish only: after it, the photo and description
+  # it would fill are frozen.
   def handle_event("save", %{"activity" => params}, socket) do
-    case Activities.update_activity(
-           socket.assigns.current_scope,
-           socket.assigns.editing_activity,
-           params
-         ) do
-      {:ok, activity} ->
-        {:noreply,
-         socket
-         |> put_activity_assign(activity)
-         |> stream_insert(:activities, activity)
-         |> put_flash(:info, "#{activity.name} saved.")
-         |> push_patch(to: ~p"/groups/#{socket.assigns.group}/options")}
+    %{current_scope: scope, editing_activity: before, locked?: locked?} = socket.assigns
+    params = Map.merge(socket.assigns.edit_params, params)
 
-      {:error, changeset} ->
+    # A share being turned off ends BEFORE the write: the write syncs a shared option's
+    # row, so the other order would publish the very edit (a home address, say) the
+    # organizer is withdrawing in the same Save. If the unshare cannot land, nothing is
+    # saved.
+    result =
+      with {:ok, before} <- unshare_first(scope, before, params) do
+        if locked?,
+          do: Activities.update_activity_details(scope, before, params),
+          else: Activities.update_activity_and_details(scope, before, params)
+      end
+
+    case result do
+      {:ok, activity} ->
+        {activity, socket} = apply_share_intent(socket, activity, params)
+
+        socket =
+          socket
+          |> put_activity_assign(activity)
+          |> stream_insert(:activities, activity)
+          |> put_flash(:info, "#{activity.name} saved.")
+          |> maybe_refetch_saved(before, activity)
+
+        {:noreply,
+         if(locked?,
+           do: push_navigate(socket, to: socket.assigns.return_to),
+           else: push_patch(socket, to: ~p"/groups/#{socket.assigns.group}/options")
+         )}
+
+      {:error, %Ecto.Changeset{} = changeset} ->
         {:noreply, assign(socket, :edit_form, to_form(changeset, as: :activity))}
+
+      {:error, :unshare_failed} ->
+        {:noreply,
+         put_flash(socket, :error, "Couldn't turn sharing off, so nothing was saved. Try again.")}
+
+      {:error, _reason} ->
+        {:noreply, put_flash(socket, :error, "Could not save that option.")}
+    end
+  end
+
+  # The located state's **Remove** (`t7-a`): clears the pending location; Save stores it.
+  def handle_event("clear_location", _params, socket) do
+    {:noreply,
+     socket
+     |> assign(:locate_failed, false)
+     |> put_edit_params(%{"latitude" => "", "longitude" => ""}, :validate)}
+  end
+
+  # **Find from address** (`t7-b`): one geocode of the address as currently typed, from
+  # `start_async` (invariant 13), submit-only like the area prompt. Unlike every other
+  # assist failure this one is shown — the organizer pressed a button (D-060).
+  def handle_event("find_location", _params, socket) do
+    address = String.trim(to_string(socket.assigns.edit_form[:address].value))
+
+    if address == "" or socket.assigns.locating do
+      {:noreply, socket}
+    else
+      {:noreply,
+       socket
+       |> assign(:locating, true)
+       |> assign(:locate_failed, false)
+       |> start_async(:locate, fn -> {address, Discovery.Geocoder.geocode_point(address)} end)}
     end
   end
 
@@ -412,9 +507,22 @@ defmodule ConsensusWeb.GroupLive.Options do
     {:noreply, socket}
   end
 
-  ## Async — link preview
+  ## Async — Find from address (t7-b)
 
   @impl true
+  def handle_async(:locate, {:ok, {_address, {:ok, {lat, lon}}}}, socket) do
+    {:noreply,
+     socket
+     |> assign(:locating, false)
+     |> put_edit_params(%{"latitude" => to_string(lat), "longitude" => to_string(lon)}, :validate)}
+  end
+
+  def handle_async(:locate, _failed, socket) do
+    {:noreply, socket |> assign(:locating, false) |> assign(:locate_failed, true)}
+  end
+
+  ## Async — link preview
+
   def handle_async({:link_preview, activity_id, provisional_name}, {:ok, {:ok, preview}}, socket) do
     {:noreply, apply_preview(socket, activity_id, preview, provisional_name)}
   end
@@ -660,14 +768,14 @@ defmodule ConsensusWeb.GroupLive.Options do
     |> restream(activity_id)
   end
 
+  # The name, website and every detail the provider lets us keep go in one write
+  # (D-060). `persistable_attrs/1` is the retention firewall: it reads only the
+  # fields the provider declared in `retained_fields/0`.
   defp confirm_suggestion(socket, %Activity{} = activity, %Result{} = suggestion) do
-    attrs =
-      case suggestion.website_url do
-        nil -> %{name: suggestion.name}
-        url -> %{name: suggestion.name, source_url: url}
-      end
+    attrs = Result.persistable_attrs(suggestion)
+    scope = socket.assigns.current_scope
 
-    case Activities.update_activity(socket.assigns.current_scope, activity, attrs) do
+    case Activities.adopt_lookup_result(scope, activity, attrs) do
       {:ok, updated} ->
         socket =
           socket
@@ -678,7 +786,14 @@ defmodule ConsensusWeb.GroupLive.Options do
           |> put_activity_assign(updated)
           |> stream_insert(:activities, updated)
 
-        {:noreply, maybe_enrich_confirmed(socket, updated, suggestion)}
+        # A shared-catalog row may already bring the photo and description someone
+        # shared (D-060 Q6); fetching the site again would replace them.
+        enrich_url =
+          if Map.has_key?(attrs, :image_url) or Map.has_key?(attrs, :description),
+            do: nil,
+            else: Map.get(attrs, :source_url)
+
+        {:noreply, maybe_enrich_confirmed(socket, updated, enrich_url)}
 
       {:error, _changeset} ->
         # Organizer action, not a lookup — the silence rules don't bind it, and a
@@ -693,12 +808,12 @@ defmodule ConsensusWeb.GroupLive.Options do
   # the organizer just pressed `Use this` on, so the fetch is `:never` allowed to
   # replace it (observed live: og:title "Vernick Philadelphia" overwrote the confirmed
   # "Vernick Food & Drink"). Photo/description/metadata still fill in. Without a
-  # website: name + address were the whole win; nothing to fetch.
-  defp maybe_enrich_confirmed(socket, %Activity{}, %Result{website_url: nil}) do
-    socket
-  end
+  # website: name + address were the whole win; nothing to fetch. Keyed on the URL that
+  # was actually *persisted*, not the one displayed: a provider that may not let us
+  # keep the website does not get it fetched either.
+  defp maybe_enrich_confirmed(socket, %Activity{}, nil), do: socket
 
-  defp maybe_enrich_confirmed(socket, %Activity{} = updated, %Result{website_url: url}) do
+  defp maybe_enrich_confirmed(socket, %Activity{} = updated, url) when is_binary(url) do
     socket
     |> assign(:assist_enriching, MapSet.put(socket.assigns.assist_enriching, updated.id))
     |> mark_fetching(updated.id)
@@ -933,6 +1048,110 @@ defmodule ConsensusWeb.GroupLive.Options do
     to_form(%{"url" => image_url || ""}, as: :image)
   end
 
+  # The editor's changeset. After publish only the details are a form at all — the
+  # name and description render as locked panels (`t7-d`) and are not in the params.
+  defp edit_form(%{locked?: true}, activity, params),
+    do: to_form(Activity.details_changeset(activity, params), as: :activity)
+
+  defp edit_form(_assigns, activity, params) do
+    activity
+    |> Activity.changeset(params)
+    |> Activity.details_changeset(params)
+    |> to_form(as: :activity)
+  end
+
+  # Typed params plus anything the server set (a found or removed location), kept so a
+  # later `validate` from the browser and the server-side changes compose.
+  defp put_edit_params(socket, params, action) do
+    params = Map.merge(socket.assigns.edit_params, params)
+    form = edit_form(socket.assigns, socket.assigns.editing_activity, params)
+
+    socket
+    |> assign(:edit_params, params)
+    |> assign(:edit_form, %{form | source: Map.put(form.source, :action, action)})
+  end
+
+  defp unshare_first(scope, %Activity{shared_to_catalog_at: %DateTime{}} = activity, %{
+         "share" => "false"
+       }) do
+    case Catalog.unshare_activity(scope, activity) do
+      {:ok, unshared} -> {:ok, unshared}
+      {:error, _reason} -> {:error, :unshare_failed}
+    end
+  end
+
+  defp unshare_first(_scope, activity, _params), do: {:ok, activity}
+
+  # **Let anyone find this** applies on Save, after the details are written, so a share
+  # always snapshots what the organizer just saved — never a half-typed field. (Turning
+  # it off happened before the write, in `unshare_first/3`.) A share that the catalog
+  # refuses keeps the saved option and says so.
+  defp apply_share_intent(socket, activity, params) do
+    wanted? = params["share"] == "true"
+    shared? = not is_nil(activity.shared_to_catalog_at)
+    scope = socket.assigns.current_scope
+
+    result =
+      cond do
+        not Map.has_key?(params, "share") -> :unchanged
+        wanted? and not shared? -> Catalog.share_activity(scope, activity)
+        shared? and not wanted? -> Catalog.unshare_activity(scope, activity)
+        true -> :unchanged
+      end
+
+    case result do
+      :unchanged -> {activity, socket}
+      {:ok, %Activity{} = updated} -> {updated, socket}
+      {:error, _reason} -> {activity, put_flash(socket, :error, "Saved, but couldn't share it.")}
+    end
+  end
+
+  # The toggle's state: what the organizer last set in this form, else what is stored.
+  defp share_on?(%{edit_params: %{"share" => value}}), do: value == "true"
+  defp share_on?(%{editing_activity: activity}), do: not is_nil(activity.shared_to_catalog_at)
+
+  defp form_findable?(form) do
+    Catalog.findable?(%{
+      source_url: blank_to_nil(form[:source_url].value),
+      address: blank_to_nil(form[:address].value),
+      latitude: elem(form_location(form) || {nil, nil}, 0),
+      longitude: elem(form_location(form) || {nil, nil}, 1)
+    })
+  end
+
+  defp blank_to_nil(value) do
+    case String.trim(to_string(value)) do
+      "" -> nil
+      trimmed -> trimmed
+    end
+  end
+
+  defp maybe_refetch_saved(%{assigns: %{locked?: true}} = socket, _before, _after), do: socket
+
+  defp maybe_refetch_saved(socket, %Activity{source_url: same}, %Activity{source_url: same}),
+    do: socket
+
+  defp maybe_refetch_saved(socket, _before, %Activity{source_url: nil}), do: socket
+
+  defp maybe_refetch_saved(socket, _before, %Activity{id: id, source_url: url}) do
+    socket
+    |> mark_fetching(id)
+    |> start_async({:refetch, id}, fn -> LinkPreview.fetch(url) end)
+  end
+
+  defp counter_length(form, field) do
+    form[field].value |> to_string() |> String.length()
+  end
+
+  defp form_location(form) do
+    with {lat, ""} <- form[:latitude].value |> to_string() |> Float.parse(),
+         {lon, ""} <- form[:longitude].value |> to_string() |> Float.parse() do
+      {lat, lon}
+    else
+      _ -> nil
+    end
+  end
+
   defp description_length(form) do
     form[:description].value |> to_string() |> String.length()
   end
@@ -945,9 +1164,13 @@ defmodule ConsensusWeb.GroupLive.Options do
   # `:index` branch's "add an option" field commits on submit and holds nothing across a
   # navigation that anyone would miss. The image URL form is excluded for the same reason —
   # it is a one-field submit, and `@replacing_image` resets on its own.
-  defp edit_draft?(%{edit_form: form, editing_activity: activity}) do
-    field_differs?(form[:name].value, activity.name) or
-      field_differs?(form[:description].value, activity.description)
+  defp edit_draft?(%{edit_form: form, editing_activity: activity, locked?: locked?} = assigns) do
+    own_fields = if locked?, do: [], else: [:name, :description]
+
+    share_on?(assigns) != not is_nil(activity.shared_to_catalog_at) or
+      Enum.any?(own_fields ++ Activity.detail_fields(), fn field ->
+        field_differs?(form[field].value, Map.fetch!(activity, field))
+      end)
   end
 
   defp field_differs?(typed, stored),
@@ -1065,14 +1288,10 @@ defmodule ConsensusWeb.GroupLive.Options do
     ]
   end
 
-  # The one-match row's cuisine chip (02c) — only when the provider supplied one.
-  # `Result.chips` is display-only `[{label, value}]`; anything else renders nothing.
-  defp suggestion_cuisine(%Result{chips: chips}) when is_list(chips) do
-    case List.keyfind(chips, "cuisine", 0) do
-      {"cuisine", value} when is_binary(value) and value != "" -> String.capitalize(value)
-      _ -> nil
-    end
-  end
+  # The one-match row's category chip (02c) — only when the provider supplied one.
+  defp suggestion_cuisine(%Result{category: category})
+       when is_binary(category) and category != "",
+       do: String.capitalize(category)
 
   defp suggestion_cuisine(_result), do: nil
 
@@ -1126,6 +1345,134 @@ defmodule ConsensusWeb.GroupLive.Options do
     ]
   end
 
+  # The Details fields (`t7-a`): the editor's field treatment at 16px (invariant 18),
+  # with `t7-a`'s 10px vertical padding.
+  defp detail_input_class do
+    "w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-2.5 text-[16px] shadow-field focus:outline-none"
+  end
+
+  defp blank?(value), do: String.trim(to_string(value)) == ""
+
+  attr :form, Phoenix.HTML.Form, required: true
+  attr :field, :atom, required: true
+  attr :max, :integer, required: true
+
+  # The live `41/200` counter in a label row — the description's pattern (invariant 11:
+  # the changeset is the limit, this is the warning, and it turns tangerine past it).
+  defp counter(assigns) do
+    assigns = assign(assigns, :length, counter_length(assigns.form, assigns.field))
+
+    ~H"""
+    <span
+      class={[
+        "font-mono text-[10px]",
+        if(@length > @max, do: "font-semibold text-tangerine", else: "text-muted")
+      ]}
+      aria-live="polite"
+    >
+      {@length}/{@max}
+    </span>
+    """
+  end
+
+  attr :on, :boolean, required: true
+  attr :findable, :boolean, required: true
+
+  # `t7-c`: **Let anyone find this**, a form field applied on Save. Ink, not violet,
+  # when on (violet stays votes' and the assist's). Disabled until the option has a
+  # website, address or location — a bare name has nothing to find and is the likeliest
+  # thing to be private — and the full copy wraps in every state, so the word
+  # "description" (the one free-text field shared, Q6) is never cut. The hidden "false"
+  # is what turns a share off, and what a disabled checkbox falls back to.
+  defp share_toggle(assigns) do
+    ~H"""
+    <label
+      id="share-toggle"
+      class={[
+        "flex items-start gap-3 rounded-2xl border-2 px-[13px] py-3",
+        if(@findable,
+          do: "cursor-pointer border-ink bg-white shadow-field",
+          else: "cursor-not-allowed border-ink-30 bg-white"
+        )
+      ]}
+    >
+      <input type="hidden" name="activity[share]" value="false" />
+      <input
+        type="checkbox"
+        name="activity[share]"
+        value="true"
+        role="switch"
+        checked={@on and @findable}
+        disabled={not @findable}
+        class="peer sr-only"
+      />
+      <span class="flex min-w-0 flex-1 flex-col gap-[3px]">
+        <span class={["text-[14px] font-bold", if(@findable, do: "text-ink", else: "text-faint")]}>
+          Let anyone find this
+        </span>
+        <span class={[
+          "text-[12px] leading-[1.4]",
+          if(@findable, do: "text-ink-soft", else: "text-faint")
+        ]}>
+          Shares the name, description, website, phone, address, location, category and photo, so anyone planning nearby can find it.
+        </span>
+        <span
+          :if={not @findable}
+          class="mt-[3px] text-[11.5px] font-semibold leading-[1.35] text-ink-soft"
+        >
+          Add a website or address first.
+        </span>
+      </span>
+      <span
+        aria-hidden="true"
+        class={[
+          "mt-px flex h-[27px] w-[46px] flex-none items-center rounded-full px-[3px]",
+          "peer-focus-visible:outline-2 peer-focus-visible:outline-offset-2 peer-focus-visible:outline-mint",
+          cond do
+            not @findable -> "justify-start border-2 border-dashed border-ink/35"
+            @on -> "justify-end border-2 border-ink bg-ink"
+            true -> "justify-start border-2 border-ink bg-canvas/40"
+          end
+        ]}
+      >
+        <span class={[
+          "size-[19px] rounded-full",
+          if(@findable, do: "border-[1.5px] border-ink bg-white", else: "bg-ink-12")
+        ]}></span>
+      </span>
+    </label>
+    """
+  end
+
+  attr :id, :string, required: true
+  attr :label, :string, required: true
+  attr :bold, :boolean, default: false
+  slot :inner_block, required: true
+
+  # `t7-d`'s locked field: a flat tinted panel with a LOCKED tag — no border, no mint
+  # shadow, no greyed-out input chrome (which reads as broken).
+  defp locked_field(assigns) do
+    ~H"""
+    <div class="flex flex-col gap-1.5">
+      <div class="flex items-baseline justify-between">
+        <.eyebrow>{@label}</.eyebrow>
+        <span class="font-mono text-[10px] font-medium text-muted">LOCKED</span>
+      </div>
+      <div
+        id={@id}
+        aria-readonly="true"
+        class={[
+          "min-h-11 rounded-[14px] border-2 border-transparent bg-canvas/50 px-3.5 py-2.5",
+          "text-[16px] leading-[1.4] text-ink-soft",
+          @bold && "font-bold"
+        ]}
+      >
+        {render_slot(@inner_block)}
+      </div>
+    </div>
+    """
+  end
+
   @impl true
   def render(%{live_action: :edit_activity, editing_activity: activity} = assigns)
       when not is_nil(activity) do
@@ -1141,7 +1488,8 @@ defmodule ConsensusWeb.GroupLive.Options do
       flash={@flash}
       current_path={@current_path}
       current_scope={@current_scope}
-      back_patch={~p"/groups/#{@group}/options"}
+      back_patch={if(!@locked?, do: ~p"/groups/#{@group}/options")}
+      back={if(@locked?, do: @return_to)}
       back_confirm={edit_draft?(assigns) && edit_discard_prompt()}
       footer_confirm={edit_draft?(assigns) && edit_discard_prompt()}
     >
@@ -1149,6 +1497,8 @@ defmodule ConsensusWeb.GroupLive.Options do
         <div class="flex items-center gap-2.5">
           <h1 class="text-[15px] font-bold text-ink">Edit option</h1>
         </div>
+        <%!-- `t7-d`: no Remove once the vote is open — deleting an option would change
+              what people voted on (and `votes.activity_id` cascades, D-037). --%>
         <%!-- Ink, not tangerine. Tangerine appears exactly once per screen as the one
               forward action, and on this screen that is "Save option"; a destructive
               control wearing the same colour as the forward one is the house rule
@@ -1171,6 +1521,7 @@ defmodule ConsensusWeb.GroupLive.Options do
               carries it: `:hover` does not exist on touch, so on a phone the destructive
               control acknowledged a tap in no way at all until the round-trip landed. --%>
         <button
+          :if={!@locked?}
           type="button"
           phx-click="remove_option"
           data-confirm={"Remove #{@editing_activity.name}? This can't be undone."}
@@ -1186,8 +1537,17 @@ defmodule ConsensusWeb.GroupLive.Options do
         </button>
       </div>
 
+      <%!-- `t7-d`'s one quiet line saying why most of this screen is read-only. --%>
+      <p
+        :if={@locked?}
+        id="edit-locked-note"
+        class="border-b-2 border-ink-12 bg-surface px-5 py-2.5 text-[12px] leading-[1.4] text-ink-soft"
+      >
+        Voting is open. You can still fix the details, but the options people voted on can't change.
+      </p>
+
       <div class="flex min-h-0 flex-1 flex-col gap-4 overflow-y-auto px-5 py-4">
-        <div class="flex flex-col gap-2">
+        <div :if={!@locked?} class="flex flex-col gap-2">
           <div class="flex items-baseline justify-between">
             <.eyebrow>Photo</.eyebrow>
             <span class="font-mono text-[10px] text-muted">OPTIONAL</span>
@@ -1264,6 +1624,16 @@ defmodule ConsensusWeb.GroupLive.Options do
           </.form>
         </div>
 
+        <%!-- `t7-d`: the photo stays as content — 96px, no Replace/Remove, no shadow. --%>
+        <.photo_frame
+          :if={@locked?}
+          src={@editing_activity.image_url}
+          alt={@editing_activity.name}
+          height="h-24"
+          bare
+          class="rounded-2xl border-2 border-ink"
+        />
+
         <.form
           for={@edit_form}
           id="edit-option-form"
@@ -1271,65 +1641,171 @@ defmodule ConsensusWeb.GroupLive.Options do
           phx-submit="save"
           class="flex flex-col gap-4"
         >
-          <div class="flex flex-col gap-1.5">
-            <.eyebrow>Name</.eyebrow>
-            <.input
-              field={@edit_form[:name]}
-              type="text"
-              class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] font-bold shadow-field focus:outline-none"
-            />
-          </div>
-
-          <div class="flex flex-col gap-1.5">
-            <div class="flex items-baseline justify-between">
-              <.eyebrow>Description</.eyebrow>
-              <span
-                class={[
-                  "font-mono text-[10px]",
-                  if(description_length(@edit_form) > Activity.max_description_length(),
-                    do: "font-semibold text-tangerine",
-                    else: "text-muted"
-                  )
-                ]}
-                aria-live="polite"
-              >
-                {description_length(@edit_form)}/{Activity.max_description_length()}
-              </span>
+          <%= if @locked? do %>
+            <.locked_field id="locked-name" label="Name" bold>{@editing_activity.name}</.locked_field>
+            <.locked_field id="locked-description" label="Description">
+              {@editing_activity.description}
+            </.locked_field>
+          <% else %>
+            <div class="flex flex-col gap-1.5">
+              <.eyebrow>Name</.eyebrow>
+              <.input
+                field={@edit_form[:name]}
+                type="text"
+                class="w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] font-bold shadow-field focus:outline-none"
+              />
             </div>
-            <.input
-              field={@edit_form[:description]}
-              type="textarea"
-              class="min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] leading-[1.45] shadow-field focus:outline-none"
-            />
-            <%!-- "vote", not "rank". Nothing in this app ranks anything —
-                  `JoinLive.Ballot`'s moduledoc says "there is no ranking anywhere in here"
-                  and `Consensus.Voting.Vote`'s says "there is deliberately no rank or weight
-                  column here". This was the last user-visible instance in `lib/`; keep
-                  `grep -rni rank lib/` clean. --%>
-            <p class="text-[11px] text-muted">Everyone sees this when they vote.</p>
+
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-baseline justify-between">
+                <.eyebrow>Description</.eyebrow>
+                <span
+                  class={[
+                    "font-mono text-[10px]",
+                    if(description_length(@edit_form) > Activity.max_description_length(),
+                      do: "font-semibold text-tangerine",
+                      else: "text-muted"
+                    )
+                  ]}
+                  aria-live="polite"
+                >
+                  {description_length(@edit_form)}/{Activity.max_description_length()}
+                </span>
+              </div>
+              <.input
+                field={@edit_form[:description]}
+                type="textarea"
+                class="min-h-[74px] w-full rounded-2xl border-2 border-ink bg-white px-3.5 py-3 text-[16px] leading-[1.45] shadow-field focus:outline-none"
+              />
+              <%!-- "vote", not "rank". Nothing in this app ranks anything —
+                      `JoinLive.Ballot`'s moduledoc says "there is no ranking anywhere in here"
+                      and `Consensus.Voting.Vote`'s says "there is deliberately no rank or weight
+                      column here". This was the last user-visible instance in `lib/`; keep
+                      `grep -rni rank lib/` clean. --%>
+              <p class="text-[11px] text-muted">Everyone sees this when they vote.</p>
+            </div>
+          <% end %>
+
+          <%!-- DETAILS (`t7-a`, D-060): a dashed rule and a heading inside the same form,
+                because 02b has no separate card container. One Save writes it all. --%>
+          <div class="flex flex-col gap-4 border-t-2 border-dashed border-ink-30 pt-4">
+            <.eyebrow>Details</.eyebrow>
+
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-baseline justify-between">
+                <.eyebrow>Website</.eyebrow>
+                <%!-- Refetch moved from the old dashed row to this label row (`t7-a`). Not
+                      offered after publish: it refills the photo and description, which are
+                      frozen by then. --%>
+                <button
+                  :if={!@locked? && @editing_activity.source_url}
+                  type="button"
+                  phx-click="refetch"
+                  disabled={MapSet.member?(@fetching, @editing_activity.id)}
+                  class="relative text-[11px] font-semibold text-tangerine hover:underline disabled:cursor-not-allowed disabled:opacity-60 before:absolute before:-inset-x-2 before:-inset-y-3 before:content-['']"
+                >
+                  {if MapSet.member?(@fetching, @editing_activity.id),
+                    do: "Refetching…",
+                    else: "↻ Refetch"}
+                </button>
+              </div>
+              <.input
+                field={@edit_form[:source_url]}
+                type="text"
+                inputmode="url"
+                autocomplete="url"
+                placeholder="https://…"
+                class={detail_input_class()}
+              />
+              <p :if={@editing_activity.source_url} class="font-mono text-[10.5px] text-muted">
+                {source_link_note(@editing_activity, @fetching)}
+              </p>
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+              <.eyebrow>Phone</.eyebrow>
+              <.input
+                field={@edit_form[:phone]}
+                type="tel"
+                autocomplete="tel"
+                class={detail_input_class()}
+              />
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-baseline justify-between">
+                <.eyebrow>Address</.eyebrow>
+                <.counter form={@edit_form} field={:address} max={Activity.max_address_length()} />
+              </div>
+              <.input
+                field={@edit_form[:address]}
+                type="text"
+                autocomplete="street-address"
+                class={detail_input_class()}
+              />
+            </div>
+
+            <div class="flex flex-col gap-1.5">
+              <div class="flex items-baseline justify-between">
+                <%!-- The label is registry data — "Cuisine" for dining, "Kind" for a type
+                      without one (invariant 12; `Discovery.category_label_for/1`). --%>
+                <.eyebrow>{@category_label}</.eyebrow>
+                <.counter form={@edit_form} field={:category} max={Activity.max_category_length()} />
+              </div>
+              <.input field={@edit_form[:category]} type="text" class={detail_input_class()} />
+            </div>
+
+            <div id="edit-location" class="flex flex-col gap-1.5">
+              <.eyebrow>Location</.eyebrow>
+              <.input field={@edit_form[:latitude]} type="hidden" />
+              <.input field={@edit_form[:longitude]} type="hidden" />
+              <%= if location = form_location(@edit_form) do %>
+                <%!-- Never the numbers (`t7-a`): a text state and a plain link. --%>
+                <div class="flex flex-wrap items-center gap-2 rounded-[14px] border-2 border-ink bg-white px-3.5 py-[11px] text-[14px] font-semibold shadow-field">
+                  <span>📍 On the map</span>
+                  <span class="text-faint-soft" aria-hidden="true">·</span>
+                  <a
+                    href={ItemDetails.map_href(elem(location, 0), elem(location, 1))}
+                    target="_blank"
+                    rel="noopener noreferrer"
+                    class="text-ink underline hover:text-tangerine active:text-tangerine"
+                  >
+                    Open in Maps
+                  </a>
+                  <span class="text-faint-soft" aria-hidden="true">·</span>
+                  <button
+                    type="button"
+                    phx-click="clear_location"
+                    class="text-muted underline hover:text-tangerine active:text-tangerine"
+                  >
+                    Remove
+                  </button>
+                </div>
+              <% else %>
+                <div class="flex flex-wrap items-center gap-2.5">
+                  <span class="text-[13px] text-muted">Not on the map yet</span>
+                  <button
+                    type="button"
+                    id="find-location"
+                    phx-click="find_location"
+                    disabled={@locating || blank?(@edit_form[:address].value)}
+                    class="inline-flex flex-none items-center gap-[7px] rounded-xl border-2 border-ink bg-white px-[13px] py-[9px] text-[13px] font-semibold text-ink shadow-sticker-2 press-2 disabled:cursor-not-allowed disabled:opacity-60"
+                  >
+                    {if @locating, do: "Finding…", else: "Find from address"}
+                  </button>
+                </div>
+                <%!-- Ink, not tangerine (`t7-b`): tangerine stays Save option's. --%>
+                <p :if={@locate_failed} id="locate-failed" class="text-[12px] text-ink">
+                  Couldn't find that address.
+                </p>
+              <% end %>
+            </div>
+
+            <.share_toggle on={share_on?(assigns)} findable={form_findable?(@edit_form)} />
+
+            <ItemDetails.osm_credit :if={ItemDetails.osm_derived?(@editing_activity)} />
           </div>
         </.form>
-
-        <div
-          :if={@editing_activity.source_url}
-          class="flex items-center gap-2.5 rounded-2xl border-2 border-dashed border-ink/35 bg-surface px-3.5 py-3"
-        >
-          <span aria-hidden="true">🔗</span>
-          <div class="min-w-0 flex-1">
-            <p class="truncate text-[11.5px] font-medium">{@editing_activity.source_url}</p>
-            <p class="font-mono text-[10.5px] text-muted">
-              {source_link_note(@editing_activity, @fetching)}
-            </p>
-          </div>
-          <button
-            type="button"
-            phx-click="refetch"
-            disabled={MapSet.member?(@fetching, @editing_activity.id)}
-            class="shrink-0 text-[11px] font-semibold text-muted hover:text-tangerine disabled:cursor-not-allowed disabled:opacity-60"
-          >
-            {if MapSet.member?(@fetching, @editing_activity.id), do: "Refetching…", else: "Refetch"}
-          </button>
-        </div>
       </div>
 
       <%!-- "Cancel" is gone. It navigated to `/groups/:id/options` — the same place the
@@ -1518,8 +1994,24 @@ defmodule ConsensusWeb.GroupLive.Options do
                       the spans (the `for` block's newlines) is the only break
                       opportunity — so a narrow card wraps at the separator, never
                       inside a phrase. --%>
+                <%!-- `t7-e` (D-060): a card with details shows the category chip and street
+                      address where the provenance line was — except during the 02e
+                      enriching interval, whose "details arriving" line keeps its slot
+                      until the fetch lands (owner ruling, 2026-10-25). --%>
+                <ItemDetails.detail_line
+                  :if={
+                    !assist_looking?(assigns, activity) && !assist_enriching?(assigns, activity) &&
+                      ItemDetails.has_detail_line?(activity)
+                  }
+                  activity={activity}
+                  class="mt-[3px]"
+                />
                 <p
-                  :if={!assist_looking?(assigns, activity)}
+                  :if={
+                    !assist_looking?(assigns, activity) &&
+                      (assist_enriching?(assigns, activity) ||
+                         !ItemDetails.has_detail_line?(activity))
+                  }
                   class="font-mono text-[10.5px] text-muted"
                 >
                   <%= for phrase <- meta_phrases(card_meta_text(assigns, activity)) do %>
@@ -1648,15 +2140,20 @@ defmodule ConsensusWeb.GroupLive.Options do
                     <% end %>
                     <%!-- The frame links ONLY the contributors phrase; the "Places from "
                         prefix stays plain text. Both halves and the ODbL href come from
-                        the provider via `Discovery.attribution_for/1` — nothing here is
-                        hardcoded. --%>
-                    <p :if={@assist_attribution} class="font-mono text-[9px] text-faint">
-                      {@assist_attribution.prefix}<a
-                        href={@assist_attribution.url}
+                        the provider — per result set since D-060
+                        (`Discovery.attribution_for_results/1`): a shared-catalog answer
+                        made only of organizer-entered rows owes no OSM credit, one with an
+                        OSM-derived row does. Nothing here is hardcoded. --%>
+                    <p
+                      :if={attribution = Discovery.attribution_for_results(results)}
+                      class="font-mono text-[9px] text-faint"
+                    >
+                      {attribution.prefix}<a
+                        href={attribution.url}
                         target="_blank"
                         rel="noopener noreferrer"
                         class="underline underline-offset-2 hover:text-tangerine"
-                      >{@assist_attribution.text}</a>
+                      >{attribution.text}</a>
                     </p>
                   </div>
                 </div>
@@ -1740,6 +2237,13 @@ defmodule ConsensusWeb.GroupLive.Options do
             <% end %>
           </div>
         </div>
+        <%!-- Once at the foot of the list, not per card (`t7-e`), whenever any card's
+              details came from OSM. --%>
+        <ItemDetails.osm_credit
+          :if={ItemDetails.osm_derived?(@group.activities)}
+          id="pool-osm-credit"
+          class="pb-2"
+        />
       </div>
 
       <div class="flex items-center gap-3 border-t-2 border-ink bg-white px-5 py-4">

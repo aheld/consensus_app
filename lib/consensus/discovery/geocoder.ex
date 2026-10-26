@@ -55,13 +55,32 @@ defmodule Consensus.Discovery.Geocoder do
   `"fishtown"` cost one request between them.
   """
   @spec geocode(String.t()) :: {:ok, Area.t()} | {:error, atom()}
-  def geocode(area_string) when is_binary(area_string) do
-    case String.trim(area_string) do
+  def geocode(area_string) when is_binary(area_string),
+    do: cached_geocode(area_string, :geocode, &build_area/2)
+
+  def geocode(_area_string), do: {:error, :invalid_area}
+
+  @doc """
+  Geocodes one option's typed address (`02b`'s **Find from address**, D-060) into
+  `{:ok, {latitude, longitude}}` — the first result's point, not a bounding box.
+
+  Same request, same gate, same cache (under its own `{:geocode_point, query}` key)
+  and the same submit-only rule as `geocode/1`: one call per press, from
+  `start_async/3`. Same error tags; never raises.
+  """
+  @spec geocode_point(String.t()) :: {:ok, {float(), float()}} | {:error, atom()}
+  def geocode_point(address) when is_binary(address),
+    do: cached_geocode(address, :geocode_point, &build_point/2)
+
+  def geocode_point(_address), do: {:error, :invalid_area}
+
+  defp cached_geocode(raw, kind, build) do
+    case String.trim(raw) do
       "" ->
         {:error, :invalid_area}
 
       query ->
-        cache_key = {:geocode, String.downcase(query)}
+        cache_key = {kind, String.downcase(query)}
 
         # Spanned around the cache, not around the HTTP call: a success is
         # cached for ~a year, so the overwhelming majority of geocodes never
@@ -73,7 +92,7 @@ defmodule Consensus.Discovery.Geocoder do
               {result, geocode_stop_metadata(query, result, :hit)}
 
             :miss ->
-              {result, cacheable?} = safe_lookup(query)
+              {result, cacheable?} = safe_lookup(query, build)
 
               if cacheable? do
                 Cache.put(cache_key, result, ttl_ms: @success_ttl_ms, error_ttl_ms: @error_ttl_ms)
@@ -84,8 +103,6 @@ defmodule Consensus.Discovery.Geocoder do
         end)
     end
   end
-
-  def geocode(_area_string), do: {:error, :invalid_area}
 
   ## Telemetry shaping (see Consensus.Discovery.Telemetry)
 
@@ -102,6 +119,17 @@ defmodule Consensus.Discovery.Geocoder do
     }
   end
 
+  defp geocode_stop_metadata(query, {:ok, {lat, lon}}, cache) do
+    %{
+      query: query,
+      url: request_url(query),
+      outcome: :ok,
+      cache: cache,
+      name: "point",
+      bbox: "#{lat},#{lon}"
+    }
+  end
+
   defp geocode_stop_metadata(query, {:error, reason}, cache),
     do: %{
       query: query,
@@ -113,8 +141,8 @@ defmodule Consensus.Discovery.Geocoder do
 
   ## Lookup
 
-  defp safe_lookup(query) do
-    perform_lookup(query)
+  defp safe_lookup(query, build) do
+    perform_lookup(query, build)
   rescue
     exception ->
       Logger.error(
@@ -150,9 +178,9 @@ defmodule Consensus.Discovery.Geocoder do
   end
 
   # Returns {result, cacheable?}. Only a gate refusal is not cacheable.
-  defp perform_lookup(query) do
+  defp perform_lookup(query, build) do
     case Nominatim.search(request_params(query)) do
-      {:ok, [place | _rest]} -> {build_area(query, place), true}
+      {:ok, [place | _rest]} -> {build.(query, place), true}
       {:ok, []} -> {{:error, :not_found}, true}
       {:error, :busy} -> {{:error, :geocode_failed}, false}
       {:error, _reason} -> {{:error, :geocode_failed}, true}
@@ -175,6 +203,17 @@ defmodule Consensus.Discovery.Geocoder do
   end
 
   defp build_area(_query, _place), do: {:error, :geocode_failed}
+
+  defp build_point(_query, %{"lat" => lat, "lon" => lon}) do
+    with {:ok, lat} when lat >= -90 and lat <= 90 <- to_coord(lat),
+         {:ok, lon} when lon >= -180 and lon <= 180 <- to_coord(lon) do
+      {:ok, {lat / 1, lon / 1}}
+    else
+      _ -> {:error, :geocode_failed}
+    end
+  end
+
+  defp build_point(_query, _place), do: {:error, :geocode_failed}
 
   defp to_coord(value) when is_number(value), do: {:ok, value}
 

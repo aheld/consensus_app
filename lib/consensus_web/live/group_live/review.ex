@@ -32,6 +32,7 @@ defmodule ConsensusWeb.GroupLive.Review do
   alias Consensus.Activities
   alias Consensus.Deadlines
   alias Consensus.Voting
+  alias ConsensusWeb.ItemDetails
 
   @tick_interval :timer.seconds(60)
 
@@ -390,10 +391,29 @@ defmodule ConsensusWeb.GroupLive.Review do
 
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-bold text-ink">{activity.name}</p>
-              <p class="truncate text-[11px] text-muted">
+              <%!-- `t7-e` (D-060): the old "Italian · $$$" line is the chip + address now
+                    (no price band, ever). A row without details keeps its description. --%>
+              <ItemDetails.detail_line
+                :if={ItemDetails.has_detail_line?(activity)}
+                activity={activity}
+                class="mt-0.5"
+              />
+              <p :if={!ItemDetails.has_detail_line?(activity)} class="truncate text-[11px] text-muted">
                 {activity.description || "No details yet"}
               </p>
             </div>
+
+            <%!-- After publish the row's only control: into `t7-d`, where the details stay
+                  fixable while the option itself stays frozen (D-060). The quiet link
+                  `t7-g` draws on the winner card. --%>
+            <.link
+              :if={!@editable}
+              navigate={~p"/groups/#{@group}/options/#{activity.id}"}
+              aria-label={"Fix details for #{activity.name}"}
+              class="relative shrink-0 text-[12px] font-semibold text-muted underline hover:text-tangerine active:text-tangerine before:absolute before:-inset-x-2 before:-inset-y-3 before:content-['']"
+            >
+              Fix details
+            </.link>
 
             <%!-- Was 16×24 with `data-confirm` null — the *smaller, harder-to-hit* copy of
                   the same destructive action `/groups/:id/options` renders at 28×36 with
@@ -416,6 +436,11 @@ defmodule ConsensusWeb.GroupLive.Review do
             </button>
           </div>
         </div>
+
+        <ItemDetails.osm_credit
+          :if={ItemDetails.osm_derived?(@group.activities)}
+          id="pool-osm-credit"
+        />
 
         <.sticker_card tone={:violet_tint} depth={2} class="mt-1 flex items-center gap-3 px-3.5 py-3">
           <div class="flex-1">

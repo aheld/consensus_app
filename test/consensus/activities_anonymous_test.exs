@@ -392,6 +392,124 @@ defmodule Consensus.ActivitiesAnonymousTest do
     end
   end
 
+  describe "update_activity_details/3 and adopt_lookup_result/3 (D-060)" do
+    setup :three_owners
+
+    @details %{phone: "+1-215-625-8800", address: "237 Saint James Place, Philadelphia"}
+
+    test "both kinds of owner write their own option's details", ctx do
+      for group <- [ctx.anon_group, ctx.user_group] do
+        scope = if group.id == ctx.anon_group.id, do: ctx.anon_scope, else: ctx.user_scope
+        activity = activity_fixture(group)
+
+        assert {:ok, updated} = Activities.update_activity_details(scope, activity, @details)
+        assert updated.phone == "+1-215-625-8800"
+
+        assert {:ok, adopted} =
+                 Activities.adopt_lookup_result(scope, activity, %{
+                   name: "Zahav",
+                   category: "israeli",
+                   osm_ref: "node/6374481270"
+                 })
+
+        assert {adopted.name, adopted.category, adopted.osm_ref} ==
+                 {"Zahav", "israeli", "node/6374481270"}
+      end
+    end
+
+    test "answer {:error, :unauthorized} for every foreign owner, both directions", ctx do
+      other_anon_activity = activity_fixture(ctx.other_anon_group)
+      user_activity = activity_fixture(ctx.user_group)
+      anon_activity = activity_fixture(ctx.anon_group)
+
+      for {scope, activity} <- [
+            {ctx.anon_scope, other_anon_activity},
+            {ctx.anon_scope, user_activity},
+            {ctx.user_scope, anon_activity}
+          ] do
+        assert {:error, :unauthorized} =
+                 Activities.update_activity_details(scope, activity, @details)
+
+        assert {:error, :unauthorized} =
+                 Activities.adopt_lookup_result(scope, activity, %{name: "Hijacked"})
+
+        stored = Repo.get!(Activity, activity.id)
+        assert {stored.name, stored.phone} == {activity.name, nil}
+      end
+    end
+
+    test "raise FunctionClauseError for a both-set or unsaved-id scope", ctx do
+      anon_activity = activity_fixture(ctx.anon_group)
+      user_activity = activity_fixture(ctx.user_group)
+
+      for {scope, activity} <- [
+            {both_set_scope(), anon_activity},
+            {both_set_scope(), user_activity},
+            {unsaved_anonymous_scope(), user_activity},
+            {unsaved_user_scope(), anon_activity}
+          ] do
+        assert_raise FunctionClauseError, fn ->
+          Activities.update_activity_details(scope, activity, @details)
+        end
+
+        assert_raise FunctionClauseError, fn ->
+          Activities.adopt_lookup_result(scope, activity, %{name: "Hijacked"})
+        end
+      end
+    end
+
+    test "details stay editable while voting and once completed; not once cancelled" do
+      scope = anonymous_scope_fixture()
+      {group, [a, b, _c]} = voting_group_fixture(scope)
+
+      assert {:ok, %Activity{phone: "+1-215-625-8800"}} =
+               Activities.update_activity_details(scope, a, @details)
+
+      # Renaming is still frozen, through either door.
+      assert {:error, :pool_locked} = Activities.adopt_lookup_result(scope, a, %{name: "X"})
+
+      {:ok, completed} = Activities.complete_group(scope, group)
+      assert completed.status == :completed
+
+      assert {:ok, %Activity{category: "israeli"}} =
+               Activities.update_activity_details(scope, b, %{category: "israeli"})
+
+      {cancel_scope, cancel_group} = anonymous_group_fixture()
+      cancel_activity = activity_fixture(cancel_group)
+      {:ok, _cancelled} = Activities.cancel_group(cancel_scope, cancel_group)
+
+      assert {:error, :group_closed} =
+               Activities.update_activity_details(cancel_scope, cancel_activity, @details)
+    end
+
+    test "a details write broadcasts {:activity_updated, activity}", ctx do
+      activity = activity_fixture(ctx.anon_group)
+      Activities.subscribe_group(ctx.anon_group.id)
+
+      {:ok, updated} = Activities.update_activity_details(ctx.anon_scope, activity, @details)
+
+      assert_receive {:activity_updated, ^updated}
+    end
+
+    test "a details write cannot rename, and an invalid phone saves nothing", ctx do
+      activity = activity_fixture(ctx.anon_group)
+
+      assert {:ok, updated} =
+               Activities.update_activity_details(ctx.anon_scope, activity, %{
+                 name: "Renamed",
+                 osm_ref: "node/1",
+                 category: "israeli"
+               })
+
+      assert {updated.name, updated.osm_ref} == {activity.name, nil}
+
+      assert {:error, %Ecto.Changeset{}} =
+               Activities.update_activity_details(ctx.anon_scope, activity, %{phone: "call us"})
+
+      assert Repo.get!(Activity, activity.id).phone == nil
+    end
+  end
+
   describe "list_groups/1, create_group/2 and new_group/1 with a malformed scope" do
     test "a both-set scope raises FunctionClauseError" do
       both = both_set_scope()

@@ -434,6 +434,7 @@ defmodule ConsensusWeb.GroupLive.Results do
         avatar_caption="WHO'S VOTED"
         countdown_text={Deadlines.countdown(@group.deadline_at, @now)}
         organizer_username={@organizer_name}
+        fix_details
       >
         <:footer>
           <%!-- The one link back to `04 share`, and the reason this screen needs it: `/`

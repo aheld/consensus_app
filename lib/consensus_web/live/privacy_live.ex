@@ -13,6 +13,19 @@ defmodule ConsensusWeb.PrivacyLive do
       their sessions to an account. `UserAuth.log_in_user/4` claims a browser's unsaved
       sessions on a password or registration log-in and flashes the count; a magic-link
       log-in claims only when `ConsensusWeb.UserLive.Confirmation`'s consent box is ticked;
+    * an option's details (D-060) — `Consensus.Activities.Activity` stores a website
+      (`source_url`), `phone`, `address`, `latitude`/`longitude` and `category`, filled by
+      **Use this** or typed on `02b`; the guest ballot renders only the category and the
+      address (`JoinLive.Ballot`), the winner card adds Call · Directions. **Let anyone
+      find this** (`Consensus.Catalog.share_activity/2`) is default-off and copies the
+      name, description, website, phone, address, location, category and photo into
+      `catalog_items` with the sharer's id, which `/admin/items` shows; unsharing or
+      deleting the option deletes the row, or hands it to another option that is itself
+      shared into it, re-snapshotted from that one (`Catalog.release_row/1`) — so
+      "removes what you shared" is true. The one exception, not claimed on the page: a
+      whole group or account deleted at once leaves an ownerless row an admin can delete. A name typed on
+      `02` is sent from the **server** to Nominatim (`Consensus.Discovery`); the map links
+      are plain `openstreetmap.org` hrefs (`ConsensusWeb.ItemDetails`);
     * voters — `Consensus.Voting.Participant` stores an optional `display_name` and a
       server-minted `token`, and no account is ever required (product invariant 1);
     * anonymity — and this one is narrower than the page used to claim, in **two**
@@ -158,6 +171,22 @@ defmodule ConsensusWeb.PrivacyLive do
             Logging in or signing up on a browser that holds someone else's unsaved
             sessions saves them to your account, and we tell you how many it saved; a
             log-in by emailed link asks you first.
+          </.section>
+
+          <%!-- D-060. "stays off" and "removes what you shared" are what the sharing
+                paragraph is pinned on; keep each on one line. --%>
+          <.section title="Places you add">
+            An option can carry a website, phone number, address and map location —
+            filled in from OpenStreetMap when you tap Use this, or typed by you. Guests see
+            its category and address while they vote; the phone, website and directions
+            appear on the winner card. Let anyone find this stays off
+            unless you turn it on, and only then do an option's name, description, website,
+            phone, address, location, category and photo go into a shared list that anyone
+            typing that name nearby can find. An admin can see who shared it. Turning it
+            off, or deleting the option, removes what you shared.
+            When you add an option by name, our server — not your browser — asks
+            OpenStreetMap's search for it, and a map link opens openstreetmap.org only when
+            you tap it.
           </.section>
 
           <%!-- The title changed with the copy (D-049). "Votes are anonymous" over a

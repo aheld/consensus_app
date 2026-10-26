@@ -58,6 +58,10 @@ defmodule ConsensusWeb.Router do
       # finds the admin scopes by scanning this file for it, and a mention in a comment
       # is indistinguishable from a scope that pipes through nothing.)
       live "/feedback", AdminLive.Feedback, :index
+
+      # The shared catalog and every option's details (D-060). Same scope and
+      # live_session, so the same two guards.
+      live "/items", AdminLive.Items, :index
     end
   end
 
