@@ -12,6 +12,9 @@ defmodule ConsensusWeb.ItemDetails do
     * `action_row/1` — the winner card's **Call · Directions** (`t7-g`, with the owner's
       2026-10-25 ruling that the website stays the card's tangerine **View … →** rather
       than a third white button that would duplicate it).
+    * `info_sheet/1` — the ballot's read-only **More** sheet (`t8-c`, D-062): photo, the
+      full name, chip + the full address, the full description and **Website ↗**. It
+      holds no vote controls and never touches the ballot's selections.
 
   Everything that reaches an `href` is built here from stored values, never passed
   through raw: `tel:` from `+` and digits only (`Activity.tel_href/1`), and the two
@@ -22,6 +25,8 @@ defmodule ConsensusWeb.ItemDetails do
   use Phoenix.Component
 
   alias Consensus.Activities.Activity
+  alias ConsensusWeb.Sticker
+  alias Phoenix.LiveView.JS
   alias Consensus.Discovery.Provider.Nominatim
 
   @doc "Whether any of `activities` carries OSM-derived details (and so owes the credit)."
@@ -169,6 +174,109 @@ defmodule ConsensusWeb.ItemDetails do
       "grid min-h-11 min-w-0 flex-1 place-items-center rounded-[14px] border-2 border-ink bg-white",
       "text-[13.5px] font-bold text-ink shadow-sticker-2 press-2 hover:bg-yellow active:bg-yellow"
     ]
+  end
+
+  attr :activity, Activity, required: true
+  attr :id, :string, default: "info-sheet"
+  attr :stripe, :string, default: "stripes-violet"
+
+  attr :on_close, JS,
+    required: true,
+    doc: "run by ✕ and by Escape — the only two ways out (t8 ruling 5)"
+
+  @doc """
+  The read-only option sheet (`t8-c`): a bottom sheet over a scrim, opened from a ballot
+  tile's or the deck header's **More**.
+
+  Rows that don't apply are left out, without gaps. The scrim swallows taps rather than
+  closing — ✕ and Escape are the only exits, and browser back is deliberately not
+  intercepted: making it close the sheet needs a pushed history entry, i.e. a navigation,
+  and on the `/join` tree a navigation is what discards an unsent ballot (t8 ruling 5).
+  Every link here is a new tab for the same reason (t7 ruling 4).
+
+  Focus moves to ✕ when it opens, and `focus_wrap/1` keeps Tab inside it; the caller's
+  `on_close` is expected to `JS.pop_focus/0` back to the control that opened it.
+  """
+  def info_sheet(assigns) do
+    ~H"""
+    <div class="fixed inset-0 z-50">
+      <div class="absolute inset-0 bg-ink/50" aria-hidden="true"></div>
+      <.focus_wrap
+        id={@id}
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby={"#{@id}-name"}
+        phx-mounted={JS.focus(to: "##{@id}-close")}
+        phx-window-keydown={@on_close}
+        phx-key="Escape"
+        class="absolute inset-x-0 bottom-0 mx-auto flex max-h-[92%] w-full max-w-[440px] flex-col overflow-y-auto rounded-t-[24px] border-t-2 border-ink bg-white"
+      >
+        <div class="flex items-center justify-between pb-2 pl-[18px] pr-3 pt-2.5">
+          <span class="font-mono text-[10.5px] font-semibold tracking-[0.08em] text-muted">
+            OPTION DETAILS
+          </span>
+          <button
+            type="button"
+            id={"#{@id}-close"}
+            phx-click={@on_close}
+            aria-label="Close"
+            class="grid size-11 place-items-center rounded-full border-2 border-ink bg-white text-[16px] font-semibold leading-none text-ink shadow-sticker-2 press-2 hover:bg-yellow active:bg-yellow"
+          >
+            ✕
+          </button>
+        </div>
+        <Sticker.photo_frame
+          src={@activity.image_url}
+          alt={@activity.name}
+          height="h-[128px]"
+          bare
+          stripe={@stripe}
+          class="mx-[18px] flex-none rounded-[14px] border-2 border-ink"
+        />
+        <div class="flex flex-col gap-[11px] px-[18px] pb-6 pt-3.5">
+          <h2
+            id={"#{@id}-name"}
+            class="text-[24px] font-bold leading-[1.1] tracking-[-0.02em] text-ink"
+          >
+            {@activity.name}
+          </h2>
+          <div :if={has_detail_line?(@activity)} class="flex items-baseline gap-2">
+            <span
+              :if={present?(@activity.category)}
+              class="flex-none rounded-full border-[1.5px] border-ink/45 px-2 py-0.5 text-[11.5px] font-semibold text-ink"
+            >
+              {category_text(@activity.category)}
+            </span>
+            <span
+              :if={present?(@activity.address)}
+              id={"#{@id}-address"}
+              class="min-w-0 flex-1 font-mono text-[11.5px] leading-[1.45] text-muted"
+            >
+              {@activity.address}
+            </span>
+          </div>
+          <p
+            :if={present?(@activity.description)}
+            id={"#{@id}-description"}
+            class="text-[15px] leading-[1.5] text-ink-soft [text-wrap:pretty]"
+          >
+            {@activity.description}
+          </p>
+          <a
+            :if={present?(@activity.source_url)}
+            id={"#{@id}-website"}
+            href={@activity.source_url}
+            target="_blank"
+            rel="noopener noreferrer"
+            class="inline-flex min-h-11 items-center gap-1.5 self-start rounded-[14px] border-2 border-ink bg-white px-4 text-[14px] font-bold text-ink shadow-sticker-2 press-2 hover:bg-yellow active:bg-yellow"
+          >
+            Website <span aria-hidden="true">↗</span>
+          </a>
+          <.osm_credit :if={osm_derived?(@activity)} id={"#{@id}-osm-credit"} />
+        </div>
+      </.focus_wrap>
+    </div>
+    """
   end
 
   # Seven decimals, OSM's precision, without float noise in the URL.

@@ -148,6 +148,11 @@ const SwipeCard = {
       (e) => {
         // Ignore secondary mouse buttons; a right-click is not a swipe.
         if (e.pointerType === "mouse" && e.button !== 0) return
+        // A control inside the card (`data-no-swipe`) is its own target: a press there must
+        // neither start a drag nor fall through to the tap-to-pick below. Nothing on the
+        // card carries it today (t8 ruling 3 put More in the deck header) — a guard for
+        // whatever is added next (t8 ruling 4).
+        if (e.target.closest && e.target.closest("[data-no-swipe]")) return
         // Cleared HERE, not only where it is consumed. It used to be cleared solely inside
         // the click listener, and a click is not guaranteed to follow the gesture that set
         // it: `pointercancel` is by definition never followed by one, and a `pointerup`
@@ -261,6 +266,7 @@ const SwipeCard = {
     this.el.addEventListener(
       "click",
       (e) => {
+        if (e.target.closest && e.target.closest("[data-no-swipe]")) return
         if (this.suppressClick) {
           this.suppressClick = false
           e.preventDefault()

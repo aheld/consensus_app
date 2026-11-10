@@ -569,13 +569,16 @@ rendering lives in `ConsensusWeb.ItemDetails` (`detail_line/1`, `osm_credit/1`,
   96px with no controls and no shadow, Name/Description as flat `canvas/50` panels tagged
   `LOCKED`. Details stay editable; Save returns to `03` (or to `05` with `?from=results`).
 - **Cards** (`t7-e`) — chip (`1.5px ink/45`) + street address on one truncating line where the
-  provenance line was on `02`, and where the description line was on `03`. A card with no
+  provenance line was on `02`. On `03` it sits on the line under the name. A card with no
   details keeps its old line. One credit at the foot of each list, only when some card's
-  details came from OSM.
-- **Ballot** (`t7-f`) — the chip overlays the tile's photo strip, the address takes the tile's
-  bottom line, the swipe card gets the chip + address row under the name (a new `:meta` slot
-  on `Sticker.deck_stack/1`). No phone, website or map link. The credit sits above the
-  status region.
+  details came from OSM. *Since `t8` the description is never displaced: it renders as its
+  own clamped block under this line on both `02` and `03` (see `t8` below).*
+- **Ballot** (`t7-f`) — the chip overlays the tile's photo strip, the address gets its own line
+  on the tile, and the swipe card gets the chip + address row under the name (a new `:meta`
+  slot on `Sticker.deck_stack/1`). No phone or map link on the tile or card. The credit sits
+  above the status region. *Since `t8` the address no longer takes the description's line:
+  the tile shows both, and the full text and website are behind a read-only **More** sheet
+  (see `t8` below).*
 - **`05` winner** (`t7-g`) — chip + address under the name, then **Call · Directions** (white,
   ≥44px, splitting the row), and for the organizer a quiet **Fix details** link. Each button
   renders only when its detail exists, and the row is absent when neither does.
@@ -600,6 +603,70 @@ rendering lives in `ConsensusWeb.ItemDetails` (`detail_line/1`, `osm_credit/1`,
 > and description, which are frozen once the vote opens. `02b` keeps its single Save (no
 > Cancel); the frame redraws a Cancel the app removed deliberately (the header's `‹` is the
 > back affordance). The share toggle (`t7-c`) is a form field applied on **Save**, not a live switch, so a share never snapshots a half-typed field; its off track is `canvas/40` where the frame draws `#EDF1EE` (no token), and its disabled knob `ink-12`.
+
+### `t8` longer descriptions — the ballot tile, the More sheet, the swipe card, `02`/`03`
+Frame: [site/longer-descriptions.dc.html](site/longer-descriptions.dc.html)
+(`T8-Descriptions.dc.html` in the design project, imported by Create & Share; read
+2026-11-10 from the migrated project's artifact copy, not truncated). Six panels,
+`t8-a`…`t8-f`. Plan: [docs/plans/longer-descriptions.md](../plans/longer-descriptions.md),
+whose §A.5 holds the rulings in full. GitHub issue #7.
+
+The rule: **an option's description is never displaced by its details.** Each surface clamps
+it, the ballot's full text is behind a read-only sheet, and type is Instrument Sans
+(`--font-sans`) throughout. Mono stays for the address only.
+
+| Surface | Description | Clamp | Colour |
+|---|---|---|---|
+| Ballot grid tile (`t8-a`) | 400 12px / 1.4 | 4 lines | `ink-soft`; vetoed `muted` |
+| More sheet (`t8-c`) | 400 15px / 1.5 | none | `ink-soft` |
+| Swipe card (`t8-d`, as built) | 400 12px / 1.4 | 3 lines | `muted` (as before) |
+| `02` card (`t8-e`) | 400 12px / 1.4, 4px under the chip/address or provenance line | 2 lines | `muted` |
+| `03` row (`t8-f`) | same as `02`; 4px under the name when there's no detail line | 2 lines | `muted` |
+
+- **Grid tile** (`t8-a`/`t8-b`) — photo strip with chip, then the name (`line-clamp-2`), the
+  address (shipped mono line), then the description block. A tile with no description gets no
+  empty block. Rows stay even through the tile's existing `flex-1` stretch, not a reserved
+  slot. Under the tile, as a **sibling**, one row holds the shipped VETO bar (`flex-1`) and a
+  44×44 white sticker **More** button (`aria-label="More about <name>"`,
+  `aria-haspopup="dialog"`, yellow press, global violet focus ring). More renders on every
+  tile, alone and right-aligned when vetoes are off. A vetoed tile's description and address
+  go `muted`.
+- **More sheet** (`t8-c`) — a bottom sheet over a scrim: `OPTION DETAILS` eyebrow, a 44×44
+  round ✕, the photo at 128px, the name 700 24/1.1, chip + full address (mono 11.5/1.45,
+  wraps), the full description, a white 44px **Website ↗** link, and the OSM credit only
+  when this option's details came from OSM. Rows that don't apply are left out without gaps.
+  Read-only: no pick or veto, and opening it never changes the ballot.
+- **Swipe card** (`t8-d`) — the description clamp goes from 2 to 3 lines at the shipped
+  size. More sits in the deck's header row beside `n / count`, not on the card.
+- **`02` / `03`** (`t8-e`/`t8-f`) — the description sits under the chip + address (or the
+  provenance line on `02`). No More: Edit or Fix details opens `02b`, where the full text is.
+  During `02e` the slot holds two shimmer bars, then the text fades in, or the slot collapses
+  in the existing 180ms.
+
+> **Owner rulings on the frame (2026-11-10), all built as recommended.** (1) The frame
+> redraws the grid's veto bar: tangerine VETOED, a tangerine `VETO USED · <name>` pill, other
+> bars disabled once spent. **Not built.** The shipped bar keeps `bg-peach`, `rounded-full`,
+> `MOVE VETO` and moving the veto; the frame didn't know the bar existed. (2) At 360×640 the
+> tallest tile row (~241px) exceeds the 204px track. That's accepted as a short in-track
+> scroll, because raising the 200px floor means raising `.viewport-column`'s 640px gate.
+> (3) The swipe card is **12px/1.4 × 3 lines, not the frame's 14px × 4**, and More moves to
+> the deck header. As drawn the body was ~222px plus the 72px photo floor, against a ~216px
+> slot, and More would have been clipped. (4) So no drag can start from More. `SwipeCard`
+> still ignores `[data-no-swipe]` on pointerdown and click, as a guard. (5) The sheet closes on
+> ✕ and Esc only. Browser back is not intercepted, since a pushed history entry would make
+> the sheet a navigation, and the `/join` tree forbids that. (6) No "+ Add your own" tile
+> (t7 ruling 7, Post-MVP). (7) More on every tile, including one with nothing more to show.
+> (8) `03` keeps its stacked ▲▼; the frame draws only ⠿, which is hidden on touch.
+> (9) The tile's address (10.5px/500), padding and gaps stay as shipped, where the frame
+> drew 10px/400, 11px and 7px.
+
+> **Build deviations.** Website ↗ carries `target="_blank" rel="noopener noreferrer"`, which
+> the frame's markup lacks: a same-tab link off the ballot discards it (t7 ruling 4). The
+> More focus ring is the app's global violet `:focus-visible` outline, not the frame's
+> per-control 3px ring. `02` drops "· description added" from a typed row's provenance line
+> ("typed by you"), and `03` drops "No details yet" for a row with neither details nor a
+> description. Not built from the frame's chrome: the bare status line (D-047's panel stays)
+> and the full footer on the `/join` tree. Instrument Sans, not the Inter the prompt named.
 
 ### endgame · all vetoed — a takeover *state* of `/groups/:id/results` and `/join/:slug/results`
 

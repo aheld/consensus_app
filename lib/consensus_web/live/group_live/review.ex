@@ -392,14 +392,21 @@ defmodule ConsensusWeb.GroupLive.Review do
             <div class="min-w-0 flex-1">
               <p class="truncate text-sm font-bold text-ink">{activity.name}</p>
               <%!-- `t7-e` (D-060): the old "Italian · $$$" line is the chip + address now
-                    (no price band, ever). A row without details keeps its description. --%>
+                    (no price band, ever). `t8-f` (D-062): the description is no longer
+                    hidden behind it — its own two-line block under the chip + address, or
+                    4px under the name when there is no detail line, before and after
+                    publish. A row with neither shows only its name. --%>
               <ItemDetails.detail_line
                 :if={ItemDetails.has_detail_line?(activity)}
                 activity={activity}
                 class="mt-0.5"
               />
-              <p :if={!ItemDetails.has_detail_line?(activity)} class="truncate text-[11px] text-muted">
-                {activity.description || "No details yet"}
+              <p
+                :if={is_binary(activity.description) and activity.description != ""}
+                id={"review-description-#{activity.id}"}
+                class="mt-1 line-clamp-2 text-[12px] leading-[1.4] text-muted"
+              >
+                {activity.description}
               </p>
             </div>
 

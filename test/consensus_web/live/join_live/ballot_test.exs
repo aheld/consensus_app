@@ -64,12 +64,17 @@ defmodule ConsensusWeb.JoinLive.BallotTest do
       assert html =~ "1 VETO LEFT"
     end
 
-    test "a missing description falls back to a plain placeholder, not a blank line", %{
-      conn: conn,
-      group: group
-    } do
-      {:ok, _view, html} = live(conn, ~p"/join/#{group.slug}/vote")
-      assert html =~ "No details yet"
+    test "a tile with no description renders no description block and no placeholder (t8-a)",
+         %{conn: conn, group: group, activities: [first | _rest]} do
+      # The grid's old "No details yet" filler went with `tile_meta_line/1` (D-062): a
+      # tile with neither an address nor a description just stops after its name. The
+      # deck card keeps the placeholder, where the frame keeps it.
+      {:ok, view, html} = live(conn, ~p"/join/#{group.slug}/vote")
+      refute html =~ "No details yet"
+      refute has_element?(view, "#activity-#{first.id}-description")
+
+      {:ok, _deck, deck_html} = live(conn, ~p"/join/#{group.slug}/vote?view=deck")
+      assert deck_html =~ "No details yet"
     end
 
     test "clicking a card approves it, and clicking again un-approves it", %{
@@ -1596,6 +1601,181 @@ defmodule ConsensusWeb.JoinLive.BallotTest do
 
       assert css =~
                ~r/@media \(min-height: 640px\) \{\s*\.ballot-actions \{[^}]*position: static;/
+    end
+  end
+
+  describe "t8 — longer descriptions and the More sheet (D-062)" do
+    @long_description String.duplicate("Braised tacos, handmade tortillas. ", 4)
+                      |> binary_part(0, 140)
+
+    setup %{conn: conn} do
+      scope = user_scope_fixture()
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+
+      full =
+        activity_fixture(group, %{
+          name: "Guisados",
+          description: @long_description,
+          source_url: "https://guisados.example"
+        })
+        |> put_details!(%{category: "mexican", address: "1261 W Sunset Blvd, Los Angeles"})
+
+      bare = activity_fixture(group, %{name: "Sushi Enya"})
+      {:ok, group} = Activities.publish_group(scope, group)
+
+      participant = participant_fixture(group, %{display_name: "Ada"})
+
+      %{
+        conn: join_conn(conn, group, participant),
+        group: group,
+        full: full,
+        bare: bare
+      }
+    end
+
+    defp put_details!(activity, attrs) do
+      activity
+      |> Consensus.Activities.Activity.details_changeset(attrs)
+      |> Consensus.Repo.update!()
+    end
+
+    test "a tile with an address AND a description renders both", %{
+      conn: conn,
+      group: group,
+      full: full
+    } do
+      # The regression issue #7 is about: `t7-f` gave the address the description's line,
+      # so every option Use this filled lost its description on the ballot.
+      {:ok, view, html} = live(conn, ~p"/join/#{group.slug}/vote")
+
+      assert html =~ "1261 W Sunset Blvd, Los Angeles"
+      assert has_element?(view, "#activity-#{full.id}-description.line-clamp-4", "Braised tacos")
+    end
+
+    test "More is a sibling of the approve button, on every tile, named for its option", %{
+      conn: conn,
+      group: group,
+      full: full,
+      bare: bare
+    } do
+      {:ok, view, _html} = live(conn, ~p"/join/#{group.slug}/vote")
+
+      for activity <- [full, bare] do
+        assert has_element?(
+                 view,
+                 "#activity-#{activity.id} > div > #more-#{activity.id}[aria-haspopup=dialog]"
+               )
+
+        refute has_element?(
+                 view,
+                 "#activity-#{activity.id} button[phx-click=toggle_approve] #more-#{activity.id}"
+               )
+
+        assert has_element?(
+                 view,
+                 ~s(#more-#{activity.id}[aria-label="More about #{activity.name}"])
+               )
+      end
+    end
+
+    test "More opens a read-only sheet with the full text, and closing changes nothing", %{
+      conn: conn,
+      group: group,
+      full: full
+    } do
+      {:ok, view, _html} = live(conn, ~p"/join/#{group.slug}/vote")
+
+      view
+      |> element("button[phx-click='toggle_approve'][phx-value-id='#{full.id}']")
+      |> render_click()
+
+      status_before = view |> element("#ballot-status-region") |> render()
+      refute has_element?(view, "#info-sheet")
+
+      view |> element("#more-#{full.id}") |> render_click()
+
+      assert has_element?(view, "#info-sheet[role=dialog][aria-modal=true]")
+      assert has_element?(view, "#info-sheet-name", "Guisados")
+      assert has_element?(view, "#info-sheet-description", String.trim(@long_description))
+      assert has_element?(view, "#info-sheet-address", "1261 W Sunset Blvd, Los Angeles")
+
+      assert has_element?(
+               view,
+               ~s(#info-sheet-website[href="https://guisados.example"][target=_blank][rel="noopener noreferrer"])
+             )
+
+      # No vote controls in the sheet.
+      refute has_element?(view, "#info-sheet [phx-click=toggle_approve]")
+      refute has_element?(view, "#info-sheet [phx-click=toggle_veto]")
+      assert view |> element("#ballot-status-region") |> render() == status_before
+
+      view |> element("#info-sheet-close") |> render_click()
+
+      refute has_element?(view, "#info-sheet")
+      assert view |> element("#ballot-status-region") |> render() == status_before
+      assert has_element?(view, "button[aria-pressed='true'][phx-value-id='#{full.id}']")
+    end
+
+    test "a sheet for an option with nothing but a name leaves the other rows out", %{
+      conn: conn,
+      group: group,
+      bare: bare
+    } do
+      {:ok, view, _html} = live(conn, ~p"/join/#{group.slug}/vote")
+      view |> element("#more-#{bare.id}") |> render_click()
+
+      assert has_element?(view, "#info-sheet-name", "Sushi Enya")
+      refute has_element?(view, "#info-sheet-description")
+      refute has_element?(view, "#info-sheet-address")
+      refute has_element?(view, "#info-sheet-website")
+      refute has_element?(view, "#info-sheet-osm-credit")
+    end
+
+    test "open_info with an id from another group, or garbage, is ignored", %{
+      conn: conn,
+      group: group
+    } do
+      {_other, [stranger | _]} = voting_group_fixture(user_scope_fixture(), 1)
+      {:ok, view, _html} = live(conn, ~p"/join/#{group.slug}/vote")
+
+      render_hook(view, "open_info", %{"id" => to_string(stranger.id)})
+      refute has_element?(view, "#info-sheet")
+
+      render_hook(view, "open_info", %{"id" => "nope"})
+      render_hook(view, "open_info", %{})
+      refute has_element?(view, "#info-sheet")
+    end
+
+    test "deck: More sits in the header, outside the card, and opens the same sheet", %{
+      conn: conn,
+      group: group,
+      full: full
+    } do
+      {:ok, view, _html} = live(conn, ~p"/join/#{group.slug}/vote?view=deck")
+
+      assert has_element?(view, ~s(#deck-more[aria-label="More about Guisados"]))
+      refute has_element?(view, "#deck-card-#{full.id} #deck-more")
+
+      view |> element("#deck-more") |> render_click()
+      assert has_element?(view, "#info-sheet-name", "Guisados")
+      assert has_element?(view, "#deck-card-#{full.id}")
+      refute has_element?(view, "#deck-approve[aria-pressed='true']")
+    end
+
+    test "with vetoes off, More still renders and no VETO bar does", %{conn: conn} do
+      scope = user_scope_fixture()
+      {group, [activity | _]} = voting_group_fixture(scope, 2, %{veto_allowed: false})
+      participant = participant_fixture(group)
+
+      {:ok, view, _html} =
+        conn |> join_conn(group, participant) |> live(~p"/join/#{group.slug}/vote")
+
+      assert has_element?(
+               view,
+               "#activity-#{activity.id} > div.justify-end > #more-#{activity.id}"
+             )
+
+      refute has_element?(view, "#activity-#{activity.id} [phx-click=toggle_veto]")
     end
   end
 end

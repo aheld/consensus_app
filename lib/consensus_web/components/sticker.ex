@@ -964,7 +964,7 @@ defmodule ConsensusWeb.Sticker do
               {@name}
             </p>
             {render_slot(@meta)}
-            <p :if={@detail} class="line-clamp-2 text-[12px] leading-[1.4] text-muted">{@detail}</p>
+            <p :if={@detail} class="line-clamp-3 text-[12px] leading-[1.4] text-muted">{@detail}</p>
             {render_slot(@inner_block)}
           </div>
         </div>
