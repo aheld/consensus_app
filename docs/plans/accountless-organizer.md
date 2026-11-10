@@ -821,7 +821,11 @@ See §4.4.
 For anonymous organizers only (absent for a signed-in organizer):
 
 - In the "Group" row beside the avatar (`new.ex:526-529`), replacing its static avatar
-  with one that updates from the typed name and shows `?` when blank.
+  with one that updates from the typed name and shows `?` when blank. **The row's eyebrow
+  now reads "Your name" for an anonymous organizer, not "Group" (D-061)** — the heading
+  named the group's membership row, and over a name field it read as "the name of the
+  group", while the session title already had a field of its own above it. A signed-in
+  organizer still sees GROUP: that row is about who is in the group.
 - Hand-built like `JoinLive.Entry`'s name field (`entry.ex` ~470, counter :497-507), in its
   **own form namespace** (`as: "organizer"`) with its own changeset — `GroupLive.New`'s form
   is a `Group` changeset and its `validate` handler matches `%{"group" => _}`.
