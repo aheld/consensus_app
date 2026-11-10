@@ -1191,11 +1191,15 @@ defmodule ConsensusWeb.GroupLive.Options do
   # description by hand in `02b` — so "no details yet" is only true while it still has
   # none. Reporting it unconditionally made the row contradict the editor the organizer
   # had just saved.
+  #
+  # Since `t8` (D-062) the description renders under this line, so a typed row no longer
+  # announces it: "typed by you · description added" over the description itself is the
+  # same fact twice. A photo is still worth saying — it is not on the card.
   defp provenance_text(%Activity{source_url: nil} = activity, _fetching) do
-    if present?(activity.image_url) or present?(activity.description) do
-      "typed by you · " <> resolved_summary(activity, "added")
-    else
-      "typed by you · no details yet"
+    cond do
+      present?(activity.image_url) -> "typed by you · photo added"
+      present?(activity.description) -> "typed by you"
+      true -> "typed by you · no details yet"
     end
   end
 
@@ -2017,6 +2021,29 @@ defmodule ConsensusWeb.GroupLive.Options do
                   <%= for phrase <- meta_phrases(card_meta_text(assigns, activity)) do %>
                     <span class="whitespace-nowrap">{phrase}</span>
                   <% end %>
+                </p>
+                <%!-- `t8-e` (D-062): the description is never displaced by the line above
+                      it — its own block, 12/1.4, two lines, 4px under. While 02e enriches
+                      an option that has none yet, the slot holds two shimmer bars sized
+                      like those two lines, so the card doesn't jump when text lands; the
+                      text fades in over them (`assist-name-in`, inserted fresh), or the
+                      slot goes when the fetch brings none. Not during "added, looking",
+                      whose single shimmer is the whole meta area. --%>
+                <div
+                  :if={assist_enriching?(assigns, activity) && !present?(activity.description)}
+                  id={"pool-description-shim-#{activity.id}"}
+                  class="mt-1 flex flex-col gap-[7px] py-1"
+                  aria-hidden="true"
+                >
+                  <div class="assist-shim h-[9px] w-full rounded-full"></div>
+                  <div class="assist-shim h-[9px] w-3/5 rounded-full"></div>
+                </div>
+                <p
+                  :if={!assist_looking?(assigns, activity) && present?(activity.description)}
+                  id={"pool-description-#{activity.id}"}
+                  class="assist-name-in mt-1 line-clamp-2 text-[12px] leading-[1.4] text-muted"
+                >
+                  {activity.description}
                 </p>
               </div>
               <%!-- `gap-6`, not `gap-2.5`. Both controls now carry a `::before` expander, and

@@ -259,10 +259,38 @@ defmodule ConsensusWeb.GroupLive.OptionsTest do
       )
       |> render_submit()
 
-      {:ok, _view, reloaded} = live(conn, ~p"/groups/#{group}/options")
+      {:ok, view, reloaded} = live(conn, ~p"/groups/#{group}/options")
       assert reloaded =~ "typed by you"
-      assert reloaded =~ "description added"
+      # Since `t8` (D-062) the description renders under the line, so the line no
+      # longer announces it ("· description added" over the text itself).
+      refute reloaded =~ "description added"
       refute reloaded =~ "no details yet"
+
+      assert has_element?(
+               view,
+               "#pool-description-#{activity.id}.line-clamp-2",
+               "Mediterranean on Hollywood."
+             )
+    end
+
+    test "t8-e: an option with a category, an address and a description shows all three",
+         %{conn: conn, scope: scope} do
+      # `t7-e` gave the address the description's slot; `t8-e` stacks them (D-062).
+      group = group_fixture(scope)
+
+      activity =
+        group
+        |> activity_fixture(%{name: "Guisados", description: "Braised tacos."})
+        |> Consensus.Activities.Activity.details_changeset(%{
+          category: "mexican",
+          address: "1261 W Sunset Blvd"
+        })
+        |> Consensus.Repo.update!()
+
+      {:ok, view, html} = live(conn, ~p"/groups/#{group}/options")
+      assert html =~ "Mexican"
+      assert html =~ "1261 W Sunset Blvd"
+      assert has_element?(view, "#pool-description-#{activity.id}", "Braised tacos.")
     end
 
     test "reports photo-only when the fetch found an image but no description",

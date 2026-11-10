@@ -633,7 +633,7 @@ simultaneous writer actually wait out the busy timeout instead of failing immedi
 ## Testing
 
 ```sh
-mix test                        # 1680 tests, 0 failures (verified 2026-10-25) — the one count in this file
+mix test                        # 1691 tests (D-062, 2026-11-10; 0 failures last verified at 1680 on 2026-10-25) — the one count in this file
 mix test test/consensus/accounts_test.exs
 mix precommit                   # compile --warnings-as-errors, deps.unlock --unused, format, test
 ```

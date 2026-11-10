@@ -173,7 +173,8 @@ defmodule ConsensusWeb.JoinLive.Ballot do
          |> assign(:page_title, "Vote · #{group.title}")
          |> assign(:ballot_open?, true)
          |> assign(:deck_history, [])
-         |> assign(:veto_note, nil)}
+         |> assign(:veto_note, nil)
+         |> assign(:info_id, nil)}
     end
   end
 
@@ -364,6 +365,29 @@ defmodule ConsensusWeb.JoinLive.Ballot do
   end
 
   def handle_event("set_view", _params, socket), do: {:noreply, socket}
+
+  ## Events — the read-only More sheet (t8-c, D-062)
+
+  # A state of this LiveView, never a navigation: the ballot lives in socket assigns, and
+  # the `/join` tree forbids anything that could discard it. Neither event touches
+  # `@approved`, `@veto_id`, the deck's position or its history — the sheet is a view of
+  # an option, not a third place to vote (D-044 keeps exactly two, and they share one
+  # selection). An id that is not in this pool is ignored, not trusted.
+  def handle_event("open_info", %{"id" => raw_id}, socket) do
+    case Integer.parse(to_string(raw_id)) do
+      {id, ""} ->
+        if Enum.any?(socket.assigns.group.activities, &(&1.id == id)),
+          do: {:noreply, assign(socket, :info_id, id)},
+          else: {:noreply, socket}
+
+      _not_an_integer ->
+        {:noreply, socket}
+    end
+  end
+
+  def handle_event("open_info", _params, socket), do: {:noreply, socket}
+
+  def handle_event("close_info", _params, socket), do: {:noreply, assign(socket, :info_id, nil)}
 
   ## Events — the deck
 
@@ -753,12 +777,25 @@ defmodule ConsensusWeb.JoinLive.Ballot do
 
   defp meta_line(%Activity{}), do: "No details yet"
 
-  # The grid tile's bottom line: the address takes the old meta line when there is one
-  # (`t7-f`), and the description otherwise, as before details existed.
-  defp tile_meta_line(%Activity{address: address}) when is_binary(address) and address != "",
+  # The grid tile's two text lines, split (t8, D-062). They used to be one
+  # `tile_meta_line/1` — the address *or* the description — so every option Assisted Add's
+  # **Use this** filled lost its description on the ballot. Each is `nil` when absent, and
+  # a `nil` renders nothing: a tile with neither gets no empty block and no "No details
+  # yet" (`t8-a`'s Sushi Enya).
+  defp tile_address(%Activity{address: address}) when is_binary(address) and address != "",
     do: address
 
-  defp tile_meta_line(%Activity{} = activity), do: meta_line(activity)
+  defp tile_address(%Activity{}), do: nil
+
+  defp description(%Activity{description: description})
+       when is_binary(description) and description != "",
+       do: description
+
+  defp description(%Activity{}), do: nil
+
+  defp info_activity(group, id), do: Enum.find(group.activities, &(&1.id == id))
+
+  defp close_info, do: JS.push("close_info") |> JS.pop_focus()
 
   defp ballot_status_text(approved, veto_id, veto_allowed?) do
     picked_text = "#{MapSet.size(approved)} PICKED"
@@ -925,12 +962,40 @@ defmodule ConsensusWeb.JoinLive.Ballot do
           deck_changing?={@deck_changing?}
           veto_note={@veto_note}
         />
+
+        <ItemDetails.info_sheet
+          :if={@info_id}
+          activity={info_activity(@group, @info_id)}
+          stripe={thumb_stripe(@info_id)}
+          on_close={close_info()}
+        />
       </div>
     </Layouts.app>
     """
   end
 
   ## -- the two views ------------------------------------------------------------------
+
+  attr :id, :string, required: true
+  attr :activity, Activity, required: true
+
+  # The 44×44 white sticker **More** (`t8-a`): yellow press, never tangerine (reserved for
+  # "Send my votes"), and named for its option the way `deck_veto_label/4` names the veto.
+  # `push_focus` first so ✕ / Escape can hand focus back to exactly this control.
+  defp more_button(assigns) do
+    ~H"""
+    <button
+      type="button"
+      id={@id}
+      phx-click={JS.push_focus() |> JS.push("open_info", value: %{id: @activity.id})}
+      aria-label={"More about #{@activity.name}"}
+      aria-haspopup="dialog"
+      class="grid size-11 flex-none place-items-center rounded-[12px] border-2 border-ink bg-white text-[11px] font-bold text-ink shadow-sticker-2 press-2 hover:bg-yellow active:bg-yellow"
+    >
+      More
+    </button>
+    """
+  end
 
   attr :view, :atom, required: true
 
@@ -1179,58 +1244,84 @@ defmodule ConsensusWeb.JoinLive.Ballot do
                   `truncate` needs a block box to clip against; on a bare inline <span> the
                   ellipsis never applies and a 140-character description runs off the
                   card. --%>
-            <div class="mt-auto w-full min-w-0">
-              <span class={[
-                "block truncate font-mono text-[10.5px] font-medium",
-                if(vetoed?(activity.id, @veto_id), do: "text-faint", else: "text-ink-soft")
-              ]}>
-                {tile_meta_line(activity)}
-              </span>
-            </div>
+            <%!-- `t8-a` (D-062): the address and the description each get their own line,
+                  so details never displace the description again. Description is body type
+                  (Instrument Sans) 12/1.4, clamped to 4 lines with an ellipsis; the full text
+                  is behind More. Vetoed dims both to `text-muted`, not `text-faint` — faint
+                  fails 4.5:1 for body text, and this is now body text. Rows stay even through
+                  the button's `flex-1` stretch above, so nothing reserves an empty slot. --%>
+            <span
+              :if={tile_address(activity)}
+              class={[
+                "block w-full min-w-0 truncate font-mono text-[10.5px] font-medium",
+                if(vetoed?(activity.id, @veto_id), do: "text-muted", else: "text-ink-soft")
+              ]}
+            >
+              {tile_address(activity)}
+            </span>
+            <p
+              :if={description(activity)}
+              id={"activity-#{activity.id}-description"}
+              class={[
+                "line-clamp-4 w-full min-w-0 text-[12px] leading-[1.4]",
+                if(vetoed?(activity.id, @veto_id), do: "text-muted", else: "text-ink-soft")
+              ]}
+            >
+              {description(activity)}
+            </p>
           </button>
 
-          <button
-            :if={@group.veto_allowed}
-            type="button"
-            phx-click="toggle_veto"
-            phx-value-id={activity.id}
-            aria-label={deck_veto_label(activity, @veto_id, activity.id, @group.activities)}
-            aria-pressed={to_string(vetoed?(activity.id, @veto_id))}
-            class={
-              [
-                # `min-h-11` (44px), matching every other control on this screen. It was
-                # 36px, which is under the touch floor on the default view of the most
-                # touch-critical screen in the app, for the one destructive control a
-                # voter can reach — and it sits directly under a tap-to-pick card, so a low
-                # tap lands on the wrong one of two opposite meanings.
-                "flex min-h-11 w-full items-center justify-center gap-1 rounded-full border-2 border-ink px-2",
-                "font-mono text-[9.5px] font-semibold uppercase tracking-[0.06em] transition-colors",
-                # `bg-peach`, not `bg-tangerine`. The old control was a 24px circle, so filling
-                # it tangerine cost nothing; at full width it became a second tangerine bar
-                # directly above "Send my votes", and the design system reserves tangerine
-                # for the one forward action on a screen. The card above carries the
-                # struck-through name and its meta line drops to `text-faint` — the state is
-                # not under-signalled.
-                # `yellow-tint` (#FFF6DC), not `yellow` (#FFD84D). Frame `1c-1` declares
-                # exactly one hover fill for anything in this grid — #FFF6DC, on the option
-                # card — and #FFD84D is the header pill's *resting* CTA yellow. Two
-                # different yellows lit up on two controls 6px apart, and the louder,
-                # CTA-coloured one was on the destructive control.
-                if(vetoed?(activity.id, @veto_id),
-                  do: "bg-peach text-ink",
-                  else: "bg-white text-ink-soft hover:bg-yellow-tint active:bg-yellow-tint"
-                )
-              ]
-            }
-          >
-            <%!-- No `1×` glyph. It printed once per option, so a five-option pool drew
+          <%!-- One row under the tile, a SIBLING of the approve button (a button inside a
+                button is invalid, and overlapping targets is what the veto was moved out
+                of the card for): the shipped VETO bar, unchanged, then More (t8 ruling 1).
+                More renders on every tile, alone and right-aligned with vetoes off
+                (ruling 7). --%>
+          <div class={["flex gap-1.5", !@group.veto_allowed && "justify-end"]}>
+            <button
+              :if={@group.veto_allowed}
+              type="button"
+              phx-click="toggle_veto"
+              phx-value-id={activity.id}
+              aria-label={deck_veto_label(activity, @veto_id, activity.id, @group.activities)}
+              aria-pressed={to_string(vetoed?(activity.id, @veto_id))}
+              class={
+                [
+                  # `min-h-11` (44px), matching every other control on this screen. It was
+                  # 36px, which is under the touch floor on the default view of the most
+                  # touch-critical screen in the app, for the one destructive control a
+                  # voter can reach — and it sits directly under a tap-to-pick card, so a low
+                  # tap lands on the wrong one of two opposite meanings.
+                  "flex min-h-11 min-w-0 flex-1 items-center justify-center gap-1 rounded-full border-2 border-ink px-2",
+                  "font-mono text-[9.5px] font-semibold uppercase tracking-[0.06em] transition-colors",
+                  # `bg-peach`, not `bg-tangerine`. The old control was a 24px circle, so filling
+                  # it tangerine cost nothing; at full width it became a second tangerine bar
+                  # directly above "Send my votes", and the design system reserves tangerine
+                  # for the one forward action on a screen. The card above carries the
+                  # struck-through name and its text drops to `text-muted` (t8) — the state is
+                  # not under-signalled.
+                  # `yellow-tint` (#FFF6DC), not `yellow` (#FFD84D). Frame `1c-1` declares
+                  # exactly one hover fill for anything in this grid — #FFF6DC, on the option
+                  # card — and #FFD84D is the header pill's *resting* CTA yellow. Two
+                  # different yellows lit up on two controls 6px apart, and the louder,
+                  # CTA-coloured one was on the destructive control.
+                  if(vetoed?(activity.id, @veto_id),
+                    do: "bg-peach text-ink",
+                    else: "bg-white text-ink-soft hover:bg-yellow-tint active:bg-yellow-tint"
+                  )
+                ]
+              }
+            >
+              <%!-- No `1×` glyph. It printed once per option, so a five-option pool drew
                   "VETO 1×" five times down the screen under a counter that says the budget
                   once — the same ambiguous duplication (confusion #5) the caption was
                   narrowed for. The deck keeps the glyph, where there is exactly one of it
                   and it is a genuine counter. --%>
-            <.icon name="hero-no-symbol" class="size-3.5 shrink-0" />
-            <span class="truncate">{grid_veto_caption(@veto_id, activity.id)}</span>
-          </button>
+              <.icon name="hero-no-symbol" class="size-3.5 shrink-0" />
+              <span class="truncate">{grid_veto_caption(@veto_id, activity.id)}</span>
+            </button>
+
+            <.more_button id={"more-#{activity.id}"} activity={activity} />
+          </div>
         </div>
       </div>
 
@@ -1276,9 +1367,15 @@ defmodule ConsensusWeb.JoinLive.Ballot do
     <div :if={@card} class="flex flex-1 flex-col overflow-x-clip">
       <div class="flex items-center justify-between gap-3 px-4 pb-1 pt-3">
         <span class="min-w-0 truncate text-[12px] font-semibold">{@group.title}</span>
-        <span class="shrink-0 font-mono text-[11px] font-medium text-ink-soft" aria-live="polite">
-          {@deck_index + 1} / {@count}
-        </span>
+        <%!-- More lives here, beside the counter and outside the card (t8 ruling 3): on
+              the card it was the last child of an `overflow-hidden` box and the first
+              thing a short phone clipped, and off the card no drag can start from it. --%>
+        <div class="flex shrink-0 items-center gap-2">
+          <span class="font-mono text-[11px] font-medium text-ink-soft" aria-live="polite">
+            {@deck_index + 1} / {@count}
+          </span>
+          <.more_button id="deck-more" activity={@card} />
+        </div>
       </div>
       <p class="px-4 text-[11.5px] text-ink-soft">
         Tap or swipe right to pick it, swipe left to pass — or use the buttons.

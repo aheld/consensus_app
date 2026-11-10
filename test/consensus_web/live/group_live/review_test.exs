@@ -55,6 +55,37 @@ defmodule ConsensusWeb.GroupLive.ReviewTest do
     end
   end
 
+  describe "t8-f: the description is never displaced by details (D-062)" do
+    test "a row with a category, an address and a description shows all three, before and after publish",
+         %{conn: conn, scope: scope} do
+      group = group_fixture(scope, %{deadline_at: future_deadline()})
+
+      full =
+        group
+        |> activity_fixture(%{name: "Guisados", description: "Braised tacos."})
+        |> Consensus.Activities.Activity.details_changeset(%{
+          category: "mexican",
+          address: "1261 W Sunset Blvd"
+        })
+        |> Consensus.Repo.update!()
+
+      bare = activity_fixture(group, %{name: "Sushi Enya"})
+
+      assert_row = fn ->
+        {:ok, lv, html} = live(conn, ~p"/groups/#{group}/review")
+        assert html =~ "Mexican"
+        assert html =~ "1261 W Sunset Blvd"
+        assert has_element?(lv, "#review-description-#{full.id}.line-clamp-2", "Braised tacos.")
+        refute has_element?(lv, "#review-description-#{bare.id}")
+        refute html =~ "No details yet"
+      end
+
+      assert_row.()
+      {:ok, _group} = Activities.publish_group(scope, group)
+      assert_row.()
+    end
+  end
+
   describe "reordering" do
     test "a drag reorder persists the new order", %{conn: conn, scope: scope} do
       group = group_fixture(scope)
