@@ -16,11 +16,12 @@ defmodule ConsensusWeb.GroupLive.New do
   An organizer with no account (D-058) reaches this screen too — `@current_scope` is
   then the anonymous scope `ConsensusWeb.OrganizerAuth` assigned, and the only read of
   `scope.user` left is the signed-in Group row's avatar. Such an organizer also gets an optional "Your name" field
-  in the Group row (plan §7.3): it is its own form (`as: "organizer"`, an
+  in that row (plan §7.3): it is its own form (`as: "organizer"`, an
   `AnonymousOrganizer` changeset) rendered inside `#group-form`, so one submit carries
   both, and one transaction (`Activities.create_group_with_organizer_name/3` and its
   `:edit` twin) writes both or neither. It is absent for a signed-in organizer, whom
-  guests see by username.
+  guests see by username. The row's eyebrow reads **Your name** for an anonymous
+  organizer and **Group** for a signed-in one (D-061).
   """
 
   use ConsensusWeb, :live_view
@@ -669,9 +670,21 @@ defmodule ConsensusWeb.GroupLive.New do
                 `maxlength` (invariant 11): the counter reads what the changeset reads and
                 turns tangerine past it, and the changeset is the cap. `text-base` is the
                 16px floor (invariant 18). The avatar is the typed name's initial, `?` while
-                the field is blank — `Layouts.avatar/1`'s own fallback. --%>
+                the field is blank — `Layouts.avatar/1`'s own fallback.
+
+                **The eyebrow says "Your name", not "Group" (D-061).** D-058 put this
+                field inside the design's GROUP row — the group's membership row, an
+                avatar and "Just you so far · invite by link" — and a heading reading
+                GROUP over a name field reads as "the name of the group", which the
+                session title above already has a field of its own for. What the field
+                collects is the organizer's own name: the one the invite page later
+                prints ("<name> invited you"). The placeholder drops "(optional)" for
+                the same reason — the caption below already says a blank name shows
+                "The organizer", so "(optional)" was a second label saying the same
+                thing in a place the eye reads first. A signed-in organizer still sees
+                GROUP: that row is still about who is in the group. --%>
           <div :if={@organizer_form} id="organizer-name" class="flex flex-col gap-2">
-            <.eyebrow>Group</.eyebrow>
+            <.eyebrow>Your name</.eyebrow>
             <div class="flex items-start gap-2.5">
               <Layouts.avatar
                 id="organizer-avatar"
@@ -683,7 +696,7 @@ defmodule ConsensusWeb.GroupLive.New do
                 <.input
                   field={@organizer_form[:display_name]}
                   type="text"
-                  placeholder="Your name (optional)"
+                  placeholder="Your name"
                   aria-label="Your name"
                   autocomplete="given-name"
                   class="text-base"

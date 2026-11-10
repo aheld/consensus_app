@@ -482,6 +482,15 @@ defmodule ConsensusWeb.GroupLive.NewTest do
       refute has_element?(lv, "#organizer_display_name")
       assert has_element?(lv, "#group-form", "Just you so far · invite by link")
     end
+
+    # D-061: this row really is about the group — an avatar and "Just you so far" — and
+    # it holds no name field, so it keeps the design's GROUP label. The name row's
+    # heading is the one that changed (issue #6).
+    test "the row is still labelled Group", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      assert has_element?(lv, "#group-form span.eyebrow", "Group")
+    end
   end
 
   # D-058: an organizer with no account runs the same step, with the same form, plus an
@@ -489,6 +498,22 @@ defmodule ConsensusWeb.GroupLive.NewTest do
   describe "an organizer with no account" do
     setup do
       create_anonymous_organizer(%{conn: Phoenix.ConnTest.build_conn()})
+    end
+
+    # D-061 (issue #6): the row's heading says what the field collects. It used to say
+    # GROUP — the group's membership row, which is where D-058 put this field — and a
+    # heading reading GROUP over a name field read as "the name of the group", while the
+    # session title already has a field of its own above it. What the field collects is
+    # the organizer's own name: the one the invite page later prints ("<name> invited
+    # you"). The placeholder loses "(optional)" for the same reason — the caption below
+    # already says a blank name shows "The organizer".
+    test "the row's heading says 'Your name', not 'Group'", %{conn: conn} do
+      {:ok, lv, _html} = live(conn, ~p"/groups/new")
+
+      assert has_element?(lv, "#organizer-name span.eyebrow", "Your name")
+      refute has_element?(lv, "#organizer-name span.eyebrow", "Group")
+
+      assert has_element?(lv, "#organizer_display_name[placeholder='Your name']")
     end
 
     test "creates a draft they own, and goes on to the options step", %{

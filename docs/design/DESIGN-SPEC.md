@@ -336,10 +336,18 @@ Wizard step 1 of 3. Header: 34px circular `‹` back button, a 3-segment progres
 - **GROUP** — overlapping 30px avatars (−8px margin) with a `+N` bubble and a 12px muted
   caption. Saved friend groups are Post-MVP: show the organizer's own avatar and the caption
   "Just you so far · invite by link". **Undrawn, added by D-058:** for an organizer with no
-  account the avatar follows an optional **Your name** field (placeholder "Your name
-  (optional)", `?` when blank) — no `maxlength`, a live grapheme counter against the 40 cap,
+  account the avatar follows an optional **Your name** field (placeholder "Your name",
+  `?` when blank) — no `maxlength`, a live grapheme counter against the 40 cap,
   ≥16px type (invariants 11 and 18) — with a helper line saying guests see it as who invited
   them; blank shows "the organizer". A signed-in organizer never sees the field.
+  **Deviation (2026-11-09, D-061, not in the frame):** for an organizer with no account the
+  row's eyebrow reads **YOUR NAME**, not **GROUP**, and the placeholder drops the
+  "(optional)". A heading reading GROUP over a name field reads as "the name of the group" —
+  and the session title already has a field of its own above it — while what the field
+  collects is the organizer's own name: the one the invite page later prints ("<name>
+  invited you"). The helper line already says a blank name shows "the organizer", so
+  "(optional)" in the placeholder was a second label saying the same thing. A signed-in
+  organizer still sees GROUP, because that row is still about who is in the group.
 - Footer: tangerine **Pick a neighborhood →** in the design. Our step 2 is options, not
   location, so the button reads **Add the options →**.
 

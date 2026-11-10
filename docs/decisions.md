@@ -2575,6 +2575,31 @@ The reasons given for the deviation are real but they are arguments for *offerin
 
 ---
 
+## D-061 — The organizer's name field is labelled "Your name", not "Group"
+
+**Date:** 2026-11-09
+**Status:** settled
+
+**Context.** Issue #6 in the repository tracker reported the row on `01 setup` as confusing, with a screenshot of it: for an organizer with no account, the eyebrow read **GROUP** over a text field whose placeholder read "Your name (optional)". The heading and the field were saying two different things, and the reading a first-time organizer gave the heading was the wrong one.
+
+The cause is D-058's placement. That plan put the name field *inside* the design's GROUP row — the group's membership row, an avatar and "Just you so far · invite by link" — and the heading came with the row. The row's contents were replaced; its label was not.
+
+**Decision.**
+
+1. **An anonymous organizer's row is headed `Your name`.** The field collects the organizer's own name: the one the invite page later prints ("<name> invited you"), the one the link preview carries, and the one that shows as "The organizer" when it is left blank. A heading reading GROUP over a name field reads as "the name of the group" — and the session title, one group above, already has a field of its own for exactly that.
+2. **The placeholder is `Your name`, without "(optional)".** The caption under the field already says what a blank name does ("Leave it blank to show 'The organizer'."), so "(optional)" was a second label saying the same thing in the place the eye reads first. **The field stays optional** and a blank name still means "The organizer" (D-058; product invariant 1 — requiring it would put a step in front of organizing that voting does not have).
+3. **A signed-in organizer still sees GROUP.** That row is the group's membership row, it holds no name field, and its heading is still true.
+
+**Alternatives rejected.** Dropping the eyebrow (the screen's other two field groups — `SESSION TITLE`, `VOTES CLOSE` — are labelled, and an unlabelled input between labelled ones reads worse). Calling it "Organizer" (that word is the app's *guest-facing* word for the same person, and the field asks for a name, not for a role). Keeping "(optional)" (the caption says it).
+
+**Consequences.**
+
+- Copy only: no schema, no changeset, no transaction, no guest-facing string moved. The name a guest sees is the same name the field collects, exactly as before.
+- Two tests in `test/consensus_web/live/group_live/new_test.exs` pin the heading in both branches — an anonymous organizer sees "Your name" and never "Group"; a signed-in one still sees "Group" — and the placeholder.
+- DESIGN-SPEC's `01` GROUP bullet records the deviation from the frame; plan §7.3 of [accountless-organizer.md](plans/accountless-organizer.md) is amended in place.
+
+---
+
 ## Still open
 
 D-003 answers Q-1, Q-2 and Q-3 in [open-questions.md](open-questions.md).
